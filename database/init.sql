@@ -5,27 +5,29 @@
 
 
 /* =========================================================
-   1. PROGRAMS
+   1. ACCOUNTS
    ========================================================= */
 
-CREATE TABLE programs (
+CREATE TABLE accounts (
     id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
 
-    code VARCHAR(50) NOT NULL UNIQUE,
-    name VARCHAR(255) NOT NULL,
+    google_sub VARCHAR(255) NOT NULL UNIQUE,
+
+    primary_email VARCHAR(255) NOT NULL UNIQUE,
+
+    full_name VARCHAR(255) NOT NULL,
+
+    phone_number VARCHAR(30) NOT NULL,
 
     active BOOLEAN NOT NULL DEFAULT TRUE,
 
     created_at TIMESTAMP NOT NULL
+        DEFAULT CURRENT_TIMESTAMP,
+
+    updated_at TIMESTAMP NOT NULL
         DEFAULT CURRENT_TIMESTAMP
+        ON UPDATE CURRENT_TIMESTAMP
 );
-
-
-INSERT INTO programs (code, name)
-VALUES
-    ('CPE', 'Computer Engineering'),
-    ('DE', 'Digital Engineering'),
-    ('OTHER', 'Other');
 
 
 /* =========================================================
@@ -35,14 +37,9 @@ VALUES
 CREATE TABLE users (
     id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
 
-    /* Google / SIIT authentication */
-    google_sub VARCHAR(255) NOT NULL UNIQUE,
+    account_id BIGINT UNSIGNED NOT NULL UNIQUE,
 
-    /* Required user information */
     student_id VARCHAR(30) NOT NULL UNIQUE,
-    first_name VARCHAR(100) NOT NULL,
-    last_name VARCHAR(100) NOT NULL,
-    primary_email VARCHAR(255) NOT NULL UNIQUE,
 
     degree ENUM(
         'UNDERGRADUATE',
@@ -50,21 +47,9 @@ CREATE TABLE users (
         'DOCTORAL'
     ) NOT NULL,
 
-    program_id BIGINT UNSIGNED NULL,
-
-    other_program_name VARCHAR(255) NULL,
-
-    phone_number VARCHAR(30) NOT NULL,
+    program VARCHAR(255) NOT NULL,
 
     advisor_name VARCHAR(255) NOT NULL,
-
-    /* Authorization */
-    role ENUM(
-        'USER',
-        'ADMIN'
-    ) NOT NULL DEFAULT 'USER',
-
-    active BOOLEAN NOT NULL DEFAULT TRUE,
 
     created_at TIMESTAMP NOT NULL
         DEFAULT CURRENT_TIMESTAMP,
@@ -73,10 +58,10 @@ CREATE TABLE users (
         DEFAULT CURRENT_TIMESTAMP
         ON UPDATE CURRENT_TIMESTAMP,
 
-    CONSTRAINT fk_users_program
-        FOREIGN KEY (program_id)
-        REFERENCES programs(id)
-        ON DELETE SET NULL
+    CONSTRAINT fk_users_account
+        FOREIGN KEY (account_id)
+        REFERENCES accounts(id)
+        ON DELETE CASCADE
         ON UPDATE CASCADE
 );
 
@@ -119,17 +104,14 @@ CREATE TABLE resource_requests (
     ) NOT NULL,
 
     status ENUM(
-        'DRAFT',
         'PENDING',
-        'ON_HOLD',
         'APPROVED',
         'REJECTED',
         'ACTIVE',
-        'COMPLETED',
-        'CANCELLED'
+        'COMPLETED'
     ) NOT NULL DEFAULT 'PENDING',
 
-    reviewed_by BIGINT UNSIGNED NULL,
+    reviewed_by_account_id BIGINT UNSIGNED NULL,
 
     reviewed_at TIMESTAMP NULL,
 
@@ -158,17 +140,110 @@ CREATE TABLE resource_requests (
         ON DELETE CASCADE
         ON UPDATE CASCADE,
 
-    CONSTRAINT fk_request_reviewer
-        FOREIGN KEY (reviewed_by)
-        REFERENCES users(id)
+    CONSTRAINT fk_request_reviewer_account
+        FOREIGN KEY (reviewed_by_account_id)
+        REFERENCES accounts(id)
         ON DELETE SET NULL
         ON UPDATE CASCADE
 );
 
 
 /* =========================================================
-   4. INDEXES
+   4. HPC / GPU REQUEST DETAILS
    ========================================================= */
+
+CREATE TABLE hpc_gpu_requests (
+    request_id BIGINT UNSIGNED PRIMARY KEY,
+
+    CONSTRAINT fk_hpc_gpu_request
+        FOREIGN KEY (request_id)
+        REFERENCES resource_requests(id)
+        ON DELETE CASCADE
+        ON UPDATE CASCADE
+);
+
+
+/* =========================================================
+   5. BIG DATA REQUEST DETAILS
+   ========================================================= */
+
+CREATE TABLE big_data_requests (
+    request_id BIGINT UNSIGNED PRIMARY KEY,
+
+    CONSTRAINT fk_big_data_request
+        FOREIGN KEY (request_id)
+        REFERENCES resource_requests(id)
+        ON DELETE CASCADE
+        ON UPDATE CASCADE
+);
+
+
+/* =========================================================
+   6. VM REQUEST DETAILS
+   ========================================================= */
+
+CREATE TABLE vm_requests (
+    request_id BIGINT UNSIGNED PRIMARY KEY,
+
+    CONSTRAINT fk_vm_request
+        FOREIGN KEY (request_id)
+        REFERENCES resource_requests(id)
+        ON DELETE CASCADE
+        ON UPDATE CASCADE
+);
+
+
+/* =========================================================
+   7. LAB EQUIPMENT REQUEST DETAILS
+   ========================================================= */
+
+CREATE TABLE lab_equipment_requests (
+    request_id BIGINT UNSIGNED PRIMARY KEY,
+
+    CONSTRAINT fk_lab_equipment_request
+        FOREIGN KEY (request_id)
+        REFERENCES resource_requests(id)
+        ON DELETE CASCADE
+        ON UPDATE CASCADE
+);
+
+
+/* =========================================================
+   8. AWS SKILL BUILDER REQUEST DETAILS
+   ========================================================= */
+
+CREATE TABLE aws_skill_builder_requests (
+    request_id BIGINT UNSIGNED PRIMARY KEY,
+
+    CONSTRAINT fk_aws_skill_builder_request
+        FOREIGN KEY (request_id)
+        REFERENCES resource_requests(id)
+        ON DELETE CASCADE
+        ON UPDATE CASCADE
+);
+
+
+/* =========================================================
+   9. AWS LEARNER LAB REQUEST DETAILS
+   ========================================================= */
+
+CREATE TABLE aws_learner_lab_requests (
+    request_id BIGINT UNSIGNED PRIMARY KEY,
+
+    CONSTRAINT fk_aws_learner_lab_request
+        FOREIGN KEY (request_id)
+        REFERENCES resource_requests(id)
+        ON DELETE CASCADE
+        ON UPDATE CASCADE
+);
+
+
+/* =========================================================
+   10. INDEXES
+   ========================================================= */
+
+CREATE INDEX idx_users_account_id
+    ON users(account_id);
 
 CREATE INDEX idx_resource_requests_user_id
     ON resource_requests(user_id);
@@ -181,3 +256,6 @@ CREATE INDEX idx_resource_requests_resource_type
 
 CREATE INDEX idx_resource_requests_created_at
     ON resource_requests(created_at);
+
+CREATE INDEX idx_resource_requests_reviewer
+    ON resource_requests(reviewed_by_account_id);
