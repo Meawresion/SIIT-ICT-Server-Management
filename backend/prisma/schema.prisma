@@ -1,0 +1,144 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+model Account {
+  id               BigInt            @id @default(autoincrement()) @db.UnsignedBigInt
+  google_sub       String            @unique(map: "google_sub") @db.VarChar(255)
+  primary_email    String            @unique(map: "primary_email") @db.VarChar(255)
+  full_name        String            @db.VarChar(255)
+  phone_number     String            @db.VarChar(30)
+  active           Boolean           @default(true)
+  created_at       DateTime          @default(now()) @db.Timestamp(0)
+  updated_at       DateTime          @default(now()) @updatedAt @db.Timestamp(0)
+  reviewedRequests ResourceRequest[] @relation("ReviewedBy")
+  user             User?
+
+  @@map("accounts")
+}
+
+model User {
+  id           BigInt            @id @default(autoincrement()) @db.UnsignedBigInt
+  account_id   BigInt            @unique(map: "account_id") @db.UnsignedBigInt
+  student_id   String            @unique(map: "student_id") @db.VarChar(30)
+  degree       Degree
+  program      String            @db.VarChar(255)
+  advisor_name String            @db.VarChar(255)
+  created_at   DateTime          @default(now()) @db.Timestamp(0)
+  updated_at   DateTime          @default(now()) @updatedAt @db.Timestamp(0)
+  requests     ResourceRequest[]
+  account      Account           @relation(fields: [account_id], references: [id], onDelete: Cascade, map: "fk_users_account")
+
+  @@index([account_id], map: "idx_users_account_id")
+  @@map("users")
+}
+
+model ResourceRequest {
+  id                      BigInt                  @id @default(autoincrement()) @db.UnsignedBigInt
+  user_id                 BigInt                  @db.UnsignedBigInt
+  purpose                 String                  @db.VarChar(255)
+  project_description     String                  @db.Text
+  project_supervisor_name String?                 @db.VarChar(255)
+  resource_type           ResourceType
+  justification           String                  @db.Text
+  estimated_start_date    DateTime                @db.Date
+  estimated_end_date      DateTime                @db.Date
+  impact_score            Int                     @db.UnsignedTinyInt
+  supervisor_confirmation SupervisorConfirmation
+  status                  RequestStatus           @default(PENDING)
+  reviewed_by_account_id  BigInt?                 @db.UnsignedBigInt
+  reviewed_at             DateTime?               @db.Timestamp(0)
+  review_comment          String?                 @db.Text
+  created_at              DateTime                @default(now()) @db.Timestamp(0)
+  updated_at              DateTime                @default(now()) @updatedAt @db.Timestamp(0)
+  awsLearnerLabRequest    AwsLearnerLabRequest?
+  awsSkillBuilderRequest  AwsSkillBuilderRequest?
+  bigDataRequest          BigDataRequest?
+  hpcGpuRequest           HpcGpuRequest?
+  labEquipmentRequest     LabEquipmentRequest?
+  reviewed_by             Account?                @relation("ReviewedBy", fields: [reviewed_by_account_id], references: [id], map: "fk_request_reviewer_account")
+  user                    User                    @relation(fields: [user_id], references: [id], onDelete: Cascade, map: "fk_request_user")
+  vmRequest               VmRequest?
+
+  @@index([created_at], map: "idx_resource_requests_created_at")
+  @@index([resource_type], map: "idx_resource_requests_resource_type")
+  @@index([reviewed_by_account_id], map: "idx_resource_requests_reviewer")
+  @@index([status], map: "idx_resource_requests_status")
+  @@index([user_id], map: "idx_resource_requests_user_id")
+  @@map("resource_requests")
+}
+
+model HpcGpuRequest {
+  request_id BigInt          @id @db.UnsignedBigInt
+  request    ResourceRequest @relation(fields: [request_id], references: [id], onDelete: Cascade, map: "fk_hpc_gpu_request")
+
+  @@map("hpc_gpu_requests")
+}
+
+model BigDataRequest {
+  request_id BigInt          @id @db.UnsignedBigInt
+  request    ResourceRequest @relation(fields: [request_id], references: [id], onDelete: Cascade, map: "fk_big_data_request")
+
+  @@map("big_data_requests")
+}
+
+model VmRequest {
+  request_id BigInt          @id @db.UnsignedBigInt
+  request    ResourceRequest @relation(fields: [request_id], references: [id], onDelete: Cascade, map: "fk_vm_request")
+
+  @@map("vm_requests")
+}
+
+model LabEquipmentRequest {
+  request_id BigInt          @id @db.UnsignedBigInt
+  request    ResourceRequest @relation(fields: [request_id], references: [id], onDelete: Cascade, map: "fk_lab_equipment_request")
+
+  @@map("lab_equipment_requests")
+}
+
+model AwsSkillBuilderRequest {
+  request_id BigInt          @id @db.UnsignedBigInt
+  request    ResourceRequest @relation(fields: [request_id], references: [id], onDelete: Cascade, map: "fk_aws_skill_builder_request")
+
+  @@map("aws_skill_builder_requests")
+}
+
+model AwsLearnerLabRequest {
+  request_id BigInt          @id @db.UnsignedBigInt
+  request    ResourceRequest @relation(fields: [request_id], references: [id], onDelete: Cascade, map: "fk_aws_learner_lab_request")
+
+  @@map("aws_learner_lab_requests")
+}
+
+enum Degree {
+  UNDERGRADUATE
+  MASTER
+  DOCTORAL
+}
+
+enum ResourceType {
+  HPC_GPU
+  BIG_DATA
+  VM
+  LAB_EQUIPMENT
+  AWS_SKILL_BUILDER
+  AWS_LEARNER_LAB
+}
+
+enum RequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  ACTIVE
+  COMPLETED
+}
+
+enum SupervisorConfirmation {
+  CONFIRMED
+  NOT_CONFIRMED
+}
