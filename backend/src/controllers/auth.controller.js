@@ -36,10 +36,10 @@ export async function handleGoogleCallback(req, res, next) {
     // Check if user profile exists
     const user = await getUserByAccountId(account.id);
 
-    // Set session
-    req.session.account_id = account.id;
+    // Set session - Convert BigInt to string
+    req.session.account_id = account.id.toString();  // ← Convert to string
     if (user) {
-      req.session.user_id = user.id;
+      req.session.user_id = user.id.toString();  // ← Convert to string
     }
     req.session.save();
 

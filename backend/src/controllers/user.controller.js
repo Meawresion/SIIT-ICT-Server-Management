@@ -2,6 +2,18 @@ import { getUserByAccountId, createUserProfile, updateUserProfile } from '../ser
 import { getAccountById } from '../services/auth.service.js';
 import { UserProfileSchema } from '../utils/validation.js';
 
+// Helper to convert BigInt
+const convertBigInt = (obj) => {
+  if (typeof obj === 'bigint') return obj.toString();
+  if (obj && typeof obj === 'object') {
+    return Object.keys(obj).reduce((acc, key) => {
+      acc[key] = convertBigInt(obj[key]);
+      return acc;
+    }, {});
+  }
+  return obj;
+};
+
 export async function getUserProfile(req, res, next) {
   try {
     const account_id = req.session.account_id;
@@ -14,7 +26,7 @@ export async function getUserProfile(req, res, next) {
     }
 
     res.json({
-      id: user.id,
+      id: user.id.toString(),  // ← Convert BigInt
       student_id: user.student_id,
       degree: user.degree,
       program: user.program,
@@ -42,7 +54,6 @@ export async function createProfile(req, res, next) {
 
     const account_id = req.session.account_id;
 
-    // Check if profile already exists
     const existing = await getUserByAccountId(account_id);
     if (existing) {
       return res.status(409).json({
@@ -51,11 +62,11 @@ export async function createProfile(req, res, next) {
     }
 
     const user = await createUserProfile(account_id, validation.data);
-    req.session.user_id = user.id;
+    req.session.user_id = user.id.toString();  // ← Convert BigInt
     req.session.save();
 
     res.status(201).json({
-      id: user.id,
+      id: user.id.toString(),  // ← Convert BigInt
       student_id: user.student_id,
       degree: user.degree,
       program: user.program,
@@ -88,7 +99,7 @@ export async function updateProfile(req, res, next) {
     const user = await updateUserProfile(user_id, account_id, validation.data);
 
     res.json({
-      id: user.id,
+      id: user.id.toString(),  // ← Convert BigInt
       student_id: user.student_id,
       degree: user.degree,
       program: user.program,

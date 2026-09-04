@@ -22,7 +22,7 @@ export async function createNewRequest(req, res, next) {
     const request = await createRequest(user_id, validation.data);
 
     res.status(201).json({
-      id: request.id,
+      id: request.id.toString(),  // ← Convert BigInt
       status: request.status,
       resource_type: request.resource_type,
       purpose: request.purpose,
@@ -46,7 +46,7 @@ export async function getMyRequests(req, res, next) {
     const requests = await getUserRequests(user_id);
 
     res.json(requests.map(r => ({
-      id: r.id,
+      id: r.id.toString(),  // ← Convert BigInt
       purpose: r.purpose,
       resource_type: r.resource_type,
       status: r.status,
@@ -75,7 +75,7 @@ export async function getRequest(req, res, next) {
     }
 
     res.json({
-      id: request.id,
+      id: request.id.toString(),  // ← Convert BigInt
       purpose: request.purpose,
       project_description: request.project_description,
       project_supervisor_name: request.project_supervisor_name,
@@ -112,7 +112,7 @@ export async function updateRequestHandler(req, res, next) {
     const request = await updateRequest(BigInt(id), user_id, validation.data);
 
     res.json({
-      id: request.id,
+      id: request.id.toString(),  // ← Convert BigInt
       purpose: request.purpose,
       resource_type: request.resource_type,
       status: request.status,
