@@ -1,596 +1,322 @@
 # Database Usage
 
-## Database Structure
+This directory contains the MySQL initialization script for the SIIT ICT Resource
+Request System.
+
+- `init.sql` creates the application tables.
+- `init.sql` also creates stored procedures used by the application for student,
+  admin, request, and draft workflows.
+- `docker-compose.yml` mounts `database/init.sql` into the MySQL container at
+  `/docker-entrypoint-initdb.d/init.sql`, so it runs automatically when the
+  database volume is initialized for the first time.
+
+## Schema Overview
 
 ```text
-┌──────────────────────────────┐
-│            users             │
-├──────────────────────────────┤
-│ id                           │  ← UserID
-│ google_sub                   │  [ADDED]
-│ student_id*                  │
-│ first_name*                  │
-│ last_name*                   │
-│ primary_email*               │
-│ degree                       │
-│ program                      │
-│ other_program_name           │  [ADDED for OTHER]
-│ phone_number*                │
-│ advisor_name*                │
-│ role                         │  [ADDED]
-│ active                       │  [ADDED]
-│ created_at                   │  [ADDED]
-│ updated_at                   │  [ADDED]
-└──────────────┬───────────────┘
-               │
-               │ 1:N
-               ▼
-┌──────────────────────────────┐
-│      resource_requests       │
-├──────────────────────────────┤
-│ id                           │  [ADDED]
-│ user_id                      │  [ADDED] FK → users.id
-│ purpose                      │
-│ project_description          │
-│ project_supervisor_name      │
-│ resource_type*               │
-│ justification                │
-│ estimated_start_date*        │
-│ estimated_end_date*          │
-│ impact_score                 │
-│ supervisor_confirmation      │
-│ status                       │  [ADDED]
-│ reviewed_by                  │  [ADDED]
-│ reviewed_at                  │  [ADDED]
-│ review_comment               │  [ADDED]
-│ created_at                   │  [ADDED]
-│ updated_at                   │  [ADDED]
-└──────────────────────────────┘
+User
+  uid PK
+  role Admin | Student
+  fullname
+  siitemail UNIQUE
+  phone_number
+  s_id
+  study_degree Undergraduate | Master | PhD
+  s_program
+  created_at
+  updated_at
+
+Request
+  rid PK
+  student_uid FK -> User.uid
+  resource_type
+  por
+  proj_name
+  spv_name
+  spv_email
+  justify
+  start_date
+  end_date
+  extra_details JSON
+  process_type Manual | Automate
+  status
+  admin_uid FK -> User.uid
+  reviewed_at
+  created_at
+  updated_at
+
+Draft
+  student_uid PK, FK -> User.uid
+  resource_type
+  por
+  proj_name
+  spv_name
+  spv_email
+  justify
+  start_date
+  end_date
+  extra_details JSON
+  updated_at
 ```
 
-`*` means the field was explicitly marked as required in the original requirement.
+## Tables
 
----
+### User
 
-# Users
+Stores both student and admin accounts.
 
-## Get User by Google ID
+| Column | Notes |
+|--------|-------|
+| `uid` | Unsigned auto-increment primary key |
+| `role` | `Admin` or `Student` |
+| `fullname` | Full display name |
+| `siitemail` | Unique SIIT email address |
+| `phone_number` | Optional contact number |
+| `s_id` | Optional student ID, used by student accounts |
+| `study_degree` | `Undergraduate`, `Master`, or `PhD` |
+| `s_program` | Optional study program |
+| `created_at` | Created timestamp |
+| `updated_at` | Automatically updated timestamp |
 
-```sql
-SELECT *
-FROM users
-WHERE google_sub = ?;
-```
+### Request
 
-## Get User by Student ID
+Stores submitted resource requests.
 
-```sql
-SELECT *
-FROM users
-WHERE student_id = ?;
-```
+| Column | Notes |
+|--------|-------|
+| `rid` | Unsigned auto-increment primary key |
+| `student_uid` | Required student owner, references `User.uid` |
+| `resource_type` | Requested resource category |
+| `por` | Purpose of request, such as Senior Project or Thesis |
+| `proj_name` | Project name |
+| `spv_name` | Supervisor name |
+| `spv_email` | Supervisor email |
+| `justify` | Request justification |
+| `start_date` | Requested start datetime |
+| `end_date` | Requested end datetime |
+| `extra_details` | JSON field for resource-specific details |
+| `process_type` | `Automate` for GPU server and big data requests; otherwise `Manual` |
+| `status` | Current request state |
+| `admin_uid` | Reviewing admin, references `User.uid` |
+| `reviewed_at` | Review timestamp |
+| `created_at` | Created timestamp |
+| `updated_at` | Automatically updated timestamp |
 
-## Get User by Email
+### Draft
 
-```sql
-SELECT *
-FROM users
-WHERE primary_email = ?;
-```
+Stores one in-progress draft per student. Submitting a real request deletes that
+student's draft.
 
-## Create User
+| Column | Notes |
+|--------|-------|
+| `student_uid` | Primary key and student owner, references `User.uid` |
+| `resource_type` | Requested resource category |
+| `por` | Purpose of request |
+| `proj_name` | Project name |
+| `spv_name` | Supervisor name |
+| `spv_email` | Supervisor email |
+| `justify` | Request justification |
+| `start_date` | Requested start datetime |
+| `end_date` | Requested end datetime |
+| `extra_details` | JSON field for resource-specific details |
+| `updated_at` | Automatically updated timestamp |
 
-```sql
-INSERT INTO users (
-    google_sub,
-    student_id,
-    first_name,
-    last_name,
-    primary_email,
-    degree,
-    program,
-    other_program_name,
-    phone_number,
-    advisor_name
-)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
-```
+## Enum Values
 
-Example program values:
+### Resource Types
 
 ```text
-CPE
-DE
-OTHER
-```
-
-Example degree values:
-
-```text
-UNDERGRADUATE
-MASTER
-DOCTORAL
-```
-
-If `program = 'OTHER'`, use `other_program_name`.
-
-Example:
-
-```text
-program = OTHER
-other_program_name = Chemical Engineering
-```
-
-The backend should obtain `google_sub` from verified Google authentication.
-
-Do not trust `google_sub` sent directly from the frontend.
-
----
-
-## Update User
-
-```sql
-UPDATE users
-SET
-    first_name = ?,
-    last_name = ?,
-    degree = ?,
-    program = ?,
-    other_program_name = ?,
-    phone_number = ?,
-    advisor_name = ?
-WHERE id = ?;
-```
-
-The `id` should come from the authenticated backend session.
-
----
-
-# Resource Requests
-
-## Create Request
-
-```sql
-INSERT INTO resource_requests (
-    user_id,
-    purpose,
-    project_description,
-    project_supervisor_name,
-    resource_type,
-    justification,
-    estimated_start_date,
-    estimated_end_date,
-    impact_score,
-    supervisor_confirmation
-)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
-```
-
-The backend must obtain `user_id` from the authenticated user/session.
-
-Do not allow the frontend to choose another user's `user_id`.
-
-Example resource type values:
-
-```text
-HPC_GPU
+GPU_SERVER
 BIG_DATA
 VM
 LAB_EQUIPMENT
-AWS_SKILL_BUILDER
-AWS_LEARNER_LAB
+AWS_LAB
+AWS_SKILL
 ```
 
-Example request:
-
-```json
-{
-  "purpose": "Senior Project",
-  "project_description": "Training a computer vision model for autonomous robot navigation.",
-  "project_supervisor_name": "Dr. Example",
-  "resource_type": "HPC_GPU",
-  "justification": "GPU acceleration is required for model training.",
-  "estimated_start_date": "2026-09-10",
-  "estimated_end_date": "2026-12-15",
-  "impact_score": 9,
-  "supervisor_confirmation": "CONFIRMED"
-}
-```
-
----
-
-## Get One Request
-
-```sql
-SELECT *
-FROM resource_requests
-WHERE id = ?
-AND user_id = ?;
-```
-
-The backend should use:
+### Request Statuses
 
 ```text
-request_id
-current_user_id
+Pending
+Approved
+Rejected
+On Use
+Completed
 ```
 
-This prevents users from reading another user's request.
-
----
-
-## Get All Requests From Current User
-
-```sql
-SELECT *
-FROM resource_requests
-WHERE user_id = ?
-ORDER BY created_at DESC;
-```
-
----
-
-## Get All Requests
-
-Admin only:
-
-```sql
-SELECT *
-FROM resource_requests
-ORDER BY created_at DESC;
-```
-
----
-
-## Get Pending Requests
-
-Admin only:
-
-```sql
-SELECT *
-FROM resource_requests
-WHERE status = 'PENDING'
-ORDER BY created_at ASC;
-```
-
----
-
-## Get Requests by Status
-
-```sql
-SELECT *
-FROM resource_requests
-WHERE status = ?
-ORDER BY created_at DESC;
-```
-
-Available status values:
+### Process Types
 
 ```text
-DRAFT
-PENDING
-ON_HOLD
-APPROVED
-REJECTED
-ACTIVE
-COMPLETED
-CANCELLED
+Manual
+Automate
 ```
 
----
+`add_request` sets `process_type` to `Automate` for `GPU_SERVER` and `BIG_DATA`.
+All other resource types use `Manual`.
 
-## Get Requests by Resource Type
+## Stored Procedures
+
+### Student Procedures
+
+#### `add_student`
+
+Creates a student user.
 
 ```sql
-SELECT *
-FROM resource_requests
-WHERE resource_type = ?
-ORDER BY created_at DESC;
-```
-
-Example:
-
-```text
-HPC_GPU
-```
-
----
-
-# Update Request
-
-Only allow the owner to modify the request.
-
-```sql
-UPDATE resource_requests
-SET
-    purpose = ?,
-    project_description = ?,
-    project_supervisor_name = ?,
-    resource_type = ?,
-    justification = ?,
-    estimated_start_date = ?,
-    estimated_end_date = ?,
-    impact_score = ?,
-    supervisor_confirmation = ?
-WHERE id = ?
-AND user_id = ?
-AND status IN (
-    'DRAFT',
-    'PENDING',
-    'ON_HOLD'
+CALL add_student(
+  'Student Name',
+  'student@example.siit.tu.ac.th',
+  '0812345678',
+  '6422770000',
+  'Undergraduate',
+  'CPE'
 );
 ```
 
-Recommended edit rules:
+#### `edit_student`
 
-```text
-DRAFT       → editable
-PENDING     → editable
-ON_HOLD     → editable
-
-APPROVED    → locked
-REJECTED    → locked
-ACTIVE      → locked
-COMPLETED   → locked
-CANCELLED   → locked
-```
-
----
-
-# Cancel Request
-
-Prefer cancellation instead of permanently deleting the row.
+Updates a student by `siitemail`.
 
 ```sql
-UPDATE resource_requests
-SET status = 'CANCELLED'
-WHERE id = ?
-AND user_id = ?
-AND status IN (
-    'DRAFT',
-    'PENDING',
-    'ON_HOLD'
+CALL edit_student(
+  'Student Name',
+  'student@example.siit.tu.ac.th',
+  '0812345678',
+  '6422770000',
+  'Master',
+  'ICT'
 );
 ```
 
-This preserves request history.
+#### `get_student_by_email`
 
----
-
-# Admin Operations
-
-## Approve Request
+Returns one student profile by SIIT email.
 
 ```sql
-UPDATE resource_requests
-SET
-    status = 'APPROVED',
-    reviewed_by = ?,
-    reviewed_at = CURRENT_TIMESTAMP,
-    review_comment = ?
-WHERE id = ?
-AND status IN (
-    'PENDING',
-    'ON_HOLD'
+CALL get_student_by_email('student@example.siit.tu.ac.th');
+```
+
+#### `get_student_by_uid`
+
+Returns one student profile by `uid`.
+
+```sql
+CALL get_student_by_uid(1);
+```
+
+### Admin Procedures
+
+#### `get_admin_by_email`
+
+Returns one admin profile by SIIT email.
+
+```sql
+CALL get_admin_by_email('admin@example.siit.tu.ac.th');
+```
+
+#### `get_admin_by_uid`
+
+Returns one admin profile by `uid`.
+
+```sql
+CALL get_admin_by_uid(2);
+```
+
+### Request Procedures
+
+#### `add_request`
+
+Creates a request for a student and removes that student's saved draft.
+
+```sql
+CALL add_request(
+  1,
+  'GPU_SERVER',
+  'Senior Project',
+  'Computer Vision Model Training',
+  'Dr. Example',
+  'supervisor@example.siit.tu.ac.th',
+  'GPU acceleration is required for model training.',
+  '2026-09-10 09:00:00',
+  '2026-12-15 17:00:00',
+  JSON_OBJECT('gpu_count', 1, 'storage_gb', 100)
 );
 ```
 
-Parameters:
+#### `get_student_request`
 
-```text
-admin_user_id
-review_comment
-request_id
-```
-
-The backend must check:
-
-```text
-role = ADMIN
-```
-
-before performing this operation.
-
----
-
-## Reject Request
+Returns all requests for a student, newest first.
 
 ```sql
-UPDATE resource_requests
-SET
-    status = 'REJECTED',
-    reviewed_by = ?,
-    reviewed_at = CURRENT_TIMESTAMP,
-    review_comment = ?
-WHERE id = ?
-AND status IN (
-    'PENDING',
-    'ON_HOLD'
+CALL get_student_request(1);
+```
+
+#### `get_request_by_status`
+
+Returns all requests with a given status, including student and reviewer details.
+
+```sql
+CALL get_request_by_status('Pending');
+```
+
+#### `update_request_status`
+
+Updates a request status and records the reviewing admin. The procedure checks
+that the request exists and that the reviewer is an admin.
+
+```sql
+CALL update_request_status(10, 2, 'Approved');
+```
+
+### Draft Procedures
+
+#### `save_draft`
+
+Creates or updates the current student's draft.
+
+```sql
+CALL save_draft(
+  1,
+  'VM',
+  'Thesis',
+  'Simulation Environment',
+  'Dr. Example',
+  'supervisor@example.siit.tu.ac.th',
+  'A VM is needed for repeatable experiments.',
+  '2026-09-10 09:00:00',
+  '2026-11-30 17:00:00',
+  JSON_OBJECT('cpu', 4, 'memory_gb', 16)
 );
 ```
 
----
+#### `get_draft`
 
-## Put Request On Hold
-
-```sql
-UPDATE resource_requests
-SET
-    status = 'ON_HOLD',
-    reviewed_by = ?,
-    reviewed_at = CURRENT_TIMESTAMP,
-    review_comment = ?
-WHERE id = ?
-AND status = 'PENDING';
-```
-
----
-
-## Mark Approved Request as Active
+Returns the current draft for a student.
 
 ```sql
-UPDATE resource_requests
-SET status = 'ACTIVE'
-WHERE id = ?
-AND status = 'APPROVED';
+CALL get_draft(1);
 ```
 
----
+#### `delete_draft`
 
-## Mark Active Request as Completed
+Deletes the current draft for a student.
 
 ```sql
-UPDATE resource_requests
-SET status = 'COMPLETED'
-WHERE id = ?
-AND status = 'ACTIVE';
+CALL delete_draft(1);
 ```
 
----
+## Local Initialization
 
-# Useful Admin Query
+Start the database through Docker Compose:
 
-Get request information together with student information:
-
-```sql
-SELECT
-    rr.id AS request_id,
-    rr.status,
-    rr.resource_type,
-    rr.purpose,
-    rr.project_description,
-    rr.project_supervisor_name,
-    rr.justification,
-    rr.estimated_start_date,
-    rr.estimated_end_date,
-    rr.impact_score,
-    rr.supervisor_confirmation,
-
-    u.student_id,
-    u.first_name,
-    u.last_name,
-    u.primary_email,
-    u.degree,
-    u.program,
-    u.other_program_name,
-    u.phone_number,
-    u.advisor_name
-
-FROM resource_requests rr
-
-JOIN users u
-    ON rr.user_id = u.id
-
-ORDER BY rr.created_at DESC;
+```bash
+docker-compose up mysql
 ```
 
----
+If the `mysql_data` Docker volume already exists, MySQL will not rerun
+`init.sql`. To rebuild the schema from scratch, remove the volume and start the
+database again:
 
-# Common API → Database Mapping
-
-```text
-POST /api/requests
-    → INSERT resource_requests
-
-
-GET /api/requests/me
-    → SELECT requests
-      WHERE user_id = current authenticated user
-
-
-GET /api/requests/:id
-    → SELECT request
-      WHERE id = request_id
-      AND user_id = current authenticated user
-
-
-PATCH /api/requests/:id
-    → UPDATE request
-      WHERE id = request_id
-      AND user_id = current authenticated user
-
-
-DELETE /api/requests/:id
-    → UPDATE status = CANCELLED
-
-
-GET /api/admin/requests
-    → SELECT all requests
-
-
-GET /api/admin/requests?status=PENDING
-    → SELECT requests
-      WHERE status = PENDING
-
-
-PATCH /api/admin/requests/:id/approve
-    → UPDATE status = APPROVED
-
-
-PATCH /api/admin/requests/:id/reject
-    → UPDATE status = REJECTED
-
-
-PATCH /api/admin/requests/:id/hold
-    → UPDATE status = ON_HOLD
+```bash
+docker-compose down -v
+docker-compose up mysql
 ```
-
----
-
-# Important Security Rules
-
-The frontend must never directly execute SQL.
-
-Use:
-
-```text
-Frontend
-   ↓
-HTTP API
-   ↓
-Backend
-   ↓
-MySQL
-```
-
-The backend must determine these values from trusted authentication/session information:
-
-```text
-user_id
-google_sub
-role
-reviewed_by
-```
-
-Do not trust frontend values such as:
-
-```json
-{
-  "user_id": 5,
-  "role": "ADMIN",
-  "status": "APPROVED",
-  "reviewed_by": 1
-}
-```
-
-For normal user operations:
-
-```text
-Authenticated Google user
-        ↓
-Backend identifies users.id
-        ↓
-Database query uses that users.id
-```
-
-For admin operations:
-
-```text
-Authenticated user
-        ↓
-Backend checks role == ADMIN
-        ↓
-Admin database operation
-```
-
-Always use parameterized queries with `?` placeholders instead of constructing SQL using string concatenation.
