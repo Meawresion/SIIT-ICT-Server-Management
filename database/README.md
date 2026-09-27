@@ -5,74 +5,55 @@ Request System.
 
 - `init.sql` creates the application tables.
 - `init.sql` also creates stored procedures used by the application for student,
-  admin, request, and draft workflows.
+  approver, request, and draft workflows.
 - `docker-compose.yml` mounts `database/init.sql` into the MySQL container at
   `/docker-entrypoint-initdb.d/init.sql`, so it runs automatically when the
   database volume is initialized for the first time.
 
-## Schema Overview
+## ER Diagram
 
-```text
-User
-  uid PK
-  role Admin | Student
-  fullname
-  siitemail UNIQUE
-  phone_number
-  s_id
-  study_degree Undergraduate | Master | PhD
-  s_program
-  created_at
-  updated_at
+![ER diagram](er-diagram.png)
 
-Request
-  rid PK
-  student_uid FK -> User.uid
-  resource_type
-  por
-  proj_name
-  spv_name
-  spv_email
-  justify
-  start_date
-  end_date
-  extra_details JSON
-  process_type Manual | Automate
-  status
-  admin_uid FK -> User.uid
-  reviewed_at
-  created_at
-  updated_at
+The diagram uses Chen notation:
 
-Draft
-  student_uid PK, FK -> User.uid
-  resource_type
-  por
-  proj_name
-  spv_name
-  spv_email
-  justify
-  start_date
-  end_date
-  extra_details JSON
-  updated_at
+- Rectangle: entity. A double rectangle (`Draft`) is a weak entity, identified through its owner `User`.
+- Ellipse: attribute. An underlined attribute is the primary key.
+- Diamond: relationship. A double diamond (`Saves`) is the identifying relationship of a weak entity.
+- `1` and `N` on a line: cardinality. One user submits N requests, one approver reviews N requests, and one user saves 1 draft.
+- Double line: total participation, meaning every row on that side must take part.
+- Italic text on a line: the role the `User` plays in that relationship (`student` or `approver`).
+
+Foreign key columns (`student_uid`, `approver_uid`) are not drawn as attributes, because the
+relationships represent them. `reviewed_at` is drawn on `Reviews`, since it describes the review.
+
+To regenerate the image after a schema change, edit `er-diagram.py`, then run:
+
+```bash
+python3 database/er-diagram.py
+rsvg-convert database/er-diagram.svg -o database/er-diagram.png
 ```
+
+Relationships:
+
+- **User submits Request:** one student has zero or more requests. `Request.student_uid` is required.
+- **User reviews Request:** one approver reviews zero or more requests. `Request.approver_uid` stays `NULL` until a review happens.
+- **User saves Draft:** one student has at most one draft, because `Draft.student_uid` is both the primary key and the foreign key.
 
 ## Tables
 
 ### User
 
-Stores both student and admin accounts.
+Stores both student and approver accounts.
 
 | Column | Notes |
 |--------|-------|
 | `uid` | Unsigned auto-increment primary key |
-| `role` | `Admin` or `Student` |
+| `role` | `Approver` or `Student` |
 | `fullname` | Full display name |
 | `siitemail` | Unique SIIT email address |
-| `phone_number` | Optional contact number |
+| `phone_number` | Contact number |
 | `s_id` | Optional student ID, used by student accounts |
-| `study_degree` | `Undergraduate`, `Master`, or `PhD` |
+| `study_degree` | Optional, `Undergraduate`, `Master`, or `PhD` |
 | `s_program` | Optional study program |
 | `created_at` | Created timestamp |
 | `updated_at` | Automatically updated timestamp |
@@ -96,7 +77,7 @@ Stores submitted resource requests.
 | `extra_details` | JSON field for resource-specific details |
 | `process_type` | `Automate` for GPU server and big data requests; otherwise `Manual` |
 | `status` | Current request state |
-| `admin_uid` | Reviewing admin, references `User.uid` |
+| `approver_uid` | Reviewing approver, references `User.uid` |
 | `reviewed_at` | Review timestamp |
 | `created_at` | Created timestamp |
 | `updated_at` | Automatically updated timestamp |
@@ -104,7 +85,7 @@ Stores submitted resource requests.
 ### Draft
 
 Stores one in-progress draft per student. Submitting a real request deletes that
-student's draft.
+student's draft. Deleting a user also deletes their draft (`ON DELETE CASCADE`).
 
 | Column | Notes |
 |--------|-------|
@@ -203,22 +184,22 @@ Returns one student profile by `uid`.
 CALL get_student_by_uid(1);
 ```
 
-### Admin Procedures
+### Approver Procedures
 
-#### `get_admin_by_email`
+#### `get_approver_by_email`
 
-Returns one admin profile by SIIT email.
+Returns one approver profile by SIIT email.
 
 ```sql
-CALL get_admin_by_email('admin@example.siit.tu.ac.th');
+CALL get_approver_by_email('approver@example.siit.tu.ac.th');
 ```
 
-#### `get_admin_by_uid`
+#### `get_approver_by_uid`
 
-Returns one admin profile by `uid`.
+Returns one approver profile by `uid`.
 
 ```sql
-CALL get_admin_by_uid(2);
+CALL get_approver_by_uid(2);
 ```
 
 ### Request Procedures
@@ -260,8 +241,8 @@ CALL get_request_by_status('Pending');
 
 #### `update_request_status`
 
-Updates a request status and records the reviewing admin. The procedure checks
-that the request exists and that the reviewer is an admin.
+Updates a request status and records the reviewing approver. The procedure checks
+that the request exists and that the reviewer is an approver.
 
 ```sql
 CALL update_request_status(10, 2, 'Approved');

@@ -1,13 +1,15 @@
 CREATE TABLE `User`(
     `uid` INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
-    `role` ENUM('Admin', 'Student') NOT NULL,
+    `role` ENUM('Approver', 'Student') NOT NULL,
     `fullname` VARCHAR(100) NOT NULL,
     `siitemail` VARCHAR(100) NOT NULL,
     `phone_number` VARCHAR(15) NOT NULL,
-    `s_id` VARCHAR(12) NOT NULL,
-    `study_degree` ENUM('Undergraduate', 'Master', 'PhD') NOT NULL,
-    `s_program` VARCHAR(50) NOT NULL,
-    `created_at` TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP(), `updated_at` TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP());
+    `s_id` VARCHAR(12),
+    `study_degree` ENUM('Undergraduate', 'Master', 'PhD'),
+    `s_program` VARCHAR(50),
+    `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    `updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+);
 ALTER TABLE
     `User` ADD UNIQUE `user_siitemail_unique`(`siitemail`);
 CREATE TABLE `Request`(
@@ -37,9 +39,11 @@ CREATE TABLE `Request`(
         'On Use',
         'Completed'
     ) NOT NULL DEFAULT 'Pending',
-    `admin_uid` INT UNSIGNED NULL,
+    `approver_uid` INT UNSIGNED NULL,
     `reviewed_at` TIMESTAMP NULL,
-    `created_at` TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP(), `updated_at` TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP());
+    `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    `updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+);
 CREATE TABLE `Draft`(
     `student_uid` INT UNSIGNED NOT NULL,
     `resource_type` ENUM(
@@ -58,14 +62,16 @@ CREATE TABLE `Draft`(
     `start_date` DATETIME NULL,
     `end_date` DATETIME NULL,
     `extra_details` JSON NULL,
-    `updated_at` TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP(), PRIMARY KEY(`student_uid`));
+    `updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY(`student_uid`)
+);
     
 ALTER TABLE
-    `Draft` ADD CONSTRAINT `draft_student_uid_foreign` FOREIGN KEY(`student_uid`) REFERENCES `User`(`uid`);
+    `Draft` ADD CONSTRAINT `draft_student_uid_foreign` FOREIGN KEY(`student_uid`) REFERENCES `User`(`uid`) ON DELETE CASCADE;
 ALTER TABLE
     `Request` ADD CONSTRAINT `request_student_uid_foreign` FOREIGN KEY(`student_uid`) REFERENCES `User`(`uid`);
 ALTER TABLE
-    `Request` ADD CONSTRAINT `request_admin_uid_foreign` FOREIGN KEY(`admin_uid`) REFERENCES `User`(`uid`);
+    `Request` ADD CONSTRAINT `request_approver_uid_foreign` FOREIGN KEY(`approver_uid`) REFERENCES `User`(`uid`);
 
 -- ====================================================
 -- Student Procedures
@@ -165,10 +171,10 @@ BEGIN
 END //
 
 -- ====================================================
--- Admin Procedures
+-- Approver Procedures
 -- ====================================================
 
-CREATE PROCEDURE get_admin_by_email (
+CREATE PROCEDURE get_approver_by_email (
     IN p_siitemail VARCHAR(100)
 )
 BEGIN
@@ -181,10 +187,10 @@ BEGIN
         `updated_at`
     FROM `User`
     WHERE `siitemail` = p_siitemail 
-      AND `role` = 'Admin';
+      AND `role` = 'Approver';
 END //
 
-CREATE PROCEDURE get_admin_by_uid (
+CREATE PROCEDURE get_approver_by_uid (
     IN p_uid INT UNSIGNED
 )
 BEGIN
@@ -197,7 +203,7 @@ BEGIN
         `updated_at`
     FROM `User`
     WHERE `uid` = p_uid 
-      AND `role` = 'Admin';
+      AND `role` = 'Approver';
 END //
 
 -- ====================================================
@@ -301,11 +307,11 @@ BEGIN
         r.created_at,
         r.updated_at,
         r.reviewed_at,
-        a.uid AS admin_uid,
-        a.fullname AS admin_fullname,
-        a.siitemail AS admin_email
+        a.uid AS approver_uid,
+        a.fullname AS approver_fullname,
+        a.siitemail AS approver_email
     FROM `Request` r
-    LEFT JOIN `User` a ON r.admin_uid = a.uid
+    LEFT JOIN `User` a ON r.approver_uid = a.uid
     WHERE r.student_uid = p_student_uid
     ORDER BY r.created_at DESC;
 END //
@@ -340,25 +346,25 @@ BEGIN
         s.study_degree,
         s.s_program,
 
-        -- ข้อมูล Admin
-        a.uid AS admin_uid,
-        a.fullname AS admin_fullname,
-        a.siitemail AS admin_email
+        -- ข้อมูล Approver
+        a.uid AS approver_uid,
+        a.fullname AS approver_fullname,
+        a.siitemail AS approver_email
 
     FROM `Request` r
     INNER JOIN `User` s ON r.student_uid = s.uid
-    LEFT JOIN `User` a ON r.admin_uid = a.uid
+    LEFT JOIN `User` a ON r.approver_uid = a.uid
     WHERE r.status = p_status
     ORDER BY r.created_at DESC;
 END //
 
 CREATE PROCEDURE update_request_status (
     IN p_rid INT UNSIGNED,
-    IN p_admin_uid INT UNSIGNED,
+    IN p_approver_uid INT UNSIGNED,
     IN p_new_status ENUM('Pending', 'Approved', 'Rejected', 'On Use', 'Completed')
 )
 BEGIN
-    DECLARE v_is_admin INT DEFAULT 0;
+    DECLARE v_is_approver INT DEFAULT 0;
     DECLARE v_request_exists INT DEFAULT 0;
 
     SELECT COUNT(*) INTO v_request_exists
@@ -370,20 +376,20 @@ BEGIN
             SET MESSAGE_TEXT = 'Error: Request ID not found.';
     END IF;
 
-    SELECT COUNT(*) INTO v_is_admin
+    SELECT COUNT(*) INTO v_is_approver
     FROM `User`
-    WHERE `uid` = p_admin_uid 
-      AND `role` = 'Admin';
+    WHERE `uid` = p_approver_uid 
+      AND `role` = 'Approver';
 
-    IF v_is_admin = 0 THEN
+    IF v_is_approver = 0 THEN
         SIGNAL SQLSTATE '45000'
-            SET MESSAGE_TEXT = 'Unauthorized: User is not an admin or does not exist.';
+            SET MESSAGE_TEXT = 'Unauthorized: User is not an approver or does not exist.';
     END IF;
 
     UPDATE `Request`
     SET 
         `status` = p_new_status,
-        `admin_uid` = p_admin_uid,
+        `approver_uid` = p_approver_uid,
         `reviewed_at` = CURRENT_TIMESTAMP,
         `updated_at` = CURRENT_TIMESTAMP
     WHERE `rid` = p_rid;
