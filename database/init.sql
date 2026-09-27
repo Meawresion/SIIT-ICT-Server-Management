@@ -1,53 +1,71 @@
-
-CREATE TABLE `User` (
-  `uid` INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-  `role` ENUM('Admin', 'Student') NOT NULL,
-  `fullname` VARCHAR(100) NOT NULL,
-  `siitemail` VARCHAR(100) UNIQUE NOT NULL,
-  `phone_number` VARCHAR(15),
-  `s_id` VARCHAR(12) NULL,
-  `study_degree` ENUM('Undergraduate', 'Master', 'PhD') NULL,
-  `s_program` VARCHAR(50) NULL,
-  `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-  `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
-);
-
-CREATE TABLE `Request` (
-  `rid` INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-  `student_uid` INT UNSIGNED NOT NULL,
-  `resource_type` ENUM('GPU_SERVER', 'BIG_DATA', 'VM', 'LAB_EQUIPMENT', 'AWS_LAB', 'AWS_SKILL') NOT NULL,
-  `por` VARCHAR(255) COMMENT 'Purpose: Senior Project, Thesis, etc.',
-  `proj_name` VARCHAR(255) NOT NULL,
-  `spv_name` VARCHAR(100),
-  `spv_email` VARCHAR(100),
-  `justify` TEXT NOT NULL,
-  `start_date` DATETIME NOT NULL,
-  `end_date` DATETIME NOT NULL,
-  `extra_details` JSON NULL COMMENT 'Stores polymorphic attributes like equipment_name, coordinator info, or hardware specs',
-  `process_type` ENUM('Manual', 'Automate') DEFAULT 'Manual',
-  `status` ENUM('Pending', 'Approved', 'Rejected', 'On Use', 'Completed') DEFAULT 'Pending',
-  `admin_uid` INT UNSIGNED NULL,
-  `reviewed_at` TIMESTAMP NULL,
-  `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-  `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  FOREIGN KEY (`student_uid`) REFERENCES `User` (`uid`),
-  FOREIGN KEY (`admin_uid`) REFERENCES `User` (`uid`)
-);
-
-CREATE TABLE `Draft` (
-  `student_uid` INT UNSIGNED PRIMARY KEY,
-  `resource_type` ENUM('GPU_SERVER', 'BIG_DATA', 'VM', 'LAB_EQUIPMENT', 'AWS_LAB', 'AWS_SKILL') NULL,
-  `por` VARCHAR(255) NULL,
-  `proj_name` VARCHAR(255) NULL,
-  `spv_name` VARCHAR(100) NULL,
-  `spv_email` VARCHAR(100) NULL,
-  `justify` TEXT NULL,
-  `start_date` DATETIME NULL,
-  `end_date` DATETIME NULL,
-  `extra_details` JSON NULL,
-  `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  FOREIGN KEY (`student_uid`) REFERENCES `User` (`uid`) ON DELETE CASCADE
-);
+CREATE TABLE `User`(
+    `uid` INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    `role` ENUM('Admin', 'Student') NOT NULL,
+    `fullname` VARCHAR(100) NOT NULL,
+    `siitemail` VARCHAR(100) NOT NULL,
+    `phone_number` VARCHAR(15) NOT NULL,
+    `s_id` VARCHAR(12) NOT NULL,
+    `study_degree` ENUM('Undergraduate', 'Master', 'PhD') NOT NULL,
+    `s_program` VARCHAR(50) NOT NULL,
+    `created_at` TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP(), `updated_at` TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP());
+ALTER TABLE
+    `User` ADD UNIQUE `user_siitemail_unique`(`siitemail`);
+CREATE TABLE `Request`(
+    `rid` INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    `student_uid` INT UNSIGNED NOT NULL,
+    `resource_type` ENUM(
+        'GPU_SERVER',
+        'BIG_DATA',
+        'VM',
+        'LAB_EQUIPMENT',
+        'AWS_LAB',
+        'AWS_SKILL'
+    ) NOT NULL,
+    `por` VARCHAR(255) NOT NULL COMMENT 'Purpose: Senior Project, Thesis, etc.',
+    `proj_name` VARCHAR(255) NOT NULL,
+    `spv_name` VARCHAR(100) NOT NULL,
+    `spv_email` VARCHAR(100) NOT NULL,
+    `justify` TEXT NOT NULL,
+    `start_date` DATETIME NOT NULL,
+    `end_date` DATETIME NOT NULL,
+    `extra_details` JSON NULL COMMENT 'Stores polymorphic attributes like equipment_name, coordinator info, or hardware specs',
+    `process_type` ENUM('Manual', 'Automate') NOT NULL DEFAULT 'Manual',
+    `status` ENUM(
+        'Pending',
+        'Approved',
+        'Rejected',
+        'On Use',
+        'Completed'
+    ) NOT NULL DEFAULT 'Pending',
+    `admin_uid` INT UNSIGNED NULL,
+    `reviewed_at` TIMESTAMP NULL,
+    `created_at` TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP(), `updated_at` TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP());
+CREATE TABLE `Draft`(
+    `student_uid` INT UNSIGNED NOT NULL,
+    `resource_type` ENUM(
+        'GPU_SERVER',
+        'BIG_DATA',
+        'VM',
+        'LAB_EQUIPMENT',
+        'AWS_LAB',
+        'AWS_SKILL'
+    ) NULL,
+    `por` VARCHAR(255) NULL,
+    `proj_name` VARCHAR(255) NULL,
+    `spv_name` VARCHAR(100) NULL,
+    `spv_email` VARCHAR(100) NULL,
+    `justify` TEXT NULL,
+    `start_date` DATETIME NULL,
+    `end_date` DATETIME NULL,
+    `extra_details` JSON NULL,
+    `updated_at` TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP(), PRIMARY KEY(`student_uid`));
+    
+ALTER TABLE
+    `Draft` ADD CONSTRAINT `draft_student_uid_foreign` FOREIGN KEY(`student_uid`) REFERENCES `User`(`uid`);
+ALTER TABLE
+    `Request` ADD CONSTRAINT `request_student_uid_foreign` FOREIGN KEY(`student_uid`) REFERENCES `User`(`uid`);
+ALTER TABLE
+    `Request` ADD CONSTRAINT `request_admin_uid_foreign` FOREIGN KEY(`admin_uid`) REFERENCES `User`(`uid`);
 
 -- ====================================================
 -- Student Procedures
