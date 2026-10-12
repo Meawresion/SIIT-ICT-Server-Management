@@ -8,7 +8,7 @@ export async function getGoogleAuthUrl() {
 export async function getCurrentUser() {
   try {
     return await apiRequest('/api/auth/me');
-  } catch (err) {
+  } catch {
     return null;
   }
 }
@@ -16,3 +16,4 @@ export async function getCurrentUser() {
 export async function logout() {
   return apiRequest('/api/auth/logout', { method: 'POST' });
 }
+
