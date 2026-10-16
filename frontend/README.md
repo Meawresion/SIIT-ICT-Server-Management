@@ -1,19 +1,39 @@
-# React + Vite
+# SIIT-ICT Resource Management — Frontend
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+React + Vite + React Router. Talks to the Express backend in `../backend` and follows the UI mockup.
 
-Currently, two official plugins are available:
+## Run
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+```bash
+cp .env.example .env
+npm install
+npm run dev
+```
 
-## React Compiler
+| Variable | Meaning |
+|---|---|
+| `VITE_API_URL` | Backend base URL (default `http://localhost:3000`) |
+| `VITE_CONTACT_EMAIL` | Helpdesk address shown on Contact Us |
 
-The React Compiler is enabled on this template. See [this documentation](https://react.dev/learn/react-compiler) for more information.
+Start the backend first (see `../README.md`). Without it the landing page loads but sign-in fails with a message.
 
-Note: This will impact Vite dev & build performances.
-You can also try [the experimental native React Compiler support in plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react/README.md#rust-react-compiler) by using `compiler: true` in the plugin options instead of using the Babel plugin.
+## Screens
 
-## Expanding the ESLint configuration
+| Route | Who | What |
+|---|---|---|
+| `/` | everyone | Landing page, Google sign-in |
+| `/profile` | first login | One-time profile form (the backend redirects here when no profile exists) |
+| `/dashboard` | signed in | Forwards to `/home` or `/admin` by role (the backend redirects here after login) |
+| `/home` | student | Your Requests + Drafts, New Request / Load Draft, Submitted popup |
+| `/admin` | approver | Pending Requests + Active Requests, review popup (Approve / Reject / Mark Active / Mark Completed) |
+| `/history` | both | All requests with status tabs, resource filter and search |
+| `/account` | both | Profile view and edit |
+| `/contact` | both | Contact card, status meanings, FAQ |
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+## Where the frontend works around the current API
+
+- **Role.** `/api/auth/me` returns only ids, so the app treats a user as an approver when `GET /api/reviewer/requests` succeeds.
+- **Drafts.** There is no draft endpoint, so drafts are stored in `localStorage` per account. They don't follow the user to another device.
+- **Notifications.** There is no notification endpoint. The bell lists decisions on the student's requests (`reviewed_at`), or pending requests for approvers.
+- **Usage period.** The backend stores dates only (`DATE`), so the form asks for start and end dates without times.
+- **Resource type** can't be changed when editing a pending request, because `PATCH /api/requests/:id` ignores it.

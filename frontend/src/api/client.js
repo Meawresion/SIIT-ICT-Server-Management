@@ -1,5 +1,13 @@
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000';
 
+export class ApiError extends Error {
+  constructor(message, status, details) {
+    super(message);
+    this.status = status;
+    this.details = details;
+  }
+}
+
 export async function apiRequest(path, options = {}) {
   const response = await fetch(`${API_URL}${path}`, {
     ...options,
@@ -13,8 +21,11 @@ export async function apiRequest(path, options = {}) {
   const data = await response.json().catch(() => null);
 
   if (!response.ok) {
-    throw new Error(
-      data?.message || `API request failed: ${response.status}`
+    const detail = data?.errors?.[0]?.message;
+    throw new ApiError(
+      detail || data?.message || `API request failed: ${response.status}`,
+      response.status,
+      data?.errors,
     );
   }
 

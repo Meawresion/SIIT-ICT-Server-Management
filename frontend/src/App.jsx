@@ -1,30 +1,39 @@
-import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
-import LoginPage from './pages/LoginPage';
-import ProfilePage from './pages/ProfilePage';
-import DashboardPage from './pages/DashboardPage';
-import NewRequestPage from './pages/NewRequestPage';
-import RequestPage from './pages/RequestPage';
-import ReviewerPage from './pages/ReviewerPage';
-import ReviewerRequestPage from './pages/ReviewerRequestPage';
-import './App.css';
+import { BrowserRouter as Router, Navigate, Route, Routes } from 'react-router-dom';
+import AuthProvider from './auth/AuthProvider.jsx';
+import { useAuth } from './auth/context.js';
+import RequireAuth from './components/RequireAuth.jsx';
+import LandingPage from './pages/LandingPage.jsx';
+import ProfileSetupPage from './pages/ProfileSetupPage.jsx';
+import StudentHomePage from './pages/StudentHomePage.jsx';
+import AdminHomePage from './pages/AdminHomePage.jsx';
+import HistoryPage from './pages/HistoryPage.jsx';
+import AccountPage from './pages/AccountPage.jsx';
+import ContactPage from './pages/ContactPage.jsx';
 
-function App() {
-  return (
-    <Router>
-      <div className="app">
-        <Routes>
-          <Route path="/login" element={<LoginPage />} />
-          <Route path="/profile" element={<ProfilePage />} />
-          <Route path="/dashboard" element={<DashboardPage />} />
-          <Route path="/requests/new" element={<NewRequestPage />} />
-          <Route path="/requests/:id" element={<RequestPage />} />
-          <Route path="/reviewer" element={<ReviewerPage />} />
-          <Route path="/reviewer/requests/:id" element={<ReviewerRequestPage />} />
-          <Route path="/" element={<Navigate to="/login" replace />} />
-        </Routes>
-      </div>
-    </Router>
-  );
+// The backend's OAuth callback redirects to /dashboard (profile exists) or /profile (first login),
+// so both paths must stay. /dashboard forwards to the right home for the role.
+function DashboardRedirect() {
+  const auth = useAuth();
+  return <Navigate to={auth.role === 'reviewer' ? '/admin' : '/home'} replace />;
 }
 
-export default App;
+export default function App() {
+  return (
+    <AuthProvider>
+      <Router>
+        <Routes>
+          <Route path="/" element={<LandingPage />} />
+          <Route path="/login" element={<Navigate to="/" replace />} />
+          <Route path="/profile" element={<ProfileSetupPage />} />
+          <Route path="/dashboard" element={<RequireAuth><DashboardRedirect /></RequireAuth>} />
+          <Route path="/home" element={<RequireAuth role="student"><StudentHomePage /></RequireAuth>} />
+          <Route path="/admin" element={<RequireAuth role="reviewer"><AdminHomePage /></RequireAuth>} />
+          <Route path="/history" element={<RequireAuth><HistoryPage /></RequireAuth>} />
+          <Route path="/account" element={<RequireAuth><AccountPage /></RequireAuth>} />
+          <Route path="/contact" element={<RequireAuth><ContactPage /></RequireAuth>} />
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Routes>
+      </Router>
+    </AuthProvider>
+  );
+}

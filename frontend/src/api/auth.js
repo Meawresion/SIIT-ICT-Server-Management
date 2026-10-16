@@ -16,3 +16,4 @@ export async function getCurrentUser() {
 export async function logout() {
   return apiRequest('/api/auth/logout', { method: 'POST' });
 }
+
