@@ -8,7 +8,7 @@ export async function getGoogleAuthUrl() {
 export async function getCurrentUser() {
   try {
     return await apiRequest('/api/auth/me');
-  } catch (err) {
+  } catch {
     return null;
   }
 }

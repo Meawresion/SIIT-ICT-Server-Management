@@ -11,7 +11,7 @@ export default function LoginPage() {
     const checkAuth = async () => {
       const user = await getCurrentUser();
       if (user?.account_id) {
-        navigate('/dashboard');
+        navigate(user.role === 'reviewer' ? '/reviewer' : user.user_id ? '/dashboard' : '/profile');
       }
     };
     checkAuth();

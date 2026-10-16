@@ -1,3 +1,4 @@
+import { requireAuth } from '../middleware/auth.middleware.js';
 import { Router } from 'express';
 import {
   initiateGoogleAuth,
@@ -10,7 +11,7 @@ const router = Router();
 
 router.get('/google', initiateGoogleAuth);
 router.get('/google/callback', handleGoogleCallback);
-router.get('/me', getCurrentUser);
+router.get('/me', requireAuth, getCurrentUser);
 router.post('/logout', logout);
 
 export default router;

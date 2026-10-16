@@ -59,7 +59,7 @@ services:
       - ./frontend/public:/app/public
     networks:
       - siit-network
-    command: npm run dev
+    command: npm run dev -- --host 0.0.0.0
 
 volumes:
   mysql_data:

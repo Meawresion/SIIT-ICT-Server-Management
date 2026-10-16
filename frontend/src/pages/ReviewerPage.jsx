@@ -23,9 +23,10 @@ export default function ReviewerPage() {
           navigate('/login');
           return;
         }
-
-        // Check if user is reviewer (this would be done by the API in production)
-        // For now, we allow navigation but the API will reject if not reviewer
+        if (user.role !== 'reviewer') {
+          navigate(user.user_id ? '/dashboard' : '/profile');
+          return;
+        }
 
         const requests_data = await getRequests(filters);
         setRequests(requests_data);

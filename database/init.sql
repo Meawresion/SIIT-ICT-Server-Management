@@ -1,4 +1,4 @@
-CREATE TABLE `User`(
+CREATE TABLE `user`(
     `uid` INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
     `role` ENUM('Approver', 'Student') NOT NULL,
     `fullname` VARCHAR(100) NOT NULL,
@@ -11,8 +11,8 @@ CREATE TABLE `User`(
     `updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 );
 ALTER TABLE
-    `User` ADD UNIQUE `user_siitemail_unique`(`siitemail`);
-CREATE TABLE `Request`(
+    `user` ADD UNIQUE `user_siitemail_unique`(`siitemail`);
+CREATE TABLE `request`(
     `rid` INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
     `student_uid` INT UNSIGNED NOT NULL,
     `resource_type` ENUM(
@@ -44,7 +44,7 @@ CREATE TABLE `Request`(
     `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     `updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 );
-CREATE TABLE `Draft`(
+CREATE TABLE `draft`(
     `student_uid` INT UNSIGNED NOT NULL,
     `resource_type` ENUM(
         'GPU_SERVER',
@@ -67,11 +67,11 @@ CREATE TABLE `Draft`(
 );
     
 ALTER TABLE
-    `Draft` ADD CONSTRAINT `draft_student_uid_foreign` FOREIGN KEY(`student_uid`) REFERENCES `User`(`uid`) ON DELETE CASCADE;
+    `draft` ADD CONSTRAINT `draft_student_uid_foreign` FOREIGN KEY(`student_uid`) REFERENCES `user`(`uid`) ON DELETE CASCADE;
 ALTER TABLE
-    `Request` ADD CONSTRAINT `request_student_uid_foreign` FOREIGN KEY(`student_uid`) REFERENCES `User`(`uid`);
+    `request` ADD CONSTRAINT `request_student_uid_foreign` FOREIGN KEY(`student_uid`) REFERENCES `user`(`uid`);
 ALTER TABLE
-    `Request` ADD CONSTRAINT `request_approver_uid_foreign` FOREIGN KEY(`approver_uid`) REFERENCES `User`(`uid`);
+    `request` ADD CONSTRAINT `request_approver_uid_foreign` FOREIGN KEY(`approver_uid`) REFERENCES `user`(`uid`);
 
 -- ====================================================
 -- Student Procedures
@@ -88,7 +88,7 @@ CREATE PROCEDURE add_student (
     IN p_s_program VARCHAR(50)
 )
 BEGIN
-    INSERT INTO `User` (
+    INSERT INTO `user` (
         `role`,
         `fullname`,
         `siitemail`,
@@ -120,7 +120,7 @@ CREATE PROCEDURE edit_student (
     IN p_s_program VARCHAR(50)
 )
 BEGIN
-    UPDATE `User`
+    UPDATE `user`
     SET 
         `fullname` = p_fullname,
         `phone_number` = p_phone_number,
@@ -146,7 +146,7 @@ BEGIN
         `s_program`,
         `created_at`,
         `updated_at`
-    FROM `User`
+    FROM `user`
     WHERE `siitemail` = p_siitemail 
       AND `role` = 'Student';
 END //
@@ -165,7 +165,7 @@ BEGIN
         `s_program`,
         `created_at`,
         `updated_at`
-    FROM `User`
+    FROM `user`
     WHERE `uid` = p_uid 
       AND `role` = 'Student';
 END //
@@ -185,7 +185,7 @@ BEGIN
         `phone_number`,
         `created_at`,
         `updated_at`
-    FROM `User`
+    FROM `user`
     WHERE `siitemail` = p_siitemail 
       AND `role` = 'Approver';
 END //
@@ -201,7 +201,7 @@ BEGIN
         `phone_number`,
         `created_at`,
         `updated_at`
-    FROM `User`
+    FROM `user`
     WHERE `uid` = p_uid 
       AND `role` = 'Approver';
 END //
@@ -241,7 +241,7 @@ BEGIN
 
     START TRANSACTION;
 
-        INSERT INTO `Request` (
+        INSERT INTO `request` (
             `student_uid`,
             `resource_type`,
             `por`,
@@ -276,7 +276,7 @@ BEGIN
         SET v_new_rid = LAST_INSERT_ID();
 
         -- เคลียร์แบบร่างของนักศึกษาคนนี้ออกทันทีเมื่อส่งคำร้องจริง
-        DELETE FROM `Draft` WHERE `student_uid` = p_student_uid;
+        DELETE FROM `draft` WHERE `student_uid` = p_student_uid;
 
     COMMIT;
 
@@ -310,8 +310,8 @@ BEGIN
         a.uid AS approver_uid,
         a.fullname AS approver_fullname,
         a.siitemail AS approver_email
-    FROM `Request` r
-    LEFT JOIN `User` a ON r.approver_uid = a.uid
+    FROM `request` r
+    LEFT JOIN `user` a ON r.approver_uid = a.uid
     WHERE r.student_uid = p_student_uid
     ORDER BY r.created_at DESC;
 END //
@@ -351,9 +351,9 @@ BEGIN
         a.fullname AS approver_fullname,
         a.siitemail AS approver_email
 
-    FROM `Request` r
-    INNER JOIN `User` s ON r.student_uid = s.uid
-    LEFT JOIN `User` a ON r.approver_uid = a.uid
+    FROM `request` r
+    INNER JOIN `user` s ON r.student_uid = s.uid
+    LEFT JOIN `user` a ON r.approver_uid = a.uid
     WHERE r.status = p_status
     ORDER BY r.created_at DESC;
 END //
@@ -368,7 +368,7 @@ BEGIN
     DECLARE v_request_exists INT DEFAULT 0;
 
     SELECT COUNT(*) INTO v_request_exists
-    FROM `Request`
+    FROM `request`
     WHERE `rid` = p_rid;
 
     IF v_request_exists = 0 THEN
@@ -377,7 +377,7 @@ BEGIN
     END IF;
 
     SELECT COUNT(*) INTO v_is_approver
-    FROM `User`
+    FROM `user`
     WHERE `uid` = p_approver_uid 
       AND `role` = 'Approver';
 
@@ -386,7 +386,7 @@ BEGIN
             SET MESSAGE_TEXT = 'Unauthorized: User is not an approver or does not exist.';
     END IF;
 
-    UPDATE `Request`
+    UPDATE `request`
     SET 
         `status` = p_new_status,
         `approver_uid` = p_approver_uid,
@@ -414,7 +414,7 @@ CREATE PROCEDURE save_draft (
     IN p_extra_details JSON
 )
 BEGIN
-    INSERT INTO `Draft` (
+    INSERT INTO `draft` (
         `student_uid`,
         `resource_type`,
         `por`,
@@ -470,7 +470,7 @@ BEGIN
         `end_date`,
         `extra_details`,
         `updated_at`
-    FROM `Draft`
+    FROM `draft`
     WHERE `student_uid` = p_student_uid;
 END //
 
@@ -478,7 +478,7 @@ CREATE PROCEDURE delete_draft (
     IN p_student_uid INT UNSIGNED
 )
 BEGIN
-    DELETE FROM `Draft`
+    DELETE FROM `draft`
     WHERE `student_uid` = p_student_uid;
 
     SELECT 'SUCCESS' AS status, 'Draft removed' AS message;

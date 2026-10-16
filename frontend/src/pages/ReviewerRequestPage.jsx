@@ -22,6 +22,10 @@ export default function ReviewerRequestPage() {
           navigate('/login');
           return;
         }
+        if (user.role !== 'reviewer') {
+          navigate(user.user_id ? '/dashboard' : '/profile');
+          return;
+        }
 
         const request_data = await getRequest(id);
         setRequest(request_data);

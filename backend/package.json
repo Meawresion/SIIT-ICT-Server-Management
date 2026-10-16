@@ -12,7 +12,9 @@
     "prisma:migrate:dev": "prisma migrate dev",
     "prisma:migrate:reset": "prisma migrate reset",
     "test": "node --test src/**/*.test.js",
-    "test:watch": "node --test --watch src/**/*.test.js"
+    "test:watch": "node --test --watch src/**/*.test.js",
+    "test:db": "node scripts/check-db.js",
+    "user:role": "node scripts/set-user-role.js"
   },
   "keywords": [
     "siit",
