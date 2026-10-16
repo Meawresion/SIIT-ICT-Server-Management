@@ -1,136 +1,45 @@
 import prisma from '../lib/prisma.js';
+import { resourceToDb, requestInclude, requestView } from '../utils/db-mapping.js';
+import { UpdateRequestSchema } from '../utils/validation.js';
 
-const RESOURCE_TABLES = {
-  HPC_GPU: 'hpcGpuRequest',
-  BIG_DATA: 'bigDataRequest',
-  VM: 'vmRequest',
-  LAB_EQUIPMENT: 'labEquipmentRequest',
-  AWS_SKILL_BUILDER: 'awsSkillBuilderRequest',
-  AWS_LEARNER_LAB: 'awsLearnerLabRequest',
-};
-
+function requestData(data, existing = null) {
+  const resource_type = resourceToDb[data.resource_type];
+  const extra_details = { ...(existing?.extra_details ?? {}), ...(data.extra_details ?? {}) };
+  for (const key of ['project_description', 'impact_score', 'supervisor_confirmation']) {
+    if (data[key] !== undefined) extra_details[key] = data[key];
+  }
+  // Student-provided JSON must never overwrite reviewer-owned metadata.
+  if (existing?.extra_details?.review_comment !== undefined) extra_details.review_comment = existing.extra_details.review_comment;
+  else delete extra_details.review_comment;
+  return { por: data.purpose, proj_name: data.project_name || data.project_description.slice(0, 255),
+    spv_name: data.project_supervisor_name, spv_email: data.project_supervisor_email ?? existing?.spv_email ?? '',
+    justify: data.justification, resource_type, start_date: new Date(data.estimated_start_date), end_date: new Date(data.estimated_end_date),
+    process_type: ['GPU_SERVER', 'BIG_DATA'].includes(resource_type) ? 'Automate' : 'Manual', extra_details };
+}
 export async function createRequest(user_id, data) {
-  return prisma.$transaction(async (tx) => {
-    // Create the main request
-    const request = await tx.resourceRequest.create({
-      data: {
-        user_id,
-        purpose: data.purpose,
-        project_description: data.project_description,
-        project_supervisor_name: data.project_supervisor_name,
-        resource_type: data.resource_type,
-        justification: data.justification,
-        estimated_start_date: new Date(data.estimated_start_date),
-        estimated_end_date: new Date(data.estimated_end_date),
-        impact_score: data.impact_score,
-        supervisor_confirmation: data.supervisor_confirmation,
-        status: 'PENDING',
-      },
-    });
-
-    // Create the resource-specific detail row
-    const resource_table = RESOURCE_TABLES[data.resource_type];
-    if (resource_table) {
-      const model_name = resource_table.charAt(0).toUpperCase() + resource_table.slice(1) + 'Request';
-      
-      // Map resource_type to model name
-      const models = {
-        'HPC_GPU': 'hpcGpuRequest',
-        'BIG_DATA': 'bigDataRequest',
-        'VM': 'vmRequest',
-        'LAB_EQUIPMENT': 'labEquipmentRequest',
-        'AWS_SKILL_BUILDER': 'awsSkillBuilderRequest',
-        'AWS_LEARNER_LAB': 'awsLearnerLabRequest',
-      };
-      
-      const model_key = models[data.resource_type];
-      
-      if (model_key === 'hpcGpuRequest') {
-        await tx.hpcGpuRequest.create({
-          data: { request_id: request.id },
-        });
-      } else if (model_key === 'bigDataRequest') {
-        await tx.bigDataRequest.create({
-          data: { request_id: request.id },
-        });
-      } else if (model_key === 'vmRequest') {
-        await tx.vmRequest.create({
-          data: { request_id: request.id },
-        });
-      } else if (model_key === 'labEquipmentRequest') {
-        await tx.labEquipmentRequest.create({
-          data: { request_id: request.id },
-        });
-      } else if (model_key === 'awsSkillBuilderRequest') {
-        await tx.awsSkillBuilderRequest.create({
-          data: { request_id: request.id },
-        });
-      } else if (model_key === 'awsLearnerLabRequest') {
-        await tx.awsLearnerLabRequest.create({
-          data: { request_id: request.id },
-        });
-      }
-    }
-
-    return request;
+  return prisma.$transaction(async tx => {
+    const request = await tx.request.create({ data: { student_uid: user_id, ...requestData(data), status: 'Pending' } });
+    await tx.draft.deleteMany({ where: { student_uid: user_id } });
+    return requestView(request);
   });
 }
-
 export async function getRequestById(request_id, user_id = null) {
-  const request = await prisma.resourceRequest.findUnique({
-    where: { id: request_id },
-    include: {
-      user: { include: { account: true } },
-      reviewed_by: true,
-    },
-  });
-
-  if (!request) {
-    return null;
-  }
-
-  // If user_id is provided, ensure the user owns this request
-  if (user_id && request.user_id !== user_id) {
-    return null;
-  }
-
-  return request;
+  return requestView(await prisma.request.findFirst({ where: { rid: request_id, ...(user_id !== null && { student_uid: user_id }) }, include: requestInclude }));
 }
-
 export async function getUserRequests(user_id) {
-  return prisma.resourceRequest.findMany({
-    where: { user_id },
-    include: {
-      user: { include: { account: true } },
-      reviewed_by: true,
-    },
-    orderBy: { created_at: 'desc' },
-  });
+  return (await prisma.request.findMany({ where: { student_uid: user_id }, include: requestInclude, orderBy: { created_at: 'desc' } })).map(requestView);
 }
-
 export async function updateRequest(request_id, user_id, data) {
-  // Verify ownership
-  const request = await getRequestById(request_id, user_id);
-  if (!request) {
-    throw new Error('Request not found or unauthorized');
-  }
-
-  // Can only update PENDING requests
-  if (request.status !== 'PENDING') {
-    throw new Error('Can only update pending requests');
-  }
-
-  return prisma.resourceRequest.update({
-    where: { id: request_id },
-    data: {
-      purpose: data.purpose,
-      project_description: data.project_description,
-      project_supervisor_name: data.project_supervisor_name,
-      justification: data.justification,
-      estimated_start_date: new Date(data.estimated_start_date),
-      estimated_end_date: new Date(data.estimated_end_date),
-      impact_score: data.impact_score,
-      supervisor_confirmation: data.supervisor_confirmation,
-    },
+  return prisma.$transaction(async tx => {
+    const row = await tx.request.findFirst({ where: { rid: request_id, student_uid: user_id } });
+    if (!row) throw Object.assign(new Error('Request not found or unauthorized'), { statusCode: 404 });
+    if (row.status !== 'Pending') throw Object.assign(new Error('Can only update pending requests'), { statusCode: 400 });
+    const current = requestView(row);
+    if (current.impact_score === null) delete current.impact_score;
+    const merged = UpdateRequestSchema.parse({ ...current,
+      estimated_start_date: row.start_date.toISOString(), estimated_end_date: row.end_date.toISOString(), ...data });
+    const updated = await tx.request.updateMany({ where: { rid: request_id, student_uid: user_id, status: 'Pending' }, data: requestData(merged, row) });
+    if (!updated.count) throw Object.assign(new Error('Can only update pending requests'), { statusCode: 400 });
+    return requestView(await tx.request.findUnique({ where: { rid: request_id } }));
   });
 }

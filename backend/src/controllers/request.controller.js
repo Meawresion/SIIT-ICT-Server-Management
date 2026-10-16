@@ -1,3 +1,4 @@
+import { parseId, requestResponse } from '../utils/db-mapping.js';
 import { createRequest, getRequestById, getUserRequests, updateRequest } from '../services/request.service.js';
 import { CreateRequestSchema, UpdateRequestSchema } from '../utils/validation.js';
 
@@ -66,7 +67,7 @@ export async function getRequest(req, res, next) {
     const { id } = req.params;
     const user_id = req.session.user_id;
 
-    const request = await getRequestById(BigInt(id), user_id);
+    const request = await getRequestById(parseId(id), user_id);
 
     if (!request) {
       return res.status(404).json({
@@ -74,23 +75,7 @@ export async function getRequest(req, res, next) {
       });
     }
 
-    res.json({
-      id: request.id,
-      purpose: request.purpose,
-      project_description: request.project_description,
-      project_supervisor_name: request.project_supervisor_name,
-      resource_type: request.resource_type,
-      justification: request.justification,
-      estimated_start_date: request.estimated_start_date,
-      estimated_end_date: request.estimated_end_date,
-      impact_score: request.impact_score,
-      supervisor_confirmation: request.supervisor_confirmation,
-      status: request.status,
-      review_comment: request.review_comment,
-      reviewed_at: request.reviewed_at,
-      created_at: request.created_at,
-      updated_at: request.updated_at,
-    });
+    res.json(requestResponse(request));
   } catch (err) {
     next(err);
   }
@@ -109,14 +94,9 @@ export async function updateRequestHandler(req, res, next) {
       });
     }
 
-    const request = await updateRequest(BigInt(id), user_id, validation.data);
+    const request = await updateRequest(parseId(id), user_id, validation.data);
 
-    res.json({
-      id: request.id,
-      purpose: request.purpose,
-      resource_type: request.resource_type,
-      status: request.status,
-    });
+    res.json(requestResponse(request));
   } catch (err) {
     if (err.message.includes('not found') || err.message.includes('unauthorized')) {
       return res.status(404).json({ message: err.message });
