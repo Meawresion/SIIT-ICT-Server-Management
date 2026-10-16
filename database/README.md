@@ -4,8 +4,8 @@ This directory contains the MySQL initialization script for the SIIT ICT Resourc
 Request System.
 
 - `init.sql` creates the application tables.
-- `init.sql` also creates stored procedures used by the application for student,
-  approver, request, and draft workflows.
+- `init.sql` also creates stored procedures for direct SQL access to student,
+  approver, request, and draft workflows. The HTTP backend uses Prisma with the same tables and workflow rules.
 - `docker-compose.yml` mounts `database/init.sql` into the MySQL container at
   `/docker-entrypoint-initdb.d/init.sql`, so it runs automatically when the
   database volume is initialized for the first time.
@@ -301,3 +301,78 @@ database again:
 docker-compose down -v
 docker-compose up mysql
 ```
+
+## Backend compatibility
+
+The backend uses the current lowercase `user`, `request`, and `draft` tables.
+It preserves the frontend API field names and enum values through
+`backend/src/utils/db-mapping.js`. No database reset or data migration is needed
+when these tables already exist. Regenerate the Prisma client after schema edits:
+
+```bash
+cd backend
+npm run prisma:generate
+npm test
+npm run test:db
+```
+
+`test:db` exercises the real services against the configured `DATABASE_URL` inside
+one transaction, then rolls back all test records. It requires insert/update
+permissions as well as read access.
+
+Google sign-in finds users by their verified email. New sign-ins create a
+`Student` row; completing the profile updates that same row. Reviewer access
+requires an existing `Approver` role in the database.
+
+Frontend names map to the database as follows:
+
+| Frontend | Database |
+|----------|----------|
+| `HPC_GPU` | `GPU_SERVER` |
+| `AWS_SKILL_BUILDER` | `AWS_SKILL` |
+| `AWS_LEARNER_LAB` | `AWS_LAB` |
+| `ACTIVE` | `On Use` (Prisma `On_Use`) |
+| `DOCTORAL` | `PhD` |
+
+The full project description, impact score, supervisor confirmation, and review
+comment are stored in `request.extra_details`. Existing resource-specific JSON
+is retained during edits and reviews. `proj_name` uses the first 255 characters
+of the description unless a separate `project_name` is supplied. Supervisor email
+is stored when supplied through the API; the current form has no email input and
+therefore saves an empty string.
+
+The new `user` table has no advisor-name column. The legacy profile form still
+contains that input to preserve its appearance, but it is not persisted and the
+profile API returns an empty advisor name. Supervisors on individual requests
+are persisted in `spv_name`. Persisting a separate profile advisor requires a
+schema extension.
+
+## Assign reviewer access by email
+
+The reviewer dashboard is `/reviewer`; request review details are at
+`/reviewer/requests/:id`. The current schema has two roles: `Student` and
+`Approver`. `Approver` grants reviewer access; there is no separate admin role.
+Google sign-in sends approvers directly to `/reviewer`.
+
+The person must sign in with Google once to create their account. Then run this
+command on the backend server, using the same `DATABASE_URL` as the application:
+
+```bash
+cd backend
+npm run user:role -- person@siit.tu.ac.th Approver
+```
+
+To remove reviewer access:
+
+```bash
+npm run user:role -- person@siit.tu.ac.th Student
+```
+
+The command normalizes the email and updates only the existing user's role.
+It never creates an account or changes request ownership. Access changes take
+effect on the next API request because the backend reads the database role for
+each authenticated request. A student needs a completed profile to use student
+request pages after being demoted.
+
+Role assignment is a server command with database credentials; no public API
+accepts role changes, and users cannot choose their own role during sign-in.

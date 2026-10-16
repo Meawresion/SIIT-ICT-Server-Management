@@ -1,3 +1,8 @@
+import { existsSync } from 'node:fs';
+import { loadEnvFile } from 'node:process';
+const envPath = new URL('../../.env', import.meta.url);
+if (existsSync(envPath)) loadEnvFile(envPath);
+
 const env = {
   node_env: process.env.NODE_ENV || 'development',
   port: process.env.PORT || 3000,
