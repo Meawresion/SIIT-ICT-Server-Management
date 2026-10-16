@@ -20,6 +20,14 @@ export default function DashboardPage() {
           navigate('/login');
           return;
         }
+        if (user.role === 'reviewer') {
+          navigate('/reviewer');
+          return;
+        }
+        if (!user.user_id) {
+          navigate('/profile');
+          return;
+        }
 
         const profile_data = await getUserProfile();
         setProfile(profile_data);

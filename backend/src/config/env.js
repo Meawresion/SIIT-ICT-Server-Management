@@ -1,11 +1,7 @@
-import dotenv from 'dotenv';
-dotenv.config();
-
-// console.log('=== ENV DEBUG ===');
-// console.log('GOOGLE_CLIENT_ID:', process.env.GOOGLE_CLIENT_ID);
-// console.log('GOOGLE_CLIENT_SECRET:', process.env.GOOGLE_CLIENT_SECRET);
-// console.log('GOOGLE_CALLBACK_URL:', process.env.GOOGLE_CALLBACK_URL);
-// console.log('================');
+import { existsSync } from 'node:fs';
+import { loadEnvFile } from 'node:process';
+const envPath = new URL('../../.env', import.meta.url);
+if (existsSync(envPath)) loadEnvFile(envPath);
 
 const env = {
   node_env: process.env.NODE_ENV || 'development',

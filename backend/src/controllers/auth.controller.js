@@ -1,4 +1,4 @@
-import { getGoogleAuthUrl, exchangeCodeForToken, verifyIdToken } from '../auth/google.js';
+import { getGoogleAuthUrl, exchangeCodeForToken } from '../auth/google.js';
 import { verifyTokenAndGetAccount } from '../services/auth.service.js';
 import { getUserByAccountId } from '../services/user.service.js';
 import env from '../config/env.js';
@@ -9,7 +9,7 @@ export async function initiateGoogleAuth(req, res, next) {
     // Generate state for CSRF protection
     const state = crypto.randomBytes(32).toString('hex');
     req.session.oauth_state = state;
-    req.session.save();
+    await new Promise((resolve, reject) => req.session.save(err => err ? reject(err) : resolve()));
 
     const auth_url = getGoogleAuthUrl(state);
     res.json({ auth_url });
@@ -23,9 +23,11 @@ export async function handleGoogleCallback(req, res, next) {
     const { code, state } = req.query;
 
     // Verify state
-    if (state !== req.session.oauth_state) {
+    if (!code || !state || !req.session.oauth_state || state !== req.session.oauth_state) {
       return res.status(400).json({ message: 'Invalid state' });
     }
+
+    delete req.session.oauth_state;
 
     // Exchange code for token
     const tokens = await exchangeCodeForToken(code);
@@ -36,15 +38,17 @@ export async function handleGoogleCallback(req, res, next) {
     // Check if user profile exists
     const user = await getUserByAccountId(account.id);
 
-    // Set session - Convert BigInt to string
-    req.session.account_id = account.id.toString();  // ← Convert to string
+    await new Promise((resolve, reject) => req.session.regenerate(err => err ? reject(err) : resolve()));
+    // Set session
+    req.session.account_id = account.id;
     if (user) {
       req.session.user_id = user.id.toString();  // ← Convert to string
     }
-    req.session.save();
+    req.session.role = account.role === 'Approver' ? 'reviewer' : 'user';
+    await new Promise((resolve, reject) => req.session.save(err => err ? reject(err) : resolve()));
 
     // Redirect to frontend
-    const redirect_url = user
+    const redirect_url = account.role === 'Approver' ? `${env.frontend_url}/reviewer` : user
       ? `${env.frontend_url}/dashboard`
       : `${env.frontend_url}/profile`;
 
@@ -64,6 +68,7 @@ export async function getCurrentUser(req, res, next) {
     res.json({
       account_id: req.session.account_id,
       user_id: req.session.user_id || null,
+      role: req.session.role,
     });
   } catch (err) {
     next(err);

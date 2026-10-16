@@ -1,3 +1,4 @@
+import { parseId } from '../utils/db-mapping.js';
 import {
   getAllRequests,
   getRequestForReview,
@@ -38,7 +39,7 @@ export async function getRequestDetail(req, res, next) {
   try {
     const { id } = req.params;
 
-    const request = await getRequestForReview(BigInt(id));
+    const request = await getRequestForReview(parseId(id));
 
     if (!request) {
       return res.status(404).json({
@@ -68,7 +69,7 @@ export async function getRequestDetail(req, res, next) {
         student_id: request.user.student_id,
         degree: request.user.degree,
         program: request.user.program,
-        advisor_name: request.user.advisor_name,
+        advisor_name: request.project_supervisor_name,
       },
     });
   } catch (err) {
@@ -89,7 +90,7 @@ export async function approveRequestHandler(req, res, next) {
       });
     }
 
-    const request = await approveRequest(BigInt(id), reviewer_account_id, validation.data.review_comment);
+    const request = await approveRequest(parseId(id), reviewer_account_id, validation.data.review_comment);
 
     res.json({
       id: request.id,
@@ -120,7 +121,7 @@ export async function rejectRequestHandler(req, res, next) {
       });
     }
 
-    const request = await rejectRequest(BigInt(id), reviewer_account_id, validation.data.review_comment);
+    const request = await rejectRequest(parseId(id), reviewer_account_id, validation.data.review_comment);
 
     res.json({
       id: request.id,
@@ -143,7 +144,7 @@ export async function activateRequestHandler(req, res, next) {
     const { id } = req.params;
     const reviewer_account_id = req.session.account_id;
 
-    const request = await activateRequest(BigInt(id), reviewer_account_id);
+    const request = await activateRequest(parseId(id), reviewer_account_id);
 
     res.json({
       id: request.id,
@@ -166,7 +167,7 @@ export async function completeRequestHandler(req, res, next) {
     const { id } = req.params;
     const reviewer_account_id = req.session.account_id;
 
-    const request = await completeRequest(BigInt(id), reviewer_account_id);
+    const request = await completeRequest(parseId(id), reviewer_account_id);
 
     res.json({
       id: request.id,

@@ -62,8 +62,8 @@ export async function createProfile(req, res, next) {
     }
 
     const user = await createUserProfile(account_id, validation.data);
-    req.session.user_id = user.id.toString();  // ← Convert BigInt
-    req.session.save();
+    req.session.user_id = user.id;
+    await new Promise((resolve, reject) => req.session.save(err => err ? reject(err) : resolve()));
 
     res.status(201).json({
       id: user.id.toString(),  // ← Convert BigInt

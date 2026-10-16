@@ -35,7 +35,7 @@ export async function verifyIdToken(id_token) {
   const payload = ticket.getPayload();
 
   // Validate token claims
-  if (payload.iss !== 'https://accounts.google.com') {
+  if (!['https://accounts.google.com', 'accounts.google.com'].includes(payload.iss)) {
     throw new Error('Invalid token issuer');
   }
 
