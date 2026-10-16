@@ -17,6 +17,17 @@ npm run dev
 
 Start the backend first (see `../README.md`). Without it the landing page loads but sign-in fails with a message.
 
+### Preview protected pages without Google sign-in
+
+From this directory (the one containing `package.json`), create or edit `.env.local` with:
+
+```env
+VITE_MOCK_AUTH=true
+VITE_MOCK_AUTH_ROLE=student
+```
+
+Restart `npm run dev`, then open the local Vite URL with `/home` appended (for example, `http://localhost:5173/home`). Set `VITE_MOCK_AUTH_ROLE=reviewer` and open `/admin` to preview approver pages. Mock auth is enabled only in Vite development mode and uses placeholder profile data; pages that load request data still need a reachable backend.
+
 ## Screens
 
 | Route | Who | What |

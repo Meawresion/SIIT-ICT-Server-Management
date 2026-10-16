@@ -4,12 +4,35 @@ import { getUserProfile } from '../api/users.js';
 import { getRequests as getReviewerRequests } from '../api/reviewer.js';
 import { AuthContext } from './context.js';
 
+const mockAuthEnabled = import.meta.env.DEV && import.meta.env.VITE_MOCK_AUTH === 'true';
+const mockRole = import.meta.env.VITE_MOCK_AUTH_ROLE === 'reviewer' ? 'reviewer' : 'student';
+
+function getMockSession() {
+  return {
+    status: 'ready',
+    accountId: `mock-${mockRole}-account`,
+    role: mockRole,
+    profile: {
+      full_name: mockRole === 'reviewer' ? 'Demo Approver' : 'Demo Student',
+      primary_email: mockRole === 'reviewer' ? 'approver@example.test' : 'student@example.test',
+      student_id: mockRole === 'reviewer' ? null : 'DEMO0001',
+      degree: 'Bachelor of Engineering',
+      program: 'Computer Engineering',
+      phone_number: '000-000-0000',
+      advisor_name: 'Demo Advisor',
+    },
+    needsProfile: false,
+  };
+}
+
 // Works out who is signed in and what they are.
 // /api/auth/me only returns ids, so the role is found by probing:
 //   reviewer endpoint answers  -> reviewer
 //   profile exists             -> student
 //   neither                    -> student who still needs to complete a profile
 async function resolveSession() {
+  if (mockAuthEnabled) return getMockSession();
+
   const me = await getCurrentUser();
   if (!me?.account_id) return { status: 'anon' };
 
@@ -47,6 +70,10 @@ export default function AuthProvider({ children }) {
   }, []);
 
   const logout = useCallback(async () => {
+    if (mockAuthEnabled) {
+      setState({ status: 'anon' });
+      return;
+    }
     try {
       await apiLogout();
     } finally {
