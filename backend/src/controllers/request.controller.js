@@ -23,7 +23,7 @@ export async function createNewRequest(req, res, next) {
     const request = await createRequest(user_id, validation.data);
 
     res.status(201).json({
-      id: request.id,
+      id: request.id.toString(),  // ← Convert BigInt
       status: request.status,
       resource_type: request.resource_type,
       purpose: request.purpose,
@@ -47,7 +47,7 @@ export async function getMyRequests(req, res, next) {
     const requests = await getUserRequests(user_id);
 
     res.json(requests.map(r => ({
-      id: r.id,
+      id: r.id.toString(),  // ← Convert BigInt
       purpose: r.purpose,
       resource_type: r.resource_type,
       status: r.status,

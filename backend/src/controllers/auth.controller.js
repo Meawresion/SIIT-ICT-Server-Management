@@ -42,7 +42,7 @@ export async function handleGoogleCallback(req, res, next) {
     // Set session
     req.session.account_id = account.id;
     if (user) {
-      req.session.user_id = user.id;
+      req.session.user_id = user.id.toString();  // ← Convert to string
     }
     req.session.role = account.role === 'Approver' ? 'reviewer' : 'user';
     await new Promise((resolve, reject) => req.session.save(err => err ? reject(err) : resolve()));
