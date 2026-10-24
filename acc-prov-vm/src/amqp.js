@@ -3,10 +3,12 @@
 // - send(queue, text): resolves once the broker has accepted (stored) the message;
 // - consume(queue, handler): one message at a time; it is accepted (removed) only after handler
 //   resolves, and released for redelivery if handler throws. Artemis moves a message to its DLQ
-//   after max-delivery-attempts, like an SQS dead-letter queue.
+//   after max-delivery-attempts, like an SQS dead-letter queue. A PoisonMessageError rejects the
+//   message instead, so it is dead-lettered at once.
 // Message bodies are envelope strings (src/envelope.js); this layer never sees plaintext payloads.
 
 import rhea from 'rhea';
+import { PoisonMessageError } from './errors.js';
 
 export class AmqpConnection {
   #conn;
@@ -93,6 +95,13 @@ export class AmqpConnection {
         ctx.delivery.accept();
         this.#log('amqp.accepted', { queue, deliveryCount });
       } catch (err) {
+        if (err instanceof PoisonMessageError) {
+          // Untrusted or malformed: never retry; Artemis dead-letters rejected messages.
+          ctx.delivery.reject({ condition: 'amqp:invalid-field', description: 'invalid message' });
+          this.#log('amqp.rejected', { queue, deliveryCount, error: err.message });
+          if (!stopped) receiver.add_credit(1);
+          return;
+        }
         this.#log('amqp.released', { queue, deliveryCount, error: err.message });
         // Back off a little so a failing job doesn't spin; Artemis counts the failed delivery.
         await new Promise((r) => setTimeout(r, retryDelayMs));

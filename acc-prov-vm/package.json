@@ -13,7 +13,8 @@
     "test:gpu": "node --env-file=.env --test --test-concurrency=1 --test-timeout=1800000 test/gpu.integration.test.js",
     "test:mail": "node --env-file=.env --test --test-concurrency=1 test/mail.integration.test.js",
     "test:amqp": "node --env-file=.env --test --test-concurrency=1 test/amqp.integration.test.js",
-    "keygen": "node scripts/keygen.js",
+    "test:worker-broker": "node --env-file=.env --test --test-concurrency=1 test/worker.broker.integration.test.js",
+    "keygen":"node scripts/keygen.js",
     "check:config": "node --env-file=.env -e \"import('./src/config.js').then((c) => { c.loadPfSenseConfig(); const g = c.loadGpuConfig(); console.log('config OK; GPU nodes:', g.nodes.map((n) => n.name + '=' + n.host).join(', ')); })\""
   },
   "dependencies": {
