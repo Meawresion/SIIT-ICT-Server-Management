@@ -1,0 +1,20 @@
+{
+  "name": "acc-prov-vm",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Account Provisioning VM: creates and revokes student VPN (pfSense), Linux and HUE accounts at the SIIT resource site",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "node --test test/*.unit.test.js",
+    "test:pfsense": "node --env-file=.env --test --test-concurrency=1 test/pfsense.integration.test.js"
+  },
+  "dependencies": {
+    "playwright": "1.64.1"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.64.1"
+  }
+}
