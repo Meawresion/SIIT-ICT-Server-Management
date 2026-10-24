@@ -112,3 +112,33 @@ await sendProvisionEmail(mailer, {
 - **Recipients** must be plain addresses. Quotes, `;`, `<>`, `()` and spaces are rejected. Optionally, `MAIL_ALLOWED_RECIPIENT_DOMAINS` limits sending to the SIIT domain.
 - **Sender:** SMTP settings come from `.env`; for now that's Gmail with an App Password (D9). The sender can be swapped for an SIIT relay or SES by changing config only.
 - Logs record the recipient, subject and message ID, never the password.
+
+## Message envelope (D22)
+
+Every message between the backend and acc-prov-vm is **signed and encrypted**, on every transport (local ActiveMQ, AWS SQS). IAM, TLS and SSE-KMS stay in place underneath. The envelope additionally makes sure that only the backend's key can authorize a job, and only acc-prov-vm can read it.
+
+- **Keys:** each side has one bundle, `<kid>.<Ed25519 key>.<X25519 key>`. Generate one with `npm run keygen -- site-2026-10`.
+  - The private bundle goes in this side's `.env` (`MSG_PRIVATE_KEY`) only.
+  - The public bundle goes to the other side (`MSG_PEER_PUBLIC_KEYS`, or Secrets Manager on AWS).
+  - Several peer bundles can be listed during a key rotation; the first one is used for sending.
+- **Crypto (Node built-in `crypto`):** an ephemeral X25519 key with ECDH, then HKDF-SHA256, then AES-256-GCM, with the header as additional authenticated data. The sender signs header + iv + ciphertext + tag with Ed25519.
+- **Envelope:** `{ v, typ: 'job'|'result', kid, rkid, jti (job_id), rid, iat, exp, epk, iv, ct, tag, sig }`. Payloads never contain passwords.
+- **`open()` checks, in order:**
+  1. size (at most 256 KB);
+  2. version and type;
+  3. a known sender `kid`, and `rkid` equal to this side's own kid;
+  4. the time window (`iat` skew, `exp`, `MSG_MAX_TTL_SEC`);
+  5. **the signature**;
+  6. then it decrypts.
+
+  Detecting a duplicate `jti` (replays and redeliveries) is the caller's job.
+
+```js
+import { open, parsePrivateBundle, parsePublicBundles, seal } from './src/envelope.js';
+
+const me = parsePrivateBundle(process.env.MSG_PRIVATE_KEY);
+const peers = parsePublicBundles(process.env.MSG_PEER_PUBLIC_KEYS);
+const job = open(text, { me, peers, expectedTyp: 'job', maxTtlSec: Number(process.env.MSG_MAX_TTL_SEC) });
+const reply = seal({ typ: 'result', jti: job.jti, rid: job.rid, payload: { ok: true }, ttlSec: 86400 },
+  { me, peer: peers[0] });
+```
