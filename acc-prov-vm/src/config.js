@@ -56,6 +56,22 @@ export function loadMailConfig(env = process.env) {
   };
 }
 
+// Local broker (D23): ActiveMQ Artemis over AMQP 1.0.
+export function loadAmqpConfig(env = process.env) {
+  requireEnv(env, ['AMQP_URL', 'AMQP_USER', 'AMQP_PASSWORD', 'AMQP_REQUEST_QUEUE', 'AMQP_RESULT_QUEUE']);
+  if (!['amqp:', 'amqps:'].includes(new URL(env.AMQP_URL).protocol)) throw new Error('AMQP_URL must be amqp:// or amqps://');
+  for (const k of ['AMQP_REQUEST_QUEUE', 'AMQP_RESULT_QUEUE']) {
+    if (!/^[A-Za-z0-9._-]+$/.test(env[k])) throw new Error(`${k} must be a plain queue name`);
+  }
+  return {
+    url: env.AMQP_URL,
+    username: env.AMQP_USER,
+    password: env.AMQP_PASSWORD,
+    requestQueue: env.AMQP_REQUEST_QUEUE,
+    resultQueue: env.AMQP_RESULT_QUEUE,
+  };
+}
+
 const NODE_NAME_RE = /^[a-z0-9][a-z0-9-]{0,31}$/;
 const IPV4_RE = /^\d{1,3}(\.\d{1,3}){3}$/;
 const FINGERPRINT_RE = /^SHA256:[A-Za-z0-9+/]{43}$/;

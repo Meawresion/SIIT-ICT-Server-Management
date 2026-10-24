@@ -6,6 +6,7 @@ Runs at the SIIT resource site, behind pfSense. When a GPU or Big Data request i
 - **GPU node** Linux user + conda Jupyter kernel, over SSH (`src/ssh.js`, `src/linux.js`, `src/gpu.js`)
 - Hadoop Linux / HDFS accounts over SSH (planned)
 - HUE user (planned)
+- **Messaging:** signed + encrypted envelopes (`src/envelope.js`) over local ActiveMQ (`src/amqp.js`), later SQS
 - **Student email** with credentials and links, via SMTP (`src/mail.js`)
 
 ## Setup
@@ -148,3 +149,22 @@ const reply = seal({ typ: 'result', jti: job.jti, rid: job.rid, payload: { ok: t
   { me, peer: peers[0] });
 ```
 
+## Local message broker (D23)
+
+For local testing, the backend and acc-prov-vm exchange envelopes through **ActiveMQ Artemis**, the `activemq` service in the root `docker-compose.yml`. In AWS they use SQS instead. The broker:
+- listens on `127.0.0.1` only (AMQP 5672, web console 8161);
+- takes its login from `ARTEMIS_USER` / `ARTEMIS_PASSWORD` in the root `.env`;
+- has anonymous login disabled.
+
+`src/amqp.js` (AMQP 1.0, `rhea`) has the same contract as the SQS transport:
+
+| Call | Behaviour |
+|------|-----------|
+| `AmqpConnection.connect(loadAmqpConfig())` | Logs in with `AMQP_USER` / `AMQP_PASSWORD`. |
+| `send(queue, text)` | Resolves once the broker has stored the message (durable, anycast queue). |
+| `consume(queue, handler)` | One message at a time. **Accepted only after `handler` resolves**; released for redelivery if it throws (after a short back-off). Artemis dead-letters a message after its max delivery attempts, like an SQS DLQ. |
+
+```bash
+docker compose up -d activemq                     # from the repo root
+cd acc-prov-vm && npm run test:amqp               # throwaway queue; real queues untouched
+```
