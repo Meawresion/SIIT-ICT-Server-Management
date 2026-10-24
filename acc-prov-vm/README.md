@@ -34,7 +34,7 @@ await withPfSense(loadPfSenseConfig(), async (pf) => {
 | Method | Notes |
 |--------|-------|
 | `getUserState(username)` | `{ exists: false }` or `{ exists, disabled, expires: 'YYYY-MM-DD' \| null, fullName }` |
-| `createUser({ username, password, fullName, expires })` | Also creates the user certificate (CA from `PFSENSE_CA_NAME`, RSA 2048, sha256, 3650 days). Throws `PfSenseUserExistsError` if the user exists. |
+| `createUser({ username, password, fullName, expires })` | Also creates the user certificate: CA from `PFSENSE_CA_NAME`, key type, length, digest and lifetime from `PFSENSE_CERT_*`. Throws `PfSenseUserExistsError` if the user exists. |
 | `setPassword({ username, fullName, password })` | Refuses (`PfSenseIdentityError`) unless the edit page shows both that username and that full name. |
 | `setExpiration({ username, expires })` | Reads the date back after saving. |
 | `disableUser(username)` / `enableUser(username)` | Idempotent; returns `{ changed }`. |
