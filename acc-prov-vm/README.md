@@ -6,6 +6,7 @@ Runs at the SIIT resource site, behind pfSense. When a GPU or Big Data request i
 - **GPU node** Linux user + conda Jupyter kernel, over SSH (`src/ssh.js`, `src/linux.js`, `src/gpu.js`)
 - Hadoop Linux / HDFS accounts over SSH (planned)
 - HUE user (planned)
+- **Student email** with credentials and links, via SMTP (`src/mail.js`)
 
 ## Setup
 
@@ -91,3 +92,23 @@ try {
 
 - Commands are built from argv arrays and quoted, never from interpolated strings.
 - Passwords go to `sudo -S` and `chpasswd` on stdin only. sudo always runs with `-k`, so a cached sudo session can't make the password line reach the command.
+
+## Mail module
+
+```js
+import { loadMailConfig } from './src/config.js';
+import { createMailer, sendProvisionEmail } from './src/mail.js';
+
+const mailer = createMailer(loadMailConfig());
+await sendProvisionEmail(mailer, {
+  to: 'student@...', fullName: 'Jane Doe', username: 'st6622001234', password,
+  vpnIsNew: false, // false: keep the existing VPN password; this password is for the service only (D15)
+  service: { name: 'GPU server gpu-01', links: [{ label: 'JupyterHub', url: node.jupyterUrl }], manualUrl },
+  ovpnProfileUrl, period: { start: '2026-11-01', end: '2026-12-31' },
+});
+```
+
+- The email has instructions, the credentials and links (VPN profile, service URLs, student manual), with no attachments. It comes in text and HTML, and all user text is escaped.
+- **Recipients** must be plain addresses. Quotes, `;`, `<>`, `()` and spaces are rejected. Optionally, `MAIL_ALLOWED_RECIPIENT_DOMAINS` limits sending to the SIIT domain.
+- **Sender:** SMTP settings come from `.env`; for now that's Gmail with an App Password (D9). The sender can be swapped for an SIIT relay or SES by changing config only.
+- Logs record the recipient, subject and message ID, never the password.

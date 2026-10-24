@@ -34,6 +34,28 @@ export function loadPfSenseConfig(env = process.env) {
   };
 }
 
+// Temporary sender (D9): Gmail SMTP with an App Password. Swappable for an SIIT relay or SES.
+export function loadMailConfig(env = process.env) {
+  requireEnv(env, ['SMTP_HOST', 'SMTP_PORT', 'SMTP_SECURE', 'SMTP_USER', 'SMTP_APP_PASSWORD', 'MAIL_FROM']);
+  const port = Number(env.SMTP_PORT);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('SMTP_PORT is invalid');
+  if (!['true', 'false'].includes(env.SMTP_SECURE)) throw new Error('SMTP_SECURE must be true or false');
+  const domains = (env.MAIL_ALLOWED_RECIPIENT_DOMAINS ?? '').split(',').map((d) => d.trim().toLowerCase()).filter(Boolean);
+  return {
+    smtp: {
+      host: env.SMTP_HOST,
+      port,
+      secure: env.SMTP_SECURE === 'true',
+      // STARTTLS is required when the connection doesn't start with TLS.
+      requireTLS: env.SMTP_SECURE !== 'true',
+      auth: { user: env.SMTP_USER, pass: env.SMTP_APP_PASSWORD },
+    },
+    from: env.MAIL_FROM,
+    replyTo: env.MAIL_REPLY_TO || undefined,
+    allowedRecipientDomains: domains,
+  };
+}
+
 const NODE_NAME_RE = /^[a-z0-9][a-z0-9-]{0,31}$/;
 const IPV4_RE = /^\d{1,3}(\.\d{1,3}){3}$/;
 const FINGERPRINT_RE = /^SHA256:[A-Za-z0-9+/]{43}$/;
