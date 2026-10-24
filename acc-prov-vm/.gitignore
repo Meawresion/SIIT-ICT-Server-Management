@@ -1,0 +1,2 @@
+# Site settings: copy from gpu-nodes.example.json on each acc-prov-vm host
+gpu-nodes.json
