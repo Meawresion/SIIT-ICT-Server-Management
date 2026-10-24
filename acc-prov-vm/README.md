@@ -95,23 +95,28 @@ try {
 
 ## Mail module
 
+The student gets **two emails**:
+1. **(1/2) Instructions:** the username, the D15 note (whether to keep the existing VPN password), and links to the VPN profile, the service and the student manual. **No password.**
+2. **(2/2) The password, as an inline image only.** It is rendered with Playwright's Chromium. The password never appears in any text part, in the image alt text, or in the logs.
+
 ```js
 import { loadMailConfig } from './src/config.js';
-import { createMailer, sendProvisionEmail } from './src/mail.js';
+import { createMailer, sendProvisionEmails } from './src/mail.js';
+import { renderPasswordImage } from './src/password-image.js';
 
 const mailer = createMailer(loadMailConfig());
-await sendProvisionEmail(mailer, {
-  to: 'student@...', fullName: 'Jane Doe', username: 'st6622001234', password,
-  vpnIsNew: false, // false: keep the existing VPN password; this password is for the service only (D15)
+await sendProvisionEmails(mailer, {
+  to: 'student@...', fullName: 'Jane Doe', username: 'st6622001234',
+  vpnIsNew: false, // false: keep the existing VPN password; the new one is for the service only (D15)
   service: { name: 'GPU server gpu-01', links: [{ label: 'JupyterHub', url: node.jupyterUrl }], manualUrl },
   ovpnProfileUrl, period: { start: '2026-11-01', end: '2026-12-31' },
-});
+}, password, { renderImage: renderPasswordImage });
 ```
 
-- The email has instructions, the credentials and links (VPN profile, service URLs, student manual), with no attachments. It comes in text and HTML, and all user text is escaped.
+- **Escaping and attachments:** every email has a text and an HTML version, with user text escaped. The only attachment is the inline password image (CID).
 - **Recipients** must be plain addresses. Quotes, `;`, `<>`, `()` and spaces are rejected. Optionally, `MAIL_ALLOWED_RECIPIENT_DOMAINS` limits sending to the SIIT domain.
 - **Sender:** SMTP settings come from `.env`; for now that's Gmail with an App Password (D9). The sender can be swapped for an SIIT relay or SES by changing config only.
-- Logs record the recipient, subject and message ID, never the password.
+- **The image is obfuscation, not encryption.** It keeps the password out of search, previews and scrapers, but anyone who opens the email can read it.
 
 ## Message envelope (D22)
 
@@ -142,3 +147,4 @@ const job = open(text, { me, peers, expectedTyp: 'job', maxTtlSec: Number(proces
 const reply = seal({ typ: 'result', jti: job.jti, rid: job.rid, payload: { ok: true }, ttlSec: 86400 },
   { me, peer: peers[0] });
 ```
+
