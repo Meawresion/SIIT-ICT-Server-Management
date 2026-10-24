@@ -56,6 +56,32 @@ export function loadMailConfig(env = process.env) {
   };
 }
 
+// Worker behaviour and message keys (D22).
+export function loadWorkerConfig(env = process.env) {
+  requireEnv(env, [
+    'MESSAGE_TRANSPORT', 'MSG_PRIVATE_KEY', 'MSG_PEER_PUBLIC_KEYS', 'MSG_MAX_TTL_SEC', 'MSG_RESULT_TTL_SEC',
+    'WORKER_MAX_ATTEMPTS', 'JOB_STORE_FILE', 'PASSWORD_LENGTH', 'PFSENSE_ENABLED',
+  ]);
+  if (env.MESSAGE_TRANSPORT !== 'amqp') throw new Error('MESSAGE_TRANSPORT must be amqp (sqs is not implemented yet)');
+  const int = (k, min) => {
+    const n = Number(env[k]);
+    if (!Number.isInteger(n) || n < min) throw new Error(`${k} must be an integer >= ${min}`);
+    return n;
+  };
+  if (!['true', 'false'].includes(env.PFSENSE_ENABLED)) throw new Error('PFSENSE_ENABLED must be true or false');
+  return {
+    transport: env.MESSAGE_TRANSPORT,
+    privateKey: env.MSG_PRIVATE_KEY,
+    peerPublicKeys: env.MSG_PEER_PUBLIC_KEYS,
+    maxTtlSec: int('MSG_MAX_TTL_SEC', 60),
+    resultTtlSec: int('MSG_RESULT_TTL_SEC', 60),
+    maxAttempts: int('WORKER_MAX_ATTEMPTS', 1),
+    jobStoreFile: env.JOB_STORE_FILE,
+    passwordLength: int('PASSWORD_LENGTH', 14),
+    pfsenseEnabled: env.PFSENSE_ENABLED === 'true',
+  };
+}
+
 // Local broker (D23): ActiveMQ Artemis over AMQP 1.0.
 export function loadAmqpConfig(env = process.env) {
   requireEnv(env, ['AMQP_URL', 'AMQP_USER', 'AMQP_PASSWORD', 'AMQP_REQUEST_QUEUE', 'AMQP_RESULT_QUEUE']);

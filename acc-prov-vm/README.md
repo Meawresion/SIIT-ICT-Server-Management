@@ -8,6 +8,7 @@ Runs at the SIIT resource site, behind pfSense. When a GPU or Big Data request i
 - HUE user (planned)
 - **Messaging:** signed + encrypted envelopes (`src/envelope.js`) over local ActiveMQ (`src/amqp.js`), later SQS
 - **Student email** with credentials and links, via SMTP (`src/mail.js`)
+- **Worker** (`npm start`): runs CREATE / REVOKE jobs from the queue (`src/worker.js`, `src/jobs.js`)
 
 ## Setup
 
@@ -167,4 +168,29 @@ For local testing, the backend and acc-prov-vm exchange envelopes through **Acti
 ```bash
 docker compose up -d activemq                     # from the repo root
 cd acc-prov-vm && npm run test:amqp               # throwaway queue; real queues untouched
+```
+
+## Worker (`npm start`)
+
+`src/main.js` connects the pieces. It takes **one job at a time** from the request queue and answers on the result queue. Logs are JSON lines on stdout, with no passwords and no message plaintext.
+
+| Job | What it does |
+|-----|--------------|
+| `CREATE` (GPU) | 1. Generate a password (`PASSWORD_LENGTH`; letters and digits, no look-alikes). 2. **VPN (D15)**, if `PFSENSE_ENABLED=true`: create the account if it's missing; keep an active one, extending its expiration only if it was set; re-activate a disabled or expired one with the new password. 3. GPU account and conda kernel on the named node. 4. Both emails, **last**. |
+| `REVOKE` (GPU) | Lock the Linux account. Disable the VPN account only when `revokeVpn` is true (the student has no other active request). |
+
+- **Retries and failures:**
+  - A transient failure is retried through redelivery, up to `WORKER_MAX_ATTEMPTS`.
+  - The last attempt, or a job that can never succeed (unsupported resource, bad payload, an account belonging to another full name), sends a **failed result**, so the backend always hears back.
+  - A forged or malformed message is **rejected**: the broker dead-letters it and no result is sent.
+- **Retrying CREATE is safe.** Each attempt sets one fresh password on every account the job manages, and emails it last. If an earlier attempt created the VPN account, that fact is kept in the job store (no secrets), so the retry resets the VPN password too.
+- **Duplicates:** `JOB_STORE_FILE` records each finished `jti`. A redelivered or replayed job is not run again; its stored result is re-sent.
+
+**Local end-to-end test** (the local ActiveMQ broker, a real GPU node and real email, with pfSense off):
+```bash
+npm run keygen -- site-local      # MSG_PRIVATE_KEY=... -> .env ; public line -> TEST_SITE_PUBLIC_KEY
+npm run keygen -- backend-local   # its private value -> TEST_BACKEND_PRIVATE_KEY ; public -> MSG_PEER_PUBLIC_KEYS
+npm start                                                  # terminal 1
+npm run send-test-job -- create gpu-01 you@example.com     # terminal 2, prints the result
+npm run send-test-job -- revoke gpu-01
 ```
