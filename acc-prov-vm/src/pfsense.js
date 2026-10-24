@@ -17,9 +17,6 @@ import { assertIsoDate, assertNonEmpty, assertUsername } from './validate.js';
 const USERS_PATH = '/system_usermanager.php';
 const LOGOUT = '#pf-navbar a[href="/index.php?logout"]:visible';
 
-// User certificate settings from the technician manual (they match the live defaults).
-const CERT = { keytype: 'RSA', keylen: '2048', digest: 'sha256', lifetimeDays: '3650' };
-
 export class PfSenseError extends Error {}
 
 export class PfSenseLoginError extends PfSenseError {}
@@ -58,13 +55,15 @@ export class PfSenseSession {
   #page;
   #baseUrl;
   #caName;
+  #cert;
   #log;
 
-  constructor(browser, page, { baseUrl, caName, log }) {
+  constructor(browser, page, { baseUrl, caName, cert, log }) {
     this.#browser = browser;
     this.#page = page;
     this.#baseUrl = baseUrl;
     this.#caName = caName;
+    this.#cert = cert;
     this.#log = log;
   }
 
@@ -198,10 +197,10 @@ export class PfSenseSession {
     await page.locator('#showcert').check();
     await page.locator('#name').fill(username);
     await page.locator('#caref').selectOption({ label: this.#caName });
-    await page.locator('#keytype').selectOption(CERT.keytype);
-    await page.locator('#keylen').selectOption(CERT.keylen);
-    await page.locator('#digest_alg').selectOption(CERT.digest);
-    await page.locator('#lifetime').fill(CERT.lifetimeDays);
+    await page.locator('#keytype').selectOption(this.#cert.keytype);
+    await page.locator('#keylen').selectOption(this.#cert.keylen);
+    await page.locator('#digest_alg').selectOption(this.#cert.digest);
+    await page.locator('#lifetime').fill(this.#cert.lifetimeDays);
     await this.#save();
 
     const state = await this.getUserState(username);

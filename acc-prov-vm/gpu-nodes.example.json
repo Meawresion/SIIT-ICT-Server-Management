@@ -1,0 +1,22 @@
+{
+  "_comment": "Placeholders only (RFC 5737 documentation IPs, fake fingerprints). Copy to gpu-nodes.json (git-ignored) and replace every value. Fingerprints: ssh-keyscan <ip> | ssh-keygen -lf - -E sha256",
+  "conda": "/opt/conda/condabin/conda",
+  "kernelDir": ".local/share/jupyter/kernels",
+  "condaTimeoutMs": 900000,
+  "nodes": [
+    {
+      "name": "gpu-01",
+      "host": "192.0.2.11",
+      "port": 22,
+      "hostKeys": ["SHA256:REPLACEwithNODEfingerprintFROMsshKEYSCAN001"],
+      "jupyterUrl": "http://192.0.2.11:8000/jupyter"
+    },
+    {
+      "name": "gpu-02",
+      "host": "192.0.2.12",
+      "port": 22,
+      "hostKeys": ["SHA256:REPLACEwithNODEfingerprintFROMsshKEYSCAN002"],
+      "jupyterUrl": "http://192.0.2.12:8000/jupyter"
+    }
+  ]
+}
