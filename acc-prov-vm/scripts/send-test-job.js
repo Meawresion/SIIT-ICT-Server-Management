@@ -33,6 +33,12 @@ if (action === 'create') {
     console.error(usage);
     process.exit(2);
   }
+  for (const k of ['OVPN_PROFILE_URL', 'MANUAL_GPU_URL']) {
+    if (!/^https?:\/\/\S+$/.test(process.env[k] ?? '')) {
+      console.error(`set ${k} in .env to an http(s) URL (uncommented); create jobs put it in the email`);
+      process.exit(2);
+    }
+  }
   const start = new Date().toISOString().slice(0, 10);
   const end = new Date(Date.now() + 7 * 86_400_000).toISOString().slice(0, 10);
   payload = {
