@@ -9,7 +9,7 @@ export async function getUserById(user_id) {
   return userView(await prisma.user.findUnique({ where: { uid: user_id } }));
 }
 function profileData(data) {
-  return { s_id: data.student_id, study_degree: degreeToDb[data.degree], s_program: data.program, advisor_name: data.advisor_name, phone_number: data.phone_number };
+  return { fullname: data.full_name, s_id: data.student_id, study_degree: degreeToDb[data.degree], s_program: data.program, advisor_name: data.advisor_name, phone_number: data.phone_number };
 }
 export async function createUserProfile(account_id, data) {
   return userView(await prisma.user.update({ where: { uid: account_id, role: 'Student' }, data: profileData(data) }));

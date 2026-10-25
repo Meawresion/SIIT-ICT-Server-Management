@@ -69,6 +69,9 @@ export async function getCurrentUser(req, res, next) {
       account_id: req.session.account_id,
       user_id: req.session.user_id || null,
       role: req.session.role,
+      // For the profile form: the name is editable, the email is shown read-only.
+      full_name: req.account.full_name,
+      email: req.account.primary_email,
     });
   } catch (err) {
     next(err);

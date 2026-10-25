@@ -1,10 +1,11 @@
 import { useState } from 'react';
 import { DEGREES } from '../constants.js';
 
-const FIELDS = ['student_id', 'degree', 'program', 'advisor_name', 'phone_number'];
+const FIELDS = ['full_name', 'student_id', 'degree', 'program', 'advisor_name', 'phone_number'];
 
 function emptyProfile(p) {
   return {
+    full_name: p?.full_name ?? '',
     student_id: p?.student_id ?? '',
     degree: p?.degree ?? 'UNDERGRADUATE',
     program: p?.program ?? '',
@@ -13,7 +14,8 @@ function emptyProfile(p) {
   };
 }
 
-export default function ProfileForm({ initial, onSubmit, submitLabel, onCancel }) {
+// `email` is shown read-only: it is the Google account's address and is never sent.
+export default function ProfileForm({ initial, email, onSubmit, submitLabel, onCancel }) {
   const [form, setForm] = useState(() => emptyProfile(initial));
   const [errors, setErrors] = useState({});
   const [apiError, setApiError] = useState('');
@@ -48,6 +50,16 @@ export default function ProfileForm({ initial, onSubmit, submitLabel, onCancel }
     <form className="profile-form" onSubmit={handle} noValidate>
       {apiError && <div className="alert alert-error" role="alert">{apiError}</div>}
       <div className="form-grid">
+        <label className="field">
+          <span className="field-label">Full Name <span className="req">*</span></span>
+          <input value={form.full_name} onChange={set('full_name')} maxLength={100} autoComplete="name" aria-invalid={Boolean(errors.full_name)} />
+          {err('full_name')}
+        </label>
+        <label className="field">
+          <span className="field-label">E-mail</span>
+          <input value={email ?? ''} readOnly aria-readonly="true" tabIndex={-1} />
+          <span className="hint">From your Google account. It can’t be changed.</span>
+        </label>
         <label className="field">
           <span className="field-label">Student ID <span className="req">*</span></span>
           <input value={form.student_id} onChange={set('student_id')} inputMode="numeric" maxLength={30} placeholder="e.g. 6622780000" aria-invalid={Boolean(errors.student_id)} />

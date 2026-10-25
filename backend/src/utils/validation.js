@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 export const UserProfileSchema = z.object({
+  full_name: z.string().trim().min(1, 'Full name is required').max(100),
   student_id: z.string().trim().min(1, 'Student ID is required').max(12),
   degree: z.enum(['UNDERGRADUATE', 'MASTER', 'DOCTORAL']),
   program: z.string().trim().min(1, 'Program is required').max(50),

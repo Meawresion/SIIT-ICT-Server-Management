@@ -47,14 +47,7 @@ export default function AccountPage() {
                 This account signs in as an approver and has no student profile. Approver access is managed by SIIT ICT.
               </p>
             ) : editing ? (
-              <>
-                <dl className="info-grid compact">
-                  <div><dt>Name</dt><dd>{p.full_name}</dd></div>
-                  <div><dt>E-mail</dt><dd>{p.primary_email}</dd></div>
-                </dl>
-                <p className="hint">Name and e-mail come from your Google account.</p>
-                <ProfileForm initial={p} onSubmit={save} submitLabel="Save changes" onCancel={() => setEditing(false)} />
-              </>
+              <ProfileForm initial={p} email={p.primary_email} onSubmit={save} submitLabel="Save changes" onCancel={() => setEditing(false)} />
             ) : (
               <dl className="info-grid">
                 <div><dt>Name</dt><dd>{p.full_name}</dd></div>

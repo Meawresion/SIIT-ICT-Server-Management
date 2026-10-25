@@ -21,6 +21,8 @@ async function resolveSession() {
   return {
     status: 'ready',
     accountId: me.account_id,
+    // The Google account's name and email; the profile may change the name, never the email.
+    account: { full_name: me.full_name ?? '', email: me.email ?? '' },
     role: isReviewer ? 'reviewer' : 'student',
     profile,
     needsProfile: !isReviewer && !profile,
