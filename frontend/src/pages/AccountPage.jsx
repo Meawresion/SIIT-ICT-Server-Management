@@ -47,7 +47,7 @@ export default function AccountPage() {
                 This account signs in as an approver and has no student profile. Approver access is managed by SIIT ICT.
               </p>
             ) : editing ? (
-              <ProfileForm initial={p} email={p.primary_email} onSubmit={save} submitLabel="Save changes" onCancel={() => setEditing(false)} />
+              <ProfileForm initial={p} email={p.primary_email} studentId={p.student_id} degree={p.degree} onSubmit={save} submitLabel="Save changes" onCancel={() => setEditing(false)} />
             ) : (
               <dl className="info-grid">
                 <div><dt>Name</dt><dd>{p.full_name}</dd></div>

@@ -1,21 +1,21 @@
 import { useState } from 'react';
-import { DEGREES } from '../constants.js';
+import { degreeLabel } from '../constants.js';
 
-const FIELDS = ['full_name', 'student_id', 'degree', 'program', 'advisor_name', 'phone_number'];
+// The fields the student fills in. Student ID and degree come from the SIIT email and are shown only.
+const FIELDS = ['full_name', 'program', 'advisor_name', 'phone_number'];
 
 function emptyProfile(p) {
   return {
     full_name: p?.full_name ?? '',
-    student_id: p?.student_id ?? '',
-    degree: p?.degree ?? 'UNDERGRADUATE',
     program: p?.program ?? '',
     advisor_name: p?.advisor_name ?? '',
     phone_number: p?.phone_number ?? '',
   };
 }
 
-// `email` is shown read-only: it is the Google account's address and is never sent.
-export default function ProfileForm({ initial, email, onSubmit, submitLabel, onCancel }) {
+// `email`, `studentId` and `degree` are shown read-only: they come from the Google account's
+// SIIT address and are never sent.
+export default function ProfileForm({ initial, email, studentId, degree, onSubmit, submitLabel, onCancel }) {
   const [form, setForm] = useState(() => emptyProfile(initial));
   const [errors, setErrors] = useState({});
   const [apiError, setApiError] = useState('');
@@ -61,15 +61,13 @@ export default function ProfileForm({ initial, email, onSubmit, submitLabel, onC
           <span className="hint">From your Google account. It can’t be changed.</span>
         </label>
         <label className="field">
-          <span className="field-label">Student ID <span className="req">*</span></span>
-          <input value={form.student_id} onChange={set('student_id')} inputMode="numeric" maxLength={30} placeholder="e.g. 6622780000" aria-invalid={Boolean(errors.student_id)} />
-          {err('student_id')}
+          <span className="field-label">Student ID</span>
+          <input value={studentId ?? ''} readOnly aria-readonly="true" tabIndex={-1} />
         </label>
         <label className="field">
-          <span className="field-label">Degree Level <span className="req">*</span></span>
-          <select value={form.degree} onChange={set('degree')}>
-            {DEGREES.map((d) => <option key={d.value} value={d.value}>{d.label}</option>)}
-          </select>
+          <span className="field-label">Degree Level</span>
+          <input value={degree ? degreeLabel(degree) : ''} readOnly aria-readonly="true" tabIndex={-1} />
+          <span className="hint">Student ID and degree come from your SIIT e-mail.</span>
         </label>
         <label className="field">
           <span className="field-label">Program/Department <span className="req">*</span></span>

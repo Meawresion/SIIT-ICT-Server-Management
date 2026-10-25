@@ -22,7 +22,8 @@ async function resolveSession() {
     status: 'ready',
     accountId: me.account_id,
     // The Google account's name and email; the profile may change the name, never the email.
-    account: { full_name: me.full_name ?? '', email: me.email ?? '' },
+    // kind, student_id and degree come from the SIIT address (D25).
+    account: { full_name: me.full_name ?? '', email: me.email ?? '', kind: me.kind ?? null, student_id: me.student_id ?? '', degree: me.degree ?? '' },
     role: isReviewer ? 'reviewer' : 'student',
     profile,
     needsProfile: !isReviewer && !profile,

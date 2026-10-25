@@ -2,6 +2,7 @@ import { getGoogleAuthUrl, exchangeCodeForToken } from '../auth/google.js';
 import { verifyTokenAndGetAccount } from '../services/auth.service.js';
 import { getUserByAccountId } from '../services/user.service.js';
 import env from '../config/env.js';
+import { classifyEmail, loadIdentityRules } from '../config/identity.js';
 import crypto from 'crypto';
 
 export async function initiateGoogleAuth(req, res, next) {
@@ -61,6 +62,13 @@ export async function handleGoogleCallback(req, res, next) {
   }
 }
 
+// kind is 'student' or 'staff'; a student also gets the ID and degree from the address (D25).
+function identityFields(email) {
+  const identity = classifyEmail(email, loadIdentityRules());
+  if (identity?.kind === 'student') return { kind: 'student', student_id: identity.studentId, degree: identity.degree };
+  return { kind: identity?.kind ?? null };
+}
+
 export async function getCurrentUser(req, res, next) {
   try {
     if (!req.session.account_id) {
@@ -71,9 +79,10 @@ export async function getCurrentUser(req, res, next) {
       account_id: req.session.account_id,
       user_id: req.session.user_id || null,
       role: req.session.role,
-      // For the profile form: the name is editable, the email is shown read-only.
+      // For the profile form: the name is editable; the email, student ID and degree are read-only.
       full_name: req.account.full_name,
       email: req.account.primary_email,
+      ...identityFields(req.account.primary_email),
     });
   } catch (err) {
     next(err);
