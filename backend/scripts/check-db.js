@@ -1,7 +1,8 @@
 // Integration check: every test record is rolled back, including on failure.
 import assert from 'node:assert/strict';
-import { randomUUID } from 'node:crypto';
+import { randomInt, randomUUID } from 'node:crypto';
 import prisma from '../src/lib/prisma.js';
+import { loadIdentityRules } from '../src/config/identity.js';
 import { setUserRoleByEmail } from '../src/services/role.service.js';
 import { findOrCreateAccount } from '../src/services/auth.service.js';
 import { createUserProfile, getUserByAccountId } from '../src/services/user.service.js';
@@ -9,7 +10,12 @@ import { createRequest, updateRequest, getUserRequests, getRequestById } from '.
 import { approveRequest, activateRequest, completeRequest, getAllRequests } from '../src/services/reviewer.service.js';
 
 const marker = randomUUID();
-const email = `integration-${marker}@example.invalid`;
+// Sign-in only accepts student and staff addresses (D25), so the check uses a student address
+// built from those settings. Its ID starts with zeros, which SIIT doesn't issue.
+const rules = loadIdentityRules();
+const prefixes = JSON.parse(process.env.DEGREE_EMAIL_PREFIXES);
+const prefix = prefixes.UNDERGRADUATE ?? Object.values(prefixes)[0];
+const email = `${prefix}${String(randomInt(10 ** 6)).padStart(rules.digits, '0')}@${rules.studentDomain}`;
 const rollback = new Error('Intentional test rollback');
 const originalTransaction = prisma.$transaction.bind(prisma);
 const restores = [];
@@ -26,7 +32,7 @@ try {
     const original = prisma.$transaction;
     restores.push(() => { prisma.$transaction = original; });
     prisma.$transaction = callback => callback(tx);
-    const account = await findOrCreateAccount({ email, name: 'Integration check' });
+    const account = await findOrCreateAccount({ email, hd: rules.studentDomain, name: 'Integration check' });
     assert.equal(await getUserByAccountId(account.id), null);
     await createUserProfile(account.id, { student_id: 'TEST123', degree: 'DOCTORAL', program: 'ICT', phone_number: '0000000000' });
     assert.equal((await getUserByAccountId(account.id)).degree, 'DOCTORAL');
