@@ -12,6 +12,7 @@ export default function AccountPage() {
   const [editing, setEditing] = useState(false);
   const [saved, setSaved] = useState(false);
   const p = auth.profile;
+  const isApprover = auth.role === 'reviewer';
 
   const save = async (data) => {
     await updateUserProfile(data);
@@ -43,11 +44,25 @@ export default function AccountPage() {
             {saved && <div className="alert alert-success" role="status">Profile updated.</div>}
 
             {!p ? (
-              <p className="muted">
-                This account signs in as an approver and has no student profile. Approver access is managed by SIIT ICT.
-              </p>
+              <p className="muted">Profile unavailable. Try signing in again.</p>
             ) : editing ? (
-              <ProfileForm initial={p} email={p.primary_email} studentId={p.student_id} degree={p.degree} onSubmit={save} submitLabel="Save changes" onCancel={() => setEditing(false)} />
+              <ProfileForm
+                variant={isApprover ? 'approver' : 'student'}
+                initial={p}
+                email={p.primary_email}
+                studentId={p.student_id}
+                degree={p.degree}
+                onSubmit={save}
+                submitLabel="Save changes"
+                onCancel={() => setEditing(false)}
+              />
+            ) : isApprover ? (
+              <dl className="info-grid">
+                <div><dt>Name</dt><dd>{p.full_name}</dd></div>
+                <div><dt>E-mail</dt><dd>{p.primary_email}</dd></div>
+                <div><dt>Contact Phone</dt><dd>{p.phone_number || '—'}</dd></div>
+                <div><dt>Role</dt><dd>Resource Approver (granted by SIIT ICT)</dd></div>
+              </dl>
             ) : (
               <dl className="info-grid">
                 <div><dt>Name</dt><dd>{p.full_name}</dd></div>

@@ -1,6 +1,6 @@
 import { getUserByAccountId, createUserProfile, updateUserProfile } from '../services/user.service.js';
-import { getAccountById } from '../services/auth.service.js';
-import { UserProfileSchema } from '../utils/validation.js';
+import { getAccountById, updateAccount } from '../services/auth.service.js';
+import { ApproverProfileSchema, UserProfileSchema } from '../utils/validation.js';
 import { classifyEmail, loadIdentityRules } from '../config/identity.js';
 
 // The student ID and degree come from the account's SIIT email (D25), never from the client.
@@ -23,10 +23,20 @@ const convertBigInt = (obj) => {
   return obj;
 };
 
+// An approver's profile is their account row: name (editable), email (read-only) and phone.
+const approverProfile = (account) => ({
+  id: String(account.id),
+  role: 'Approver',
+  full_name: account.full_name,
+  primary_email: account.primary_email,
+  phone_number: account.phone_number,
+});
+
 export async function getUserProfile(req, res, next) {
   try {
+    if (req.account?.role === 'Approver') return res.json(approverProfile(req.account));
     const account_id = req.session.account_id;
-    
+
     const user = await getUserByAccountId(account_id);
     const account = await getAccountById(account_id);
 
@@ -90,6 +100,14 @@ export async function createProfile(req, res, next) {
 
 export async function updateProfile(req, res, next) {
   try {
+    if (req.account?.role === 'Approver') {
+      const approver = ApproverProfileSchema.safeParse(req.body);
+      if (!approver.success) {
+        return res.status(400).json({ message: 'Validation error', errors: approver.error.errors });
+      }
+      return res.json(approverProfile(await updateAccount(req.account.id, approver.data)));
+    }
+
     const validation = UserProfileSchema.safeParse(req.body);
     if (!validation.success) {
       return res.status(400).json({

@@ -61,7 +61,8 @@ export default function AuthProvider({ children }) {
   }, []);
 
   const value = useMemo(() => {
-    const name = state.profile?.full_name || (state.role === 'reviewer' ? 'Approver' : '');
+    // Approvers have a profile too (name and phone); the Google name is the fallback.
+    const name = state.profile?.full_name || state.account?.full_name || (state.role === 'reviewer' ? 'Approver' : '');
     return { ...state, name, refresh, logout };
   }, [state, refresh, logout]);
 

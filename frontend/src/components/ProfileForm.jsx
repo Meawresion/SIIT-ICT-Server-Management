@@ -1,8 +1,12 @@
 import { useState } from 'react';
 import { degreeLabel } from '../constants.js';
 
-// The fields the student fills in. Student ID and degree come from the SIIT email and are shown only.
-const FIELDS = ['full_name', 'program', 'advisor_name', 'phone_number'];
+// The fields each kind of account fills in (and sends). For students, ID and degree come from the
+// SIIT email and are shown only; approvers have no student fields and the phone is optional.
+const FIELDS = {
+  student: { send: ['full_name', 'program', 'advisor_name', 'phone_number'], required: ['full_name', 'program', 'advisor_name', 'phone_number'] },
+  approver: { send: ['full_name', 'phone_number'], required: ['full_name'] },
+};
 
 function emptyProfile(p) {
   return {
@@ -14,8 +18,10 @@ function emptyProfile(p) {
 }
 
 // `email`, `studentId` and `degree` are shown read-only: they come from the Google account's
-// SIIT address and are never sent.
-export default function ProfileForm({ initial, email, studentId, degree, onSubmit, submitLabel, onCancel }) {
+// SIIT address and are never sent. variant: 'student' (default) or 'approver'.
+export default function ProfileForm({ initial, email, studentId, degree, variant = 'student', onSubmit, submitLabel, onCancel }) {
+  const fields = FIELDS[variant];
+  const isStudent = variant === 'student';
   const [form, setForm] = useState(() => emptyProfile(initial));
   const [errors, setErrors] = useState({});
   const [apiError, setApiError] = useState('');
@@ -29,14 +35,14 @@ export default function ProfileForm({ initial, email, studentId, degree, onSubmi
   const handle = async (e) => {
     e.preventDefault();
     const er = {};
-    for (const k of FIELDS) if (!String(form[k]).trim()) er[k] = 'Required';
-    if (form.phone_number && !/^[0-9+\-\s()]{6,30}$/.test(form.phone_number)) er.phone_number = 'Use digits only, e.g. 0812345678';
+    for (const k of fields.required) if (!String(form[k]).trim()) er[k] = 'Required';
+    if (form.phone_number.trim() && !/^[0-9+\-\s()]{6,15}$/.test(form.phone_number.trim())) er.phone_number = 'Use digits only, e.g. 0812345678';
     setErrors(er);
     if (Object.keys(er).length) return;
     setBusy(true);
     setApiError('');
     try {
-      const trimmed = Object.fromEntries(Object.entries(form).map(([k, v]) => [k, String(v).trim()]));
+      const trimmed = Object.fromEntries(fields.send.map((k) => [k, String(form[k]).trim()]));
       await onSubmit(trimmed);
     } catch (err) {
       setApiError(err.message);
@@ -60,6 +66,7 @@ export default function ProfileForm({ initial, email, studentId, degree, onSubmi
           <input value={email ?? ''} readOnly aria-readonly="true" tabIndex={-1} />
           <span className="hint">From your Google account. It can’t be changed.</span>
         </label>
+        {isStudent && (<>
         <label className="field">
           <span className="field-label">Student ID</span>
           <input value={studentId ?? ''} readOnly aria-readonly="true" tabIndex={-1} />
@@ -79,9 +86,10 @@ export default function ProfileForm({ initial, email, studentId, degree, onSubmi
           <input value={form.advisor_name} onChange={set('advisor_name')} maxLength={100} placeholder="e.g. Dr. Pakinee" aria-invalid={Boolean(errors.advisor_name)} />
           {err('advisor_name')}
         </label>
+        </>)}
         <label className="field">
-          <span className="field-label">Contact Phone Number <span className="req">*</span></span>
-          <input value={form.phone_number} onChange={set('phone_number')} inputMode="tel" maxLength={30} placeholder="e.g. 0812345678" aria-invalid={Boolean(errors.phone_number)} />
+          <span className="field-label">Contact Phone Number {isStudent && <span className="req">*</span>}</span>
+          <input value={form.phone_number} onChange={set('phone_number')} inputMode="tel" maxLength={15} placeholder="e.g. 0812345678" aria-invalid={Boolean(errors.phone_number)} />
           {err('phone_number')}
         </label>
       </div>

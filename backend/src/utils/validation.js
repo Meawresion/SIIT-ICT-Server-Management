@@ -8,6 +8,12 @@ export const UserProfileSchema = z.object({
   phone_number: z.string().trim().min(1, 'Phone number is required').max(15),
 });
 
+// Approvers have no student fields: their name (pre-filled from Google) and a contact phone.
+export const ApproverProfileSchema = z.object({
+  full_name: z.string().trim().min(1, 'Full name is required').max(100),
+  phone_number: z.string().trim().max(15).optional().default(''),
+});
+
 const RequestFields = z.object({
   project_name: z.string().trim().min(1).max(255).optional(),
   project_supervisor_email: z.union([z.string().email().max(100), z.literal('')]).optional(),
