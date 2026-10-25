@@ -8,7 +8,8 @@ import { AuthContext } from './context.js';
 // /api/auth/me only returns ids, so the role is found by probing:
 //   reviewer endpoint answers  -> reviewer
 //   profile exists             -> student
-//   neither                    -> student who still needs to complete a profile
+//   neither                    -> student who still needs to complete a profile,
+//                                 or a staff account with no approver access yet (noAccess)
 async function resolveSession() {
   const me = await getCurrentUser();
   if (!me?.account_id) return { status: 'anon' };
@@ -18,6 +19,7 @@ async function resolveSession() {
     getUserProfile().catch(() => null),
   ]);
 
+  const noAccess = !isReviewer && me.kind === 'staff';
   return {
     status: 'ready',
     accountId: me.account_id,
@@ -26,7 +28,8 @@ async function resolveSession() {
     account: { full_name: me.full_name ?? '', email: me.email ?? '', kind: me.kind ?? null, student_id: me.student_id ?? '', degree: me.degree ?? '' },
     role: isReviewer ? 'reviewer' : 'student',
     profile,
-    needsProfile: !isReviewer && !profile,
+    needsProfile: !isReviewer && !profile && !noAccess,
+    noAccess,
   };
 }
 
