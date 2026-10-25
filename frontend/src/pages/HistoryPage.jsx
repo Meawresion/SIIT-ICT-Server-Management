@@ -25,7 +25,11 @@ export default function HistoryPage() {
     let cancelled = false;
     const fetcher = isReviewer ? getRequests() : getMyRequests();
     fetcher
-      .then((data) => !cancelled && setRows(data))
+      .then((data) => {
+        if (cancelled) return;
+        setRows(data);
+        setError('');
+      })
       .catch((err) => !cancelled && setError(err.message))
       .finally(() => !cancelled && setLoading(false));
     return () => {

@@ -11,8 +11,7 @@ export function profileComplete(row) {
 }
 export function userView(row) {
   return row && { ...row, id: row.uid, student_id: row.s_id, degree: reverse(degreeToDb, row.study_degree), program: row.s_program,
-    // The new User table has no advisor field; supervisors belong to requests.
-    advisor_name: '', account: accountView(row) };
+    advisor_name: row.advisor_name ?? '', account: accountView(row) };
 }
 export const requestInclude = { user_request_student_uidTouser: true, user_request_approver_uidTouser: true };
 export function requestView(row) {

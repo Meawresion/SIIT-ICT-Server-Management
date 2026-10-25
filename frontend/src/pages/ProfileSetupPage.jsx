@@ -26,7 +26,7 @@ export default function ProfileSetupPage() {
         <p className="muted">
           We only ask once. These details are attached to every request you send, so approvers know who you are and who supervises you.
         </p>
-        <ProfileForm onSubmit={submit} submitLabel="Save and continue" />
+        <ProfileForm initial={{ full_name: auth.account?.full_name }} email={auth.account?.email} studentId={auth.account?.student_id} degree={auth.account?.degree} onSubmit={submit} submitLabel="Save and continue" />
         <button type="button" className="link-button setup-signout" onClick={() => auth.logout().then(() => navigate('/'))}>
           Not you? Sign out
         </button>

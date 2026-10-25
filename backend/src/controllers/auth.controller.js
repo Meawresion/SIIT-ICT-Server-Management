@@ -2,6 +2,7 @@ import { getGoogleAuthUrl, exchangeCodeForToken } from '../auth/google.js';
 import { verifyTokenAndGetAccount } from '../services/auth.service.js';
 import { getUserByAccountId } from '../services/user.service.js';
 import env from '../config/env.js';
+import { classifyEmail, loadIdentityRules } from '../config/identity.js';
 import crypto from 'crypto';
 
 export async function initiateGoogleAuth(req, res, next) {
@@ -47,16 +48,25 @@ export async function handleGoogleCallback(req, res, next) {
     req.session.role = account.role === 'Approver' ? 'reviewer' : 'user';
     await new Promise((resolve, reject) => req.session.save(err => err ? reject(err) : resolve()));
 
-    // Redirect to frontend
-    const redirect_url = account.role === 'Approver' ? `${env.frontend_url}/reviewer` : user
+    // Redirect to frontend: /dashboard sends each role to its home page (approvers to /admin).
+    const redirect_url = account.role === 'Approver' || user
       ? `${env.frontend_url}/dashboard`
       : `${env.frontend_url}/profile`;
 
     res.redirect(redirect_url);
   } catch (err) {
+    // Back to the landing page with a message instead of a raw JSON error.
+    if (err.code === 'SIGNIN_NOT_ALLOWED') return res.redirect(`${env.frontend_url}/?signin=not-allowed`);
     console.error('Google callback error:', err);
     next(err);
   }
+}
+
+// kind is 'student' or 'staff'; a student also gets the ID and degree from the address (D25).
+function identityFields(email) {
+  const identity = classifyEmail(email, loadIdentityRules());
+  if (identity?.kind === 'student') return { kind: 'student', student_id: identity.studentId, degree: identity.degree };
+  return { kind: identity?.kind ?? null };
 }
 
 export async function getCurrentUser(req, res, next) {
@@ -69,6 +79,10 @@ export async function getCurrentUser(req, res, next) {
       account_id: req.session.account_id,
       user_id: req.session.user_id || null,
       role: req.session.role,
+      // For the profile form: the name is editable; the email, student ID and degree are read-only.
+      full_name: req.account.full_name,
+      email: req.account.primary_email,
+      ...identityFields(req.account.primary_email),
     });
   } catch (err) {
     next(err);

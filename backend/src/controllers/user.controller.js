@@ -1,6 +1,15 @@
 import { getUserByAccountId, createUserProfile, updateUserProfile } from '../services/user.service.js';
-import { getAccountById } from '../services/auth.service.js';
-import { UserProfileSchema } from '../utils/validation.js';
+import { getAccountById, updateAccount } from '../services/auth.service.js';
+import { ApproverProfileSchema, UserProfileSchema } from '../utils/validation.js';
+import { classifyEmail, loadIdentityRules } from '../config/identity.js';
+
+// The student ID and degree come from the account's SIIT email (D25), never from the client.
+// Returns null for an account that isn't a student address (staff have no student profile).
+function fromEmail(req) {
+  const identity = classifyEmail(req.account?.primary_email, loadIdentityRules());
+  return identity?.kind === 'student' ? { student_id: identity.studentId, degree: identity.degree } : null;
+}
+const notAStudent = (res) => res.status(403).json({ message: 'Only student accounts have a student profile' });
 
 // Helper to convert BigInt
 const convertBigInt = (obj) => {
@@ -14,10 +23,20 @@ const convertBigInt = (obj) => {
   return obj;
 };
 
+// An approver's profile is their account row: name (editable), email (read-only) and phone.
+const approverProfile = (account) => ({
+  id: String(account.id),
+  role: 'Approver',
+  full_name: account.full_name,
+  primary_email: account.primary_email,
+  phone_number: account.phone_number,
+});
+
 export async function getUserProfile(req, res, next) {
   try {
+    if (req.account?.role === 'Approver') return res.json(approverProfile(req.account));
     const account_id = req.session.account_id;
-    
+
     const user = await getUserByAccountId(account_id);
     const account = await getAccountById(account_id);
 
@@ -52,6 +71,8 @@ export async function createProfile(req, res, next) {
       });
     }
 
+    const derived = fromEmail(req);
+    if (!derived) return notAStudent(res);
     const account_id = req.session.account_id;
 
     const existing = await getUserByAccountId(account_id);
@@ -61,7 +82,7 @@ export async function createProfile(req, res, next) {
       });
     }
 
-    const user = await createUserProfile(account_id, validation.data);
+    const user = await createUserProfile(account_id, { ...validation.data, ...derived });
     req.session.user_id = user.id;
     await new Promise((resolve, reject) => req.session.save(err => err ? reject(err) : resolve()));
 
@@ -79,6 +100,14 @@ export async function createProfile(req, res, next) {
 
 export async function updateProfile(req, res, next) {
   try {
+    if (req.account?.role === 'Approver') {
+      const approver = ApproverProfileSchema.safeParse(req.body);
+      if (!approver.success) {
+        return res.status(400).json({ message: 'Validation error', errors: approver.error.errors });
+      }
+      return res.json(approverProfile(await updateAccount(req.account.id, approver.data)));
+    }
+
     const validation = UserProfileSchema.safeParse(req.body);
     if (!validation.success) {
       return res.status(400).json({
@@ -96,7 +125,9 @@ export async function updateProfile(req, res, next) {
       });
     }
 
-    const user = await updateUserProfile(user_id, account_id, validation.data);
+    const derived = fromEmail(req);
+    if (!derived) return notAStudent(res);
+    const user = await updateUserProfile(user_id, account_id, { ...validation.data, ...derived });
 
     res.json({
       id: user.id.toString(),  // ← Convert BigInt

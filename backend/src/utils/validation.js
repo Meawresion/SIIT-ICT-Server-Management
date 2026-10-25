@@ -1,11 +1,17 @@
 import { z } from 'zod';
 
 export const UserProfileSchema = z.object({
-  student_id: z.string().trim().min(1, 'Student ID is required').max(12),
-  degree: z.enum(['UNDERGRADUATE', 'MASTER', 'DOCTORAL']),
+  full_name: z.string().trim().min(1, 'Full name is required').max(100),
+  // student_id and degree are not accepted: the API takes them from the SIIT email (D25).
   program: z.string().trim().min(1, 'Program is required').max(50),
-  advisor_name: z.string().min(1, 'Advisor name is required'),
+  advisor_name: z.string().trim().min(1, 'Advisor name is required').max(100),
   phone_number: z.string().trim().min(1, 'Phone number is required').max(15),
+});
+
+// Approvers have no student fields: their name (pre-filled from Google) and a contact phone.
+export const ApproverProfileSchema = z.object({
+  full_name: z.string().trim().min(1, 'Full name is required').max(100),
+  phone_number: z.string().trim().max(15).optional().default(''),
 });
 
 const RequestFields = z.object({

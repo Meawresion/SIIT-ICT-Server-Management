@@ -15,7 +15,7 @@ export function getGoogleAuthUrl(state) {
   ];
 
   return oauth_client.generateAuthUrl({
-    access_type: 'offline',
+    access_type: 'online',
     scope: scopes,
     state,
   });
@@ -49,6 +49,7 @@ export async function verifyIdToken(id_token) {
     name: payload.name,
     picture: payload.picture,
     email_verified: payload.email_verified,
+    hd: payload.hd,
   };
 }
 

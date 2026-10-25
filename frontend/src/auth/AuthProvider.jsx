@@ -8,7 +8,8 @@ import { AuthContext } from './context.js';
 // /api/auth/me only returns ids, so the role is found by probing:
 //   reviewer endpoint answers  -> reviewer
 //   profile exists             -> student
-//   neither                    -> student who still needs to complete a profile
+//   neither                    -> student who still needs to complete a profile,
+//                                 or a staff account with no approver access yet (noAccess)
 async function resolveSession() {
   const me = await getCurrentUser();
   if (!me?.account_id) return { status: 'anon' };
@@ -18,12 +19,17 @@ async function resolveSession() {
     getUserProfile().catch(() => null),
   ]);
 
+  const noAccess = !isReviewer && me.kind === 'staff';
   return {
     status: 'ready',
     accountId: me.account_id,
+    // The Google account's name and email; the profile may change the name, never the email.
+    // kind, student_id and degree come from the SIIT address (D25).
+    account: { full_name: me.full_name ?? '', email: me.email ?? '', kind: me.kind ?? null, student_id: me.student_id ?? '', degree: me.degree ?? '' },
     role: isReviewer ? 'reviewer' : 'student',
     profile,
-    needsProfile: !isReviewer && !profile,
+    needsProfile: !isReviewer && !profile && !noAccess,
+    noAccess,
   };
 }
 
@@ -55,7 +61,8 @@ export default function AuthProvider({ children }) {
   }, []);
 
   const value = useMemo(() => {
-    const name = state.profile?.full_name || (state.role === 'reviewer' ? 'Approver' : '');
+    // Approvers have a profile too (name and phone); the Google name is the fallback.
+    const name = state.profile?.full_name || state.account?.full_name || (state.role === 'reviewer' ? 'Approver' : '');
     return { ...state, name, refresh, logout };
   }, [state, refresh, logout]);
 

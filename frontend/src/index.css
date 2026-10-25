@@ -126,7 +126,10 @@ a { color: var(--brand); }
 .popover-title { padding: 0 1rem 0.5rem; font-weight: 700; font-size: 0.85rem; border-bottom: 1px solid var(--border); }
 .popover-empty { padding: 1rem; color: var(--muted); }
 .notif-list { list-style: none; margin: 0; padding: 0; max-height: 360px; overflow: auto; }
-.notif-list li { padding: 0.65rem 1rem; display: flex; flex-direction: column; gap: 0.15rem; font-size: 0.88rem; border-bottom: 1px solid var(--border); }
+.notif-list li { padding: 0.65rem 0.5rem 0.65rem 1rem; display: flex; align-items: flex-start; gap: 0.5rem; font-size: 0.88rem; border-bottom: 1px solid var(--border); }
+.notif-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 0.15rem; }
+.notif-dismiss { flex: none; display: inline-grid; place-items: center; width: 24px; height: 24px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--muted); cursor: pointer; }
+.notif-dismiss:hover, .notif-dismiss:focus-visible { background: var(--surface-2); color: var(--text); }
 .notif-list li:last-child { border-bottom: 0; }
 .notif-list li.is-new { background: var(--brand-soft); }
 .notif-list time { color: var(--muted); font-size: 0.78rem; }
