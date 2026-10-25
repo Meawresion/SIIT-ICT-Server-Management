@@ -12,9 +12,15 @@ const STEPS = [
 
 const RESOURCES = ['HPC / GPU cluster', 'Big data platform', 'Virtual machines', 'Lab equipment', 'AWS Learner Lab', 'AWS Skill Builder'];
 
+// The backend sends a refused sign-in back here with ?signin=not-allowed.
+const signinError = () =>
+  new URLSearchParams(window.location.search).get('signin') === 'not-allowed'
+    ? 'This Google account can’t sign in. Use your SIIT student or staff Google account.'
+    : '';
+
 export default function LandingPage() {
   const auth = useAuth();
-  const [error, setError] = useState('');
+  const [error, setError] = useState(signinError);
   const [busy, setBusy] = useState(false);
 
   if (auth.status === 'ready') return <Navigate to={auth.needsProfile ? '/profile' : '/dashboard'} replace />;

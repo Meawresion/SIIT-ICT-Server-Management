@@ -54,6 +54,8 @@ export async function handleGoogleCallback(req, res, next) {
 
     res.redirect(redirect_url);
   } catch (err) {
+    // Back to the landing page with a message instead of a raw JSON error.
+    if (err.code === 'SIGNIN_NOT_ALLOWED') return res.redirect(`${env.frontend_url}/?signin=not-allowed`);
     console.error('Google callback error:', err);
     next(err);
   }
