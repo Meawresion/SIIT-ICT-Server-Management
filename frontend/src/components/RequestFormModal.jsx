@@ -46,7 +46,7 @@ function toPayload(f) {
     ...f,
     purpose: f.purpose.trim(),
     project_description: f.project_description.trim(),
-    project_supervisor_name: f.project_supervisor_name.trim() || null,
+    project_supervisor_name: f.project_supervisor_name.trim(),
     justification: f.justification.trim(),
     impact_score: Number(f.impact_score),
   };
@@ -56,6 +56,7 @@ function validate(f) {
   const e = {};
   if (!f.purpose.trim()) e.purpose = 'Give the project a title.';
   if (!f.project_description.trim()) e.project_description = 'Describe the project or task.';
+  if (!f.project_supervisor_name.trim()) e.project_supervisor_name = 'Name the supervisor or course instructor.';
   if (!f.resource_type) e.resource_type = 'Choose a resource type.';
   if (!f.justification.trim()) e.justification = 'Explain why this resource is needed.';
   if (!f.estimated_start_date) e.estimated_start_date = 'Pick a start date.';
@@ -287,8 +288,8 @@ export default function RequestFormModal({ mode, requestId, draft, onClose, onDo
               <textarea rows={3} value={form.project_description} onChange={set('project_description')} readOnly={readOnly} placeholder="Brief description…" />
             </Field>
 
-            <Field label="Project/Task Supervisor or Course Instructor Name" error={errors.project_supervisor_name}>
-              <input value={form.project_supervisor_name} onChange={set('project_supervisor_name')} readOnly={readOnly} maxLength={255} placeholder="e.g. Dr. Pakinee" />
+            <Field label="Project/Task Supervisor or Course Instructor Name" error={errors.project_supervisor_name} required={!readOnly}>
+              <input value={form.project_supervisor_name} onChange={set('project_supervisor_name')} readOnly={readOnly} maxLength={100} placeholder="e.g. Dr. Pakinee" />
             </Field>
 
             <Field label="Resource Type" error={errors.resource_type} required={!readOnly} hint={mode === 'edit' ? 'Resource type can’t be changed after submission.' : undefined}>
