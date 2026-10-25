@@ -61,8 +61,26 @@ services:
       - siit-network
     command: npm run dev -- --host 0.0.0.0
 
+  # Local message broker for backend <-> acc-prov-vm (D23), instead of SQS. Messages are
+  # signed and encrypted by the apps (D22). Ports are bound to 127.0.0.1 only.
+  activemq:
+    image: apache/artemis:2.57.0
+    container_name: siit_activemq
+    environment:
+      ARTEMIS_USER: ${ARTEMIS_USER}
+      ARTEMIS_PASSWORD: ${ARTEMIS_PASSWORD}
+      ANONYMOUS_LOGIN: "false"
+    ports:
+      - "127.0.0.1:5672:5672"   # AMQP 1.0
+      - "127.0.0.1:8161:8161"   # web console
+    volumes:
+      - activemq_data:/var/lib/artemis-instance
+    networks:
+      - siit-network
+
 volumes:
   mysql_data:
+  activemq_data:
 
 networks:
   siit-network:

@@ -6,6 +6,9 @@ Runs at the SIIT resource site, behind pfSense. When a GPU or Big Data request i
 - **GPU node** Linux user + conda Jupyter kernel, over SSH (`src/ssh.js`, `src/linux.js`, `src/gpu.js`)
 - Hadoop Linux / HDFS accounts over SSH (planned)
 - HUE user (planned)
+- **Messaging:** signed + encrypted envelopes (`src/envelope.js`) over local ActiveMQ (`src/amqp.js`), later SQS
+- **Student email** with credentials and links, via SMTP (`src/mail.js`)
+- **Worker** (`npm start`): runs CREATE / REVOKE jobs from the queue (`src/worker.js`, `src/jobs.js`)
 
 ## Setup
 
@@ -91,3 +94,103 @@ try {
 
 - Commands are built from argv arrays and quoted, never from interpolated strings.
 - Passwords go to `sudo -S` and `chpasswd` on stdin only. sudo always runs with `-k`, so a cached sudo session can't make the password line reach the command.
+
+## Mail module
+
+The student gets **two emails**:
+1. **(1/2) Instructions:** the username, the D15 note (whether to keep the existing VPN password), and links to the VPN profile, the service and the student manual. **No password.**
+2. **(2/2) The password, as an inline image only.** It is rendered with Playwright's Chromium. The password never appears in any text part, in the image alt text, or in the logs.
+
+```js
+import { loadMailConfig } from './src/config.js';
+import { createMailer, sendProvisionEmails } from './src/mail.js';
+import { renderPasswordImage } from './src/password-image.js';
+
+const mailer = createMailer(loadMailConfig());
+await sendProvisionEmails(mailer, {
+  to: 'student@...', fullName: 'Jane Doe', username: 'st6622001234',
+  vpnIsNew: false, // false: keep the existing VPN password; the new one is for the service only (D15)
+  service: { name: 'GPU server gpu-01', links: [{ label: 'JupyterHub', url: node.jupyterUrl }], manualUrl },
+  ovpnProfileUrl, period: { start: '2026-11-01', end: '2026-12-31' },
+}, password, { renderImage: renderPasswordImage });
+```
+
+- **Escaping and attachments:** every email has a text and an HTML version, with user text escaped. The only attachment is the inline password image (CID).
+- **Recipients** must be plain addresses. Quotes, `;`, `<>`, `()` and spaces are rejected. Optionally, `MAIL_ALLOWED_RECIPIENT_DOMAINS` limits sending to the SIIT domain.
+- **Sender:** SMTP settings come from `.env`; for now that's Gmail with an App Password (D9). The sender can be swapped for an SIIT relay or SES by changing config only.
+- **The image is obfuscation, not encryption.** It keeps the password out of search, previews and scrapers, but anyone who opens the email can read it.
+
+## Message envelope (D22)
+
+Every message between the backend and acc-prov-vm is **signed and encrypted**, on every transport (local ActiveMQ, AWS SQS). IAM, TLS and SSE-KMS stay in place underneath. The envelope additionally makes sure that only the backend's key can authorize a job, and only acc-prov-vm can read it.
+
+- **Keys:** each side has one bundle, `<kid>.<Ed25519 key>.<X25519 key>`. Generate one with `npm run keygen -- site-2026-10`.
+  - The private bundle goes in this side's `.env` (`MSG_PRIVATE_KEY`) only.
+  - The public bundle goes to the other side (`MSG_PEER_PUBLIC_KEYS`, or Secrets Manager on AWS).
+  - Several peer bundles can be listed during a key rotation; the first one is used for sending.
+- **Crypto (Node built-in `crypto`):** an ephemeral X25519 key with ECDH, then HKDF-SHA256, then AES-256-GCM, with the header as additional authenticated data. The sender signs header + iv + ciphertext + tag with Ed25519.
+- **Envelope:** `{ v, typ: 'job'|'result', kid, rkid, jti (job_id), rid, iat, exp, epk, iv, ct, tag, sig }`. Payloads never contain passwords.
+- **`open()` checks, in order:**
+  1. size (at most 256 KB);
+  2. version and type;
+  3. a known sender `kid`, and `rkid` equal to this side's own kid;
+  4. the time window (`iat` skew, `exp`, `MSG_MAX_TTL_SEC`);
+  5. **the signature**;
+  6. then it decrypts.
+
+  Detecting a duplicate `jti` (replays and redeliveries) is the caller's job.
+
+```js
+import { open, parsePrivateBundle, parsePublicBundles, seal } from './src/envelope.js';
+
+const me = parsePrivateBundle(process.env.MSG_PRIVATE_KEY);
+const peers = parsePublicBundles(process.env.MSG_PEER_PUBLIC_KEYS);
+const job = open(text, { me, peers, expectedTyp: 'job', maxTtlSec: Number(process.env.MSG_MAX_TTL_SEC) });
+const reply = seal({ typ: 'result', jti: job.jti, rid: job.rid, payload: { ok: true }, ttlSec: 86400 },
+  { me, peer: peers[0] });
+```
+
+## Local message broker (D23)
+
+For local testing, the backend and acc-prov-vm exchange envelopes through **ActiveMQ Artemis**, the `activemq` service in the root `docker-compose.yml`. In AWS they use SQS instead. The broker:
+- listens on `127.0.0.1` only (AMQP 5672, web console 8161);
+- takes its login from `ARTEMIS_USER` / `ARTEMIS_PASSWORD` in the root `.env`;
+- has anonymous login disabled.
+
+`src/amqp.js` (AMQP 1.0, `rhea`) has the same contract as the SQS transport:
+
+| Call | Behaviour |
+|------|-----------|
+| `AmqpConnection.connect(loadAmqpConfig())` | Logs in with `AMQP_USER` / `AMQP_PASSWORD`. |
+| `send(queue, text)` | Resolves once the broker has stored the message (durable, anycast queue). |
+| `consume(queue, handler)` | One message at a time. **Accepted only after `handler` resolves**; released for redelivery if it throws (after a short back-off). Artemis dead-letters a message after its max delivery attempts, like an SQS DLQ. |
+
+```bash
+docker compose up -d activemq                     # from the repo root
+cd acc-prov-vm && npm run test:amqp               # throwaway queue; real queues untouched
+```
+
+## Worker (`npm start`)
+
+`src/main.js` connects the pieces. It takes **one job at a time** from the request queue and answers on the result queue. Logs are JSON lines on stdout, with no passwords and no message plaintext.
+
+| Job | What it does |
+|-----|--------------|
+| `CREATE` (GPU) | 1. Generate a password (`PASSWORD_LENGTH`; letters and digits, no look-alikes). 2. **VPN (D15)**, if `PFSENSE_ENABLED=true`: create the account if it's missing; keep an active one, extending its expiration only if it was set; re-activate a disabled or expired one with the new password. 3. GPU account and conda kernel on the named node. 4. Both emails, **last**. |
+| `REVOKE` (GPU) | Lock the Linux account. Disable the VPN account only when `revokeVpn` is true (the student has no other active request). |
+
+- **Retries and failures:**
+  - A transient failure is retried through redelivery, up to `WORKER_MAX_ATTEMPTS`.
+  - The last attempt, or a job that can never succeed (unsupported resource, bad payload, an account belonging to another full name), sends a **failed result**, so the backend always hears back.
+  - A forged or malformed message is **rejected**: the broker dead-letters it and no result is sent.
+- **Retrying CREATE is safe.** Each attempt sets one fresh password on every account the job manages, and emails it last. If an earlier attempt created the VPN account, that fact is kept in the job store (no secrets), so the retry resets the VPN password too.
+- **Duplicates:** `JOB_STORE_FILE` records each finished `jti`. A redelivered or replayed job is not run again; its stored result is re-sent.
+
+**Local end-to-end test** (the local ActiveMQ broker, a real GPU node and real email, with pfSense off):
+```bash
+npm run keygen -- site-local      # MSG_PRIVATE_KEY=... -> .env ; public line -> TEST_SITE_PUBLIC_KEY
+npm run keygen -- backend-local   # its private value -> TEST_BACKEND_PRIVATE_KEY ; public -> MSG_PEER_PUBLIC_KEYS
+npm start                                                  # terminal 1
+npm run send-test-job -- create gpu-01 you@example.com     # terminal 2, prints the result
+npm run send-test-job -- revoke gpu-01
+```
