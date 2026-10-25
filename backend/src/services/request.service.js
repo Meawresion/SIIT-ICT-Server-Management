@@ -34,6 +34,10 @@ export async function updateRequest(request_id, user_id, data) {
     const row = await tx.request.findFirst({ where: { rid: request_id, student_uid: user_id } });
     if (!row) throw Object.assign(new Error('Request not found or unauthorized'), { statusCode: 404 });
     if (row.status !== 'Pending') throw Object.assign(new Error('Can only update pending requests'), { statusCode: 400 });
+    // The type decides Manual vs automated provisioning, so it is fixed once submitted.
+    if (data.resource_type !== undefined && resourceToDb[data.resource_type] !== row.resource_type) {
+      throw Object.assign(new Error('The resource type can’t be changed after submission'), { statusCode: 400 });
+    }
     const current = requestView(row);
     if (current.impact_score === null) delete current.impact_score;
     const merged = UpdateRequestSchema.parse({ ...current,
