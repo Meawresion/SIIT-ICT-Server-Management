@@ -27,7 +27,8 @@ test('Google sign-in uses verified email and preserves existing approver role', 
     assert.equal(args.create.role, 'Student');
     return { uid: 2, role: 'Approver', siitemail: args.where.siitemail, fullname: 'Reviewer' };
   });
-  const account = await findOrCreateAccount({ email: 'Reviewer@siit.tu.ac.th', name: 'Reviewer' });
+  Object.assign(process.env, { STUDENT_EMAIL_DOMAIN: 'g.siit.tu.ac.th', STUDENT_ID_DIGITS: '10', DEGREE_EMAIL_PREFIXES: '{"UNDERGRADUATE":"","MASTER":"m","DOCTORAL":"d"}', STAFF_EMAIL_DOMAINS: 'siit.tu.ac.th' });
+  const account = await findOrCreateAccount({ email: 'Reviewer@siit.tu.ac.th', name: 'Reviewer', hd: 'siit.tu.ac.th' });
   assert.equal(account.id, 2);
   assert.equal(account.role, 'Approver');
   assert.doesNotThrow(() => JSON.stringify(account));
@@ -36,11 +37,12 @@ test('Google sign-in uses verified email and preserves existing approver role', 
 test('profile completion updates the Google-created user in the new schema', async t => {
   mockMethod(t, prisma.user, 'update', async args => {
     assert.deepEqual(args.where, { uid: 1, role: 'Student' });
-    assert.deepEqual(args.data, { s_id: '6622770001', study_degree: 'PhD', s_program: 'ICT', phone_number: '0812345678' });
+    assert.deepEqual(args.data, { fullname: 'Edited Name', s_id: '6622770001', study_degree: 'PhD', s_program: 'ICT', advisor_name: 'Dr. Advisor', phone_number: '0812345678' });
     return { uid: 1, ...args.data };
   });
-  const result = await createUserProfile(1, { student_id: '6622770001', degree: 'DOCTORAL', program: 'ICT', phone_number: '0812345678' });
+  const result = await createUserProfile(1, { full_name: 'Edited Name', student_id: '6622770001', degree: 'DOCTORAL', program: 'ICT', advisor_name: 'Dr. Advisor', phone_number: '0812345678' });
   assert.equal(result.degree, 'DOCTORAL');
+  assert.equal(result.advisor_name, 'Dr. Advisor');
 });
 
 test('all six frontend resources save in Request and clear the student draft atomically', async t => {
