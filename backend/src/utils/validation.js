@@ -4,7 +4,7 @@ export const UserProfileSchema = z.object({
   student_id: z.string().trim().min(1, 'Student ID is required').max(12),
   degree: z.enum(['UNDERGRADUATE', 'MASTER', 'DOCTORAL']),
   program: z.string().trim().min(1, 'Program is required').max(50),
-  advisor_name: z.string().min(1, 'Advisor name is required'),
+  advisor_name: z.string().trim().min(1, 'Advisor name is required').max(100),
   phone_number: z.string().trim().min(1, 'Phone number is required').max(15),
 });
 

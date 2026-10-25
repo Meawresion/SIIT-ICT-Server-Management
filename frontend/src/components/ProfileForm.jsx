@@ -66,7 +66,7 @@ export default function ProfileForm({ initial, onSubmit, submitLabel, onCancel }
         </label>
         <label className="field">
           <span className="field-label">Primary Advisor <span className="req">*</span></span>
-          <input value={form.advisor_name} onChange={set('advisor_name')} maxLength={255} placeholder="e.g. Dr. Pakinee" aria-invalid={Boolean(errors.advisor_name)} />
+          <input value={form.advisor_name} onChange={set('advisor_name')} maxLength={100} placeholder="e.g. Dr. Pakinee" aria-invalid={Boolean(errors.advisor_name)} />
           {err('advisor_name')}
         </label>
         <label className="field">

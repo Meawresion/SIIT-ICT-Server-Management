@@ -7,6 +7,7 @@ CREATE TABLE `user`(
     `s_id` VARCHAR(12),
     `study_degree` ENUM('Undergraduate', 'Master', 'PhD'),
     `s_program` VARCHAR(50),
+    `advisor_name` VARCHAR(100),
     `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     `updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 );

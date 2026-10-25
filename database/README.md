@@ -55,6 +55,7 @@ Stores both student and approver accounts.
 | `s_id` | Optional student ID, used by student accounts |
 | `study_degree` | Optional, `Undergraduate`, `Master`, or `PhD` |
 | `s_program` | Optional study program |
+| `advisor_name` | Student's primary advisor (supervising faculty member) |
 | `created_at` | Created timestamp |
 | `updated_at` | Automatically updated timestamp |
 
@@ -341,11 +342,22 @@ of the description unless a separate `project_name` is supplied. Supervisor emai
 is stored when supplied through the API; the current form has no email input and
 therefore saves an empty string.
 
-The new `user` table has no advisor-name column. The legacy profile form still
-contains that input to preserve its appearance, but it is not persisted and the
-profile API returns an empty advisor name. Supervisors on individual requests
-are persisted in `spv_name`. Persisting a separate profile advisor requires a
-schema extension.
+The profile's primary advisor is stored in `user.advisor_name`. The supervisor of
+an individual request is stored separately in `request.spv_name`.
+
+## Schema changes on an existing database
+
+`init.sql` runs only when the `mysql_data` volume is created. When it changes, a
+matching script in `migrations/` brings an existing database up to date. Run each
+script once, in date order, then regenerate the Prisma client:
+
+```bash
+docker compose exec -T mysql sh -c 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" "$MYSQL_DATABASE"' < database/migrations/2026-10-25-user-advisor-name.sql
+```
+
+| Script | Change |
+|--------|--------|
+| `2026-10-25-user-advisor-name.sql` | Adds `user.advisor_name` |
 
 ## Assign reviewer access by email
 

@@ -57,6 +57,7 @@ model user {
   s_id                               String?            @db.VarChar(12)
   study_degree                       user_study_degree?
   s_program                          String?            @db.VarChar(50)
+  advisor_name                       String?            @db.VarChar(100)
   created_at                         DateTime           @default(now()) @db.Timestamp(0)
   updated_at                         DateTime           @default(now()) @updatedAt @db.Timestamp(0)
   draft                              draft?
