@@ -11,6 +11,8 @@ RUN npm ci
 
 COPY prisma ./prisma
 COPY src ./src
+# Server-side commands: npm run user:role (grant approver access) and npm run test:db
+COPY scripts ./scripts
 RUN npx prisma generate
 
 EXPOSE 3000
