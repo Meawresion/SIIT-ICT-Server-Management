@@ -75,6 +75,10 @@ const sub = conn.consume(amqp.resultQueue, async (text) => {
   }
   clearTimeout(timer);
   console.log(JSON.stringify(r.payload, null, 2));
-  sub.stop();
-  conn.close();
+  // Close on the next tick: the result is accepted (removed from the queue) only after this
+  // handler returns, and closing first would put it back.
+  setImmediate(() => {
+    sub.stop();
+    conn.close();
+  });
 });
