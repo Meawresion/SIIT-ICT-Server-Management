@@ -361,10 +361,10 @@ docker compose exec -T mysql sh -c 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" "$MYSQ
 
 ## Assign reviewer access by email
 
-The reviewer dashboard is `/reviewer`; request review details are at
-`/reviewer/requests/:id`. The current schema has two roles: `Student` and
-`Approver`. `Approver` grants reviewer access; there is no separate admin role.
-Google sign-in sends approvers directly to `/reviewer`.
+The approver home page is `/admin`; requests are reviewed there and on
+`/history`. The current schema has two roles: `Student` and `Approver`.
+`Approver` grants reviewer access; there is no separate admin role. After
+Google sign-in, `/dashboard` sends approvers to `/admin`.
 
 The person must sign in with Google once to create their account. Then run this
 command on the backend server, using the same `DATABASE_URL` as the application:

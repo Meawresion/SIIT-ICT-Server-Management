@@ -48,8 +48,8 @@ export async function handleGoogleCallback(req, res, next) {
     req.session.role = account.role === 'Approver' ? 'reviewer' : 'user';
     await new Promise((resolve, reject) => req.session.save(err => err ? reject(err) : resolve()));
 
-    // Redirect to frontend
-    const redirect_url = account.role === 'Approver' ? `${env.frontend_url}/reviewer` : user
+    // Redirect to frontend: /dashboard sends each role to its home page (approvers to /admin).
+    const redirect_url = account.role === 'Approver' || user
       ? `${env.frontend_url}/dashboard`
       : `${env.frontend_url}/profile`;
 
