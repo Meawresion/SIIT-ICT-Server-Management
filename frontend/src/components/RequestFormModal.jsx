@@ -13,6 +13,7 @@ import {
 import { saveDraft } from '../api/drafts.js';
 import { RESOURCE_TYPES, STATUS_HELP, degreeLabel } from '../constants.js';
 import { formatDateTime, formatId, toInputDate } from '../utils/format.js';
+import { notifyRequestsChanged } from '../utils/requestEvents.js';
 
 const EMPTY = {
   purpose: '',
@@ -120,9 +121,11 @@ export default function RequestFormModal({ mode, requestId, draft, onClose, onDo
     try {
       if (mode === 'edit') {
         const res = await updateRequest(requestId, toPayload(form));
+        notifyRequestsChanged();
         onDone({ type: 'updated', request: res });
       } else {
         const res = await createRequest(toPayload(form));
+        notifyRequestsChanged();
         onDone({ type: 'submitted', request: res, draftId });
       }
     } catch (err) {
@@ -152,6 +155,7 @@ export default function RequestFormModal({ mode, requestId, draft, onClose, onDo
     try {
       const fn = { approve: approveRequest, reject: rejectRequest, activate: activateRequest, complete: completeRequest }[action];
       const res = await fn(requestId, comment.trim());
+      notifyRequestsChanged();
       onDone({ type: 'reviewed', request: res });
     } catch (err) {
       setApiError(err.message);
