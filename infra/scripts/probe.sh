@@ -23,7 +23,6 @@ check "ECR" aws ecr describe-repositories --max-items 1
 check "ECS" aws ecs list-clusters --max-items 1
 check "ELB" aws elbv2 describe-load-balancers --page-size 1
 check "EFS" aws efs describe-file-systems --max-items 1
-check "Cloud Map" aws servicediscovery list-namespaces --max-results 1
 check "Secrets Manager" aws secretsmanager list-secrets --max-results 1
 check "CloudFront" aws cloudfront list-distributions --max-items 1
 check "Route 53" aws route53 list-hosted-zones --max-items 1

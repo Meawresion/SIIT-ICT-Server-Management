@@ -25,11 +25,6 @@ for stack in "${order[@]}"; do
       bucket=$(stack_output "$name" BucketName 2>/dev/null || true)
       [ -n "$bucket" ] && aws s3 rm "s3://$bucket" --recursive --quiet
       ;;
-    platform)
-      for repo in backend mysql; do
-        aws ecr delete-repository --repository-name "$PROJECT-$repo" --force >/dev/null 2>&1 || true
-      done
-      ;;
   esac
   echo "== deleting $name"
   aws cloudformation delete-stack --stack-name "$name"

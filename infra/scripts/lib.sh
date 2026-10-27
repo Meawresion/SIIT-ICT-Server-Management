@@ -11,14 +11,21 @@ if [ ! -f "$CONFIG" ]; then
   echo "Missing $CONFIG: copy infra/config.example.env and fill it in." >&2
   exit 1
 fi
+# Values set in the environment (ENTRY_MODE=direct deploy.sh app) win over config.env.
+overrides=$(declare -p ENTRY_MODE USE_DOMAIN GOOGLE_SECRET_ARN 2>/dev/null || true)
 set -a
 # shellcheck source=/dev/null
 . "$CONFIG"
 set +a
+eval "$overrides"
 for key in AWS_PROFILE AWS_REGION PROJECT ZONE_NAME APP_HOST ORIGIN_HOST ROLE_NAME GOOGLE_SECRET_NAME DOCKER; do
   if [ -z "${!key:-}" ]; then echo "Missing $key in $CONFIG" >&2; exit 1; fi
 done
 export AWS_DEFAULT_REGION="$AWS_REGION"
+# cloudfront: the target design. direct: the ALB is the public entry (accounts without CloudFront).
+ENTRY_MODE=${ENTRY_MODE:-cloudfront}
+# false: no hosted zone or certificate; the ALB answers on its AWS name over HTTP (smoke tests).
+USE_DOMAIN=${USE_DOMAIN:-true}
 
 STACK_DNS="$PROJECT-dns"
 STACK_CERT="$PROJECT-cert"

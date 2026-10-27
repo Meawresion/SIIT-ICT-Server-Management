@@ -8,7 +8,7 @@ Browser ─HTTPS─▶ CloudFront  APP_HOST.ZONE_NAME
                   ├─ default ─▶ S3 (React build, private, OAC)
                   └─ /api/*  ─▶ ALB  ORIGIN_HOST.ZONE_NAME (only CloudFront: prefix list + secret header)
                                  └─▶ ECS Fargate backend (public subnets, public IP, no NAT)
-                                        └─▶ ECS Fargate mysql (EFS, mysql.siit.internal)
+                                        └─▶ internal NLB ─▶ ECS Fargate mysql (EFS)
 ```
 
 ## Stacks (`cloudformation/`)
@@ -18,12 +18,38 @@ Browser ─HTTPS─▶ CloudFront  APP_HOST.ZONE_NAME
 | `<project>-dns` | `dns.yaml` | Route 53 hosted zone for the delegated subdomain. Keep it: a new zone has new name servers. |
 | `<project>-cert` | `cert.yaml` | ACM certificate for the zone and `*.zone`, validated through DNS (us-east-1, used by CloudFront and the ALB). |
 | `<project>-network` | `network.yaml` | VPC, 2 public subnets (ALB, tasks), 2 private subnets (EFS, RDS later). No NAT gateway. |
-| `<project>-platform` | `platform.yaml` | ECR repositories, ECS cluster, Cloud Map namespace, backend security group. |
-| `<project>-data` | `data-ecs.yaml` | MySQL 8.4 task + EFS + generated DB passwords. Later replaced by an RDS stack with the same outputs. |
+| `<project>-platform` | `platform.yaml` | ECR repositories (emptied on delete), ECS cluster, backend security group. |
+| `<project>-data` | `data-ecs.yaml` | MySQL 8.4 task + EFS + internal NLB (stable DB name) + generated DB passwords. Later replaced by an RDS stack with the same outputs. |
 | `<project>-app` | `app.yaml` | ALB, backend service, generated `JWT_SECRET` and origin header. |
 | `<project>-edge` | `edge.yaml` | S3 bucket, CloudFront (SPA rewrite function), DNS records for the portal. |
 
 On AWS Learner Lab, IAM roles can't be created, so every task uses `LabRole` (`ROLE_NAME`).
+
+## AWS Learner Lab limits (checked 2026-10-27)
+
+| Service | Learner Lab | What we do |
+|---|---|---|
+| CloudFront | Denied (list and create) | `ENTRY_MODE=direct`: the ALB is the public entry and the `edge` stack isn't deployed. |
+| Cloud Map (create namespace) | Denied | MySQL is reached through an internal Network Load Balancer. |
+| IAM (create roles) | Denied | Every role is `LabRole`. |
+| ECS, ECR, ELB, EFS, Secrets Manager, Route 53, ACM, SQS, Logs | Allowed | |
+
+With `USE_DOMAIN=false` there are no `dns`/`cert` stacks and the ALB answers over HTTP on its AWS
+name. That is enough for smoke tests, but not for signing in: the sign-in cookie needs HTTPS.
+
+## Smoke test (deploy, check, delete)
+
+`infra/scripts/smoke-test.sh` deploys network, platform, the images, a placeholder Google secret,
+data and app (direct mode, no domain), and checks:
+- the backend answers through the ALB;
+- it reaches MySQL as the app user;
+- it refuses unsigned and cross-site requests;
+- Google sign-in uses this deploy's callback URL;
+- `check-db.js` passes in a one-off task.
+
+Then it deletes every stack it created, even after a failure, and lists anything left behind
+(stacks, ECR, ECS, VPC, load balancers, EFS, log groups, secrets). `--keep` leaves the stacks up.
+Test runs never leave live resources behind.
 
 ## Settings and secrets
 
