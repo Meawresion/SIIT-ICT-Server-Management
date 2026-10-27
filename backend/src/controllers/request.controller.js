@@ -12,7 +12,7 @@ export async function createNewRequest(req, res, next) {
       });
     }
 
-    const user_id = req.session.user_id;
+    const user_id = req.auth.user_id;
 
     if (!user_id) {
       return res.status(400).json({
@@ -36,7 +36,7 @@ export async function createNewRequest(req, res, next) {
 
 export async function getMyRequests(req, res, next) {
   try {
-    const user_id = req.session.user_id;
+    const user_id = req.auth.user_id;
 
     if (!user_id) {
       return res.status(400).json({
@@ -65,7 +65,7 @@ export async function getMyRequests(req, res, next) {
 export async function getRequest(req, res, next) {
   try {
     const { id } = req.params;
-    const user_id = req.session.user_id;
+    const user_id = req.auth.user_id;
 
     const request = await getRequestById(parseId(id), user_id);
 
@@ -84,7 +84,7 @@ export async function getRequest(req, res, next) {
 export async function updateRequestHandler(req, res, next) {
   try {
     const { id } = req.params;
-    const user_id = req.session.user_id;
+    const user_id = req.auth.user_id;
 
     const validation = UpdateRequestSchema.safeParse(req.body);
     if (!validation.success) {

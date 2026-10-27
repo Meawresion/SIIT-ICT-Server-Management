@@ -1,20 +1,52 @@
-import { existsSync } from 'node:fs';
-import { loadEnvFile } from 'node:process';
-const envPath = new URL('../../.env', import.meta.url);
-if (existsSync(envPath)) loadEnvFile(envPath);
+// The backend reads only the process environment (D24): docker compose passes each key from the
+// root .env, and ECS passes them from the task definition and Secrets Manager (D13).
+
+const REQUIRED = ['GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET', 'GOOGLE_CALLBACK_URL', 'FRONTEND_URL', 'JWT_SECRET'];
+const DB_KEYS = ['DB_HOST', 'DB_NAME', 'DB_USER', 'DB_PASSWORD'];
+const MIN_SECRET_LENGTH = 32;
+
+// Prisma reads DATABASE_URL. Build it from the DB_* keys, so the password is written once and may
+// hold any character. Without DB_HOST, an explicit DATABASE_URL is used (e.g. for the Prisma CLI).
+export function databaseUrl(source = process.env) {
+  if (!source.DB_HOST) return source.DATABASE_URL;
+  const user = encodeURIComponent(source.DB_USER ?? '');
+  const password = encodeURIComponent(source.DB_PASSWORD ?? '');
+  const port = source.DB_PORT || 3306;
+  return `mysql://${user}:${password}@${source.DB_HOST}:${port}/${encodeURIComponent(source.DB_NAME ?? '')}`;
+}
+
+// Called once at start (server.js): no fallback secrets or URLs, so a missing key stops the server
+// instead of running with a default (B7).
+export function checkEnv(source = process.env) {
+  const missing = REQUIRED.filter(key => !source[key]);
+  if (source.DB_HOST) missing.push(...DB_KEYS.filter(key => !source[key]));
+  else if (!source.DATABASE_URL) missing.push('DB_HOST (or DATABASE_URL)');
+  if (missing.length) throw new Error(`Missing settings: ${missing.join(', ')}`);
+  if (source.NODE_ENV === 'production' && source.JWT_SECRET.length < MIN_SECRET_LENGTH) {
+    throw new Error(`JWT_SECRET must be at least ${MIN_SECRET_LENGTH} characters in production`);
+  }
+}
+
+const database_url = databaseUrl();
+if (database_url) process.env.DATABASE_URL = database_url;
 
 const env = {
   node_env: process.env.NODE_ENV || 'development',
-  port: process.env.PORT || 3000,
-  
-  database_url: process.env.DATABASE_URL,
+  port: Number(process.env.PORT) || 3000,
+
+  database_url,
   google_client_id: process.env.GOOGLE_CLIENT_ID,
   google_client_secret: process.env.GOOGLE_CLIENT_SECRET,
-  google_callback_url: process.env.GOOGLE_CALLBACK_URL || 'http://localhost:3000/api/auth/google/callback',
-  
-  session_secret: process.env.SESSION_SECRET || 'dev-secret-please-change',
-  frontend_url: process.env.FRONTEND_URL || 'http://localhost:5173',
-  
+  google_callback_url: process.env.GOOGLE_CALLBACK_URL,
+
+  // Signs the sign-in token (D1). Sign-in ends after SESSION_IDLE_MINUTES without activity, and
+  // SESSION_MAX_HOURS after sign-in at the latest (FR-1.4).
+  jwt_secret: process.env.JWT_SECRET,
+  session_idle_minutes: Number(process.env.SESSION_IDLE_MINUTES) || 30,
+  session_max_hours: Number(process.env.SESSION_MAX_HOURS) || 12,
+  frontend_url: process.env.FRONTEND_URL,
+  trust_proxy: Number(process.env.TRUST_PROXY) || 0,
+
   is_production: process.env.NODE_ENV === 'production',
   is_development: process.env.NODE_ENV !== 'production',
 };

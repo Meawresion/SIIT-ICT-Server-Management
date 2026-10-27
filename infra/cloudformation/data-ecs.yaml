@@ -1,0 +1,267 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  Budget database (D31): MySQL 8.4 as one ECS Fargate task, data on EFS, reachable as
+  mysql.<namespace>. The first start on an empty EFS runs database/init.sql (baked into the image).
+  To move to RDS, deploy data-rds instead and point the app stack at it: both export DbHost,
+  DbPort, DbName and DbSecretArn. Pause with DesiredCount 0; deleting this stack deletes the data
+  and its passwords together.
+
+Parameters:
+  Project:
+    Type: String
+    Default: siit
+  NetworkStack:
+    Type: String
+  PlatformStack:
+    Type: String
+  ImageTag:
+    Type: String
+    Description: Tag of the siit-mysql image in ECR
+  ExecutionRoleArn:
+    Type: String
+    Description: Pulls the image and reads the secrets (Learner Lab - LabRole, D30)
+  TaskRoleArn:
+    Type: String
+    Description: Role of the running container (Learner Lab - LabRole, D30)
+  DbName:
+    Type: String
+    Default: siit_resource
+  DbAppUser:
+    Type: String
+    Default: siit_app
+  DesiredCount:
+    Type: Number
+    Default: 1
+    AllowedValues: [0, 1]
+    Description: 0 pauses the database; never more than 1 (one MySQL per data directory)
+  Cpu:
+    Type: String
+    Default: '512'
+  Memory:
+    Type: String
+    Default: '1024'
+  LogRetentionDays:
+    Type: Number
+    Default: 7
+
+Resources:
+  # The backend connects as the app user; root only creates the schema on the first start.
+  # Generated names (no Name property), so a recreated stack never collides with a secret that
+  # is still in its deletion recovery window.
+  DbSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Description: !Sub '${Project} MySQL app user (username, password)'
+      GenerateSecretString:
+        SecretStringTemplate: !Sub '{"username":"${DbAppUser}"}'
+        GenerateStringKey: password
+        PasswordLength: 32
+        ExcludePunctuation: true
+  DbRootSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Description: !Sub '${Project} MySQL root (admin, schema changes only)'
+      GenerateSecretString:
+        SecretStringTemplate: '{"username":"root"}'
+        GenerateStringKey: password
+        PasswordLength: 32
+        ExcludePunctuation: true
+
+  DbSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: MySQL task (3306 only from the backend tasks)
+      VpcId:
+        Fn::ImportValue: !Sub '${NetworkStack}-VpcId'
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 3306
+          ToPort: 3306
+          SourceSecurityGroupId:
+            Fn::ImportValue: !Sub '${PlatformStack}-BackendSecurityGroupId'
+          Description: Backend tasks
+      SecurityGroupEgress:
+        - IpProtocol: '-1'
+          CidrIp: 0.0.0.0/0
+          Description: ECR image pull, EFS, CloudWatch Logs
+      Tags:
+        - Key: Name
+          Value: !Sub '${Project}-mysql'
+  EfsSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: EFS mount targets (NFS only from the MySQL task)
+      VpcId:
+        Fn::ImportValue: !Sub '${NetworkStack}-VpcId'
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 2049
+          ToPort: 2049
+          SourceSecurityGroupId: !Ref DbSecurityGroup
+          Description: MySQL task
+      Tags:
+        - Key: Name
+          Value: !Sub '${Project}-efs'
+
+  FileSystem:
+    Type: AWS::EFS::FileSystem
+    Properties:
+      Encrypted: true
+      PerformanceMode: generalPurpose
+      ThroughputMode: bursting
+      FileSystemTags:
+        - Key: Name
+          Value: !Sub '${Project}-mysql-data'
+  MountTargetA:
+    Type: AWS::EFS::MountTarget
+    Properties:
+      FileSystemId: !Ref FileSystem
+      SubnetId: !Select [0, !Split [',', {'Fn::ImportValue': !Sub '${NetworkStack}-PrivateSubnets'}]]
+      SecurityGroups: [!Ref EfsSecurityGroup]
+  MountTargetB:
+    Type: AWS::EFS::MountTarget
+    Properties:
+      FileSystemId: !Ref FileSystem
+      SubnetId: !Select [1, !Split [',', {'Fn::ImportValue': !Sub '${NetworkStack}-PrivateSubnets'}]]
+      SecurityGroups: [!Ref EfsSecurityGroup]
+  # Files belong to the image's mysql user (uid/gid 999), so the entrypoint has nothing to chown.
+  AccessPoint:
+    Type: AWS::EFS::AccessPoint
+    Properties:
+      FileSystemId: !Ref FileSystem
+      PosixUser:
+        Uid: '999'
+        Gid: '999'
+      RootDirectory:
+        Path: /mysql
+        CreationInfo:
+          OwnerUid: '999'
+          OwnerGid: '999'
+          Permissions: '750'
+
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/${Project}/mysql'
+      RetentionInDays: !Ref LogRetentionDays
+
+  DiscoveryService:
+    Type: AWS::ServiceDiscovery::Service
+    Properties:
+      Name: mysql
+      NamespaceId:
+        Fn::ImportValue: !Sub '${PlatformStack}-NamespaceId'
+      DnsConfig:
+        RoutingPolicy: MULTIVALUE
+        DnsRecords:
+          - Type: A
+            TTL: 10
+      HealthCheckCustomConfig:
+        FailureThreshold: 1
+
+  TaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub '${Project}-mysql'
+      RequiresCompatibilities: [FARGATE]
+      NetworkMode: awsvpc
+      Cpu: !Ref Cpu
+      Memory: !Ref Memory
+      ExecutionRoleArn: !Ref ExecutionRoleArn
+      TaskRoleArn: !Ref TaskRoleArn
+      Volumes:
+        - Name: data
+          EFSVolumeConfiguration:
+            FilesystemId: !Ref FileSystem
+            TransitEncryption: ENABLED
+            AuthorizationConfig:
+              AccessPointId: !Ref AccessPoint
+              IAM: DISABLED
+      ContainerDefinitions:
+        - Name: mysql
+          Image: !Sub
+            - '${Repo}:${ImageTag}'
+            - Repo:
+                Fn::ImportValue: !Sub '${PlatformStack}-MysqlRepositoryUri'
+          Essential: true
+          # Linux native AIO isn't available on NFS (EFS).
+          Command: ['--innodb-use-native-aio=0']
+          PortMappings:
+            - ContainerPort: 3306
+              Protocol: tcp
+          Environment:
+            - Name: MYSQL_DATABASE
+              Value: !Ref DbName
+            - Name: MYSQL_USER
+              Value: !Ref DbAppUser
+          Secrets:
+            - Name: MYSQL_ROOT_PASSWORD
+              ValueFrom: !Sub '${DbRootSecret}:password::'
+            - Name: MYSQL_PASSWORD
+              ValueFrom: !Sub '${DbSecret}:password::'
+          MountPoints:
+            - SourceVolume: data
+              ContainerPath: /var/lib/mysql
+          HealthCheck:
+            Command: ['CMD-SHELL', 'mysqladmin ping -h 127.0.0.1 --silent || exit 1']
+            Interval: 15
+            Timeout: 5
+            Retries: 5
+            StartPeriod: 180
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref LogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: mysql
+
+  Service:
+    Type: AWS::ECS::Service
+    DependsOn: [MountTargetA, MountTargetB]
+    Properties:
+      ServiceName: mysql
+      Cluster:
+        Fn::ImportValue: !Sub '${PlatformStack}-ClusterName'
+      TaskDefinition: !Ref TaskDefinition
+      LaunchType: FARGATE
+      DesiredCount: !Ref DesiredCount
+      # Stop the old task before starting a new one: two MySQL servers must never share a data dir.
+      DeploymentConfiguration:
+        MinimumHealthyPercent: 0
+        MaximumPercent: 100
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          # Public subnet + public IP: pulls the image from ECR without a NAT gateway (S7).
+          AssignPublicIp: ENABLED
+          Subnets: !Split [',', {'Fn::ImportValue': !Sub '${NetworkStack}-PublicSubnets'}]
+          SecurityGroups: [!Ref DbSecurityGroup]
+      ServiceRegistries:
+        - RegistryArn: !GetAtt DiscoveryService.Arn
+
+Outputs:
+  DbHost:
+    Value: !Sub
+      - 'mysql.${Namespace}'
+      - Namespace:
+          Fn::ImportValue: !Sub '${PlatformStack}-NamespaceName'
+    Export:
+      Name: !Sub '${AWS::StackName}-DbHost'
+  DbPort:
+    Value: '3306'
+    Export:
+      Name: !Sub '${AWS::StackName}-DbPort'
+  DbName:
+    Value: !Ref DbName
+    Export:
+      Name: !Sub '${AWS::StackName}-DbName'
+  DbSecretArn:
+    Value: !Ref DbSecret
+    Export:
+      Name: !Sub '${AWS::StackName}-DbSecretArn'
+  ServiceName:
+    Value: !GetAtt Service.Name
+  FileSystemId:
+    Value: !Ref FileSystem
+  DbRootSecretArn:
+    Description: Root password, for schema changes from a one-off task
+    Value: !Ref DbRootSecret

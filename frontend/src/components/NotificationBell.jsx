@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useAuth } from '../auth/context.js';
 import { getMyRequests } from '../api/requests.js';
 import { getRequests as getReviewerRequests } from '../api/reviewer.js';
+import { BACKGROUND } from '../api/client.js';
 import { STATUS_LABEL } from '../constants.js';
 import { formatDateTime, formatId } from '../utils/format.js';
 import { onRequestsChanged } from '../utils/requestEvents.js';
@@ -50,14 +51,16 @@ export default function NotificationBell() {
   const latest = useRef(0);
 
   // Only the newest call may set state, so a slow response can't overwrite a newer one.
-  const load = useCallback(() => {
+  // background: the timed poll, which doesn't extend the sign-in.
+  const load = useCallback((background) => {
     const call = ++latest.current;
+    const options = background === true ? BACKGROUND : undefined;
     const fetcher = auth.role === 'reviewer'
-      ? getReviewerRequests({ status: 'PENDING' }).then((rows) =>
+      ? getReviewerRequests({ status: 'PENDING' }, options).then((rows) =>
           rows
             .sort((a, b) => b.created_at.localeCompare(a.created_at))
             .map((r) => ({ id: r.id, at: r.created_at, text: `${r.student_name} submitted ${formatId(r.id)} — ${r.purpose}` })))
-      : getMyRequests().then((rows) =>
+      : getMyRequests(options).then((rows) =>
           rows
             .filter((r) => r.reviewed_at)
             .sort((a, b) => b.reviewed_at.localeCompare(a.reviewed_at))
@@ -72,7 +75,7 @@ export default function NotificationBell() {
     const reloadIfVisible = () => {
       if (document.visibilityState === 'visible') load();
     };
-    const timer = setInterval(reloadIfVisible, POLL_MS);
+    const timer = setInterval(() => document.visibilityState === 'visible' && load(true), POLL_MS);
     const offChanged = onRequestsChanged(load);
     window.addEventListener('focus', load);
     document.addEventListener('visibilitychange', reloadIfVisible);

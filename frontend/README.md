@@ -5,14 +5,15 @@ React + Vite + React Router. Talks to the Express backend in `../backend` and fo
 ## Run
 
 ```bash
-cp .env.example .env
 npm install
 npm run dev
 ```
 
+The settings come from the root `.env` (template: `../.env.example`); Vite reads only the `VITE_*` keys.
+
 | Variable | Meaning |
 |---|---|
-| `VITE_API_URL` | Backend base URL (default `http://localhost:3000`) |
+| `VITE_API_URL` | Backend base URL (default `http://localhost:3000`; empty = same origin as the page) |
 | `VITE_CONTACT_EMAIL` | Helpdesk address shown on Contact Us |
 
 Start the backend first (see `../README.md`). Without it the landing page loads but sign-in fails with a message.

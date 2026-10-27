@@ -1,14 +1,16 @@
-version: '3.8'
-
 services:
   mysql:
     image: mysql:8
     container_name: siit_mysql
     environment:
+      # root is the admin user (schema, init.sql); the backend connects as MYSQL_USER, which the
+      # image creates on the first start with rights on MYSQL_DATABASE only.
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
       MYSQL_DATABASE: ${MYSQL_DATABASE}
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
     ports:
-      - "3306:3306"
+      - "127.0.0.1:3306:3306"
     volumes:
       - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql
       - mysql_data:/var/lib/mysql
@@ -23,15 +25,22 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
+      target: dev
     container_name: siit_backend
     environment:
       NODE_ENV: ${NODE_ENV}
       PORT: 3000
-      DATABASE_URL: ${DATABASE_URL}
+      DB_HOST: mysql
+      DB_PORT: 3306
+      DB_NAME: ${MYSQL_DATABASE}
+      DB_USER: ${MYSQL_USER}
+      DB_PASSWORD: ${MYSQL_PASSWORD}
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID}
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET}
       GOOGLE_CALLBACK_URL: ${GOOGLE_CALLBACK_URL}
-      SESSION_SECRET: ${SESSION_SECRET}
+      JWT_SECRET: ${JWT_SECRET}
+      SESSION_IDLE_MINUTES: ${SESSION_IDLE_MINUTES}
+      SESSION_MAX_HOURS: ${SESSION_MAX_HOURS}
       FRONTEND_URL: ${FRONTEND_URL}
       STUDENT_EMAIL_DOMAIN: ${STUDENT_EMAIL_DOMAIN}
       STUDENT_ID_DIGITS: ${STUDENT_ID_DIGITS}
@@ -56,6 +65,7 @@ services:
     container_name: siit_frontend
     environment:
       VITE_API_URL: ${VITE_API_URL}
+      VITE_CONTACT_EMAIL: ${VITE_CONTACT_EMAIL}
     ports:
       - "5173:5173"
     volumes:

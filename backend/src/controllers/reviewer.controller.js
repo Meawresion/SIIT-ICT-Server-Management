@@ -80,7 +80,7 @@ export async function getRequestDetail(req, res, next) {
 export async function approveRequestHandler(req, res, next) {
   try {
     const { id } = req.params;
-    const reviewer_account_id = req.session.account_id;
+    const reviewer_account_id = req.auth.account_id;
 
     const validation = ReviewRequestSchema.safeParse(req.body);
     if (!validation.success) {
@@ -111,7 +111,7 @@ export async function approveRequestHandler(req, res, next) {
 export async function rejectRequestHandler(req, res, next) {
   try {
     const { id } = req.params;
-    const reviewer_account_id = req.session.account_id;
+    const reviewer_account_id = req.auth.account_id;
 
     const validation = ReviewRequestSchema.safeParse(req.body);
     if (!validation.success) {
@@ -142,7 +142,7 @@ export async function rejectRequestHandler(req, res, next) {
 export async function activateRequestHandler(req, res, next) {
   try {
     const { id } = req.params;
-    const reviewer_account_id = req.session.account_id;
+    const reviewer_account_id = req.auth.account_id;
 
     const request = await activateRequest(parseId(id), reviewer_account_id);
 
@@ -165,7 +165,7 @@ export async function activateRequestHandler(req, res, next) {
 export async function completeRequestHandler(req, res, next) {
   try {
     const { id } = req.params;
-    const reviewer_account_id = req.session.account_id;
+    const reviewer_account_id = req.auth.account_id;
 
     const request = await completeRequest(parseId(id), reviewer_account_id);
 

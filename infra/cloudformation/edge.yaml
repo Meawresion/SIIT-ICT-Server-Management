@@ -1,0 +1,197 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  The portal's one public address: CloudFront serves the React build from a private S3 bucket
+  (OAC) and sends /api/* to the ALB with the secret origin header, so the browser sees one origin
+  and the sign-in cookie stays first-party. Deploy in us-east-1 (CloudFront certificate).
+
+Parameters:
+  Project:
+    Type: String
+    Default: siit
+  DnsStack:
+    Type: String
+  CertStack:
+    Type: String
+  AppStack:
+    Type: String
+  AppHost:
+    Type: String
+    Default: app
+  PriceClass:
+    Type: String
+    Default: PriceClass_200
+    AllowedValues: [PriceClass_100, PriceClass_200, PriceClass_All]
+    Description: PriceClass_200 includes edge locations in Asia
+
+Mappings:
+  # AWS-managed CloudFront policies (fixed IDs).
+  ManagedPolicies:
+    Cache:
+      Optimized: 658327ea-f89d-4fab-a63d-7e88639e58f6
+      Disabled: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad
+    OriginRequest:
+      AllViewerExceptHostHeader: b689b0a8-53d0-40ab-baf2-68738e2966ac
+  # The hosted zone ID that every CloudFront alias record uses.
+  CloudFront:
+    Alias:
+      HostedZoneId: Z2FDTNDATAQYW2
+
+Resources:
+  Bucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub '${Project}-frontend-${AWS::AccountId}'
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+  BucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref Bucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: CloudFrontReadsThroughOAC
+            Effect: Allow
+            Principal:
+              Service: cloudfront.amazonaws.com
+            Action: s3:GetObject
+            Resource: !Sub '${Bucket.Arn}/*'
+            Condition:
+              StringEquals:
+                AWS:SourceArn: !Sub 'arn:aws:cloudfront::${AWS::AccountId}:distribution/${Distribution}'
+  OriginAccessControl:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: !Sub '${Project}-frontend'
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  # React Router paths (/home, /admin, ...) have no file in the bucket: serve index.html for them.
+  # Only on the S3 behavior, so API 404s stay API 404s.
+  SpaRewrite:
+    Type: AWS::CloudFront::Function
+    Properties:
+      Name: !Sub '${Project}-spa-rewrite'
+      AutoPublish: true
+      FunctionConfig:
+        Comment: Paths without a file extension go to /index.html
+        Runtime: cloudfront-js-2.0
+      FunctionCode: |
+        function handler(event) {
+          var request = event.request;
+          var last = request.uri.split('/').pop();
+          if (last.indexOf('.') === -1) request.uri = '/index.html';
+          return request;
+        }
+
+  Distribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Comment: !Sub '${Project} resource portal'
+        Aliases:
+          - !Sub
+            - '${AppHost}.${Zone}'
+            - Zone:
+                Fn::ImportValue: !Sub '${DnsStack}-ZoneName'
+        ViewerCertificate:
+          AcmCertificateArn:
+            Fn::ImportValue: !Sub '${CertStack}-CertificateArn'
+          SslSupportMethod: sni-only
+          MinimumProtocolVersion: TLSv1.2_2021
+        HttpVersion: http2and3
+        PriceClass: !Ref PriceClass
+        DefaultRootObject: index.html
+        Origins:
+          - Id: frontend
+            DomainName: !GetAtt Bucket.RegionalDomainName
+            OriginAccessControlId: !GetAtt OriginAccessControl.Id
+            S3OriginConfig:
+              OriginAccessIdentity: ''
+          - Id: api
+            DomainName:
+              Fn::ImportValue: !Sub '${AppStack}-OriginDomain'
+            CustomOriginConfig:
+              OriginProtocolPolicy: https-only
+              HTTPSPort: 443
+              OriginSSLProtocols: [TLSv1.2]
+              OriginReadTimeout: 30
+            OriginCustomHeaders:
+              - HeaderName: X-Origin-Verify
+                HeaderValue: !Sub
+                  - '{{resolve:secretsmanager:${Arn}:SecretString:value}}'
+                  - Arn:
+                      Fn::ImportValue: !Sub '${AppStack}-OriginVerifySecretArn'
+        DefaultCacheBehavior:
+          TargetOriginId: frontend
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods: [GET, HEAD]
+          CachedMethods: [GET, HEAD]
+          Compress: true
+          CachePolicyId: !FindInMap [ManagedPolicies, Cache, Optimized]
+          FunctionAssociations:
+            - EventType: viewer-request
+              FunctionARN: !GetAtt SpaRewrite.FunctionMetadata.FunctionARN
+        CacheBehaviors:
+          - PathPattern: /api/*
+            TargetOriginId: api
+            # No redirect for the API: a redirected POST would lose its body.
+            ViewerProtocolPolicy: https-only
+            AllowedMethods: [GET, HEAD, OPTIONS, PUT, PATCH, POST, DELETE]
+            CachedMethods: [GET, HEAD]
+            Compress: true
+            CachePolicyId: !FindInMap [ManagedPolicies, Cache, Disabled]
+            OriginRequestPolicyId: !FindInMap [ManagedPolicies, OriginRequest, AllViewerExceptHostHeader]
+
+  AppRecordA:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId:
+        Fn::ImportValue: !Sub '${DnsStack}-HostedZoneId'
+      Name: !Sub
+        - '${AppHost}.${Zone}'
+        - Zone:
+            Fn::ImportValue: !Sub '${DnsStack}-ZoneName'
+      Type: A
+      AliasTarget:
+        DNSName: !GetAtt Distribution.DomainName
+        HostedZoneId: !FindInMap [CloudFront, Alias, HostedZoneId]
+  AppRecordAAAA:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId:
+        Fn::ImportValue: !Sub '${DnsStack}-HostedZoneId'
+      Name: !Sub
+        - '${AppHost}.${Zone}'
+        - Zone:
+            Fn::ImportValue: !Sub '${DnsStack}-ZoneName'
+      Type: AAAA
+      AliasTarget:
+        DNSName: !GetAtt Distribution.DomainName
+        HostedZoneId: !FindInMap [CloudFront, Alias, HostedZoneId]
+
+Outputs:
+  AppUrl:
+    Value: !Sub
+      - 'https://${AppHost}.${Zone}'
+      - Zone:
+          Fn::ImportValue: !Sub '${DnsStack}-ZoneName'
+  BucketName:
+    Value: !Ref Bucket
+  DistributionId:
+    Value: !Ref Distribution
+  DistributionDomainName:
+    Value: !GetAtt Distribution.DomainName

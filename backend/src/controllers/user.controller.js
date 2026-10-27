@@ -35,7 +35,7 @@ const approverProfile = (account) => ({
 export async function getUserProfile(req, res, next) {
   try {
     if (req.account?.role === 'Approver') return res.json(approverProfile(req.account));
-    const account_id = req.session.account_id;
+    const account_id = req.auth.account_id;
 
     const user = await getUserByAccountId(account_id);
     const account = await getAccountById(account_id);
@@ -73,7 +73,7 @@ export async function createProfile(req, res, next) {
 
     const derived = fromEmail(req);
     if (!derived) return notAStudent(res);
-    const account_id = req.session.account_id;
+    const account_id = req.auth.account_id;
 
     const existing = await getUserByAccountId(account_id);
     if (existing) {
@@ -83,8 +83,6 @@ export async function createProfile(req, res, next) {
     }
 
     const user = await createUserProfile(account_id, { ...validation.data, ...derived });
-    req.session.user_id = user.id;
-    await new Promise((resolve, reject) => req.session.save(err => err ? reject(err) : resolve()));
 
     res.status(201).json({
       id: user.id.toString(),  // ← Convert BigInt
@@ -116,8 +114,8 @@ export async function updateProfile(req, res, next) {
       });
     }
 
-    const account_id = req.session.account_id;
-    const user_id = req.session.user_id;
+    const account_id = req.auth.account_id;
+    const user_id = req.auth.user_id;
 
     if (!user_id) {
       return res.status(404).json({

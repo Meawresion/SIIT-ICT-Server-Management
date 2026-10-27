@@ -20,7 +20,8 @@ const signinError = () =>
 
 export default function LandingPage() {
   const auth = useAuth();
-  const [error, setError] = useState(signinError);
+  const [error, setError] = useState(() =>
+    signinError() || (auth.expired ? 'You were signed out after a period of inactivity. Please sign in again.' : ''));
   const [busy, setBusy] = useState(false);
 
   if (auth.status === 'ready') return <Navigate to={auth.needsProfile ? '/profile' : '/dashboard'} replace />;

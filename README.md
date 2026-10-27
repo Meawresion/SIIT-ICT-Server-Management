@@ -65,13 +65,13 @@ A full-stack web application for SIIT students to submit ICT/resource requests a
 
 2. **Configure Environment**
    ```bash
-   # Backend
-   cp backend/.env.example backend/.env
-   # Edit backend/.env and add Google OAuth credentials
-   
-   # Frontend
-   cp frontend/.env.example frontend/.env
+   # One env file for the whole stack: mysql, backend, frontend and activemq
+   cp .env.example .env
+   # Edit .env: Google OAuth credentials, database passwords, JWT_SECRET
    ```
+   Each container gets only its own keys (see `docker-compose.yml`). If you change
+   `MYSQL_USER` or `MYSQL_PASSWORD` later, recreate the database volume
+   (`docker compose down -v`): the mysql image creates the app user only on its first start.
 
 3. **Start Services**
    ```bash
@@ -81,11 +81,14 @@ A full-stack web application for SIIT students to submit ICT/resource requests a
 4. **Access Application**
    - Frontend: `http://localhost:5173`
    - Backend API: `http://localhost:3000`
-   - Database: `localhost:3306`
+   - Database: `127.0.0.1:3306` (this machine only)
 
 ## Local Development Setup
 
 ### Backend Setup
+
+The backend reads only environment variables; it doesn't load an env file itself.
+Use the root `.env`, with the database on this machine:
 
 ```bash
 cd backend
@@ -93,18 +96,11 @@ cd backend
 # Install dependencies
 npm install
 
-# Create .env file
-cp .env.example .env
-
-# Configure database connection
-# Update DATABASE_URL in .env
-
 # Generate Prisma client
-npx prisma db pull
 npx prisma generate
 
-# Start development server
-npm run dev
+# Start development server (mysql from docker compose, published on 127.0.0.1)
+DB_HOST=127.0.0.1 node --env-file=../.env --watch src/server.js
 ```
 
 ### Frontend Setup
@@ -115,10 +111,7 @@ cd frontend
 # Install dependencies
 npm install
 
-# Create .env file
-cp .env.example .env
-
-# Start development server
+# Start development server (reads the VITE_* keys from the root .env)
 npm run dev
 ```
 
@@ -279,24 +272,19 @@ PENDING
 
 ## Environment Variables
 
-### Backend (.env)
+All keys live in the root `.env` (template: `.env.example`), grouped by service.
+The backend stops at start if a required key is missing.
 
-```env
-NODE_ENV=development
-PORT=3000
-DATABASE_URL=mysql://root:password@mysql:3306/siit_resource
-GOOGLE_CLIENT_ID=your_client_id
-GOOGLE_CLIENT_SECRET=your_client_secret
-GOOGLE_CALLBACK_URL=http://localhost:3000/api/auth/google/callback
-SESSION_SECRET=dev-secret-change-in-production
-FRONTEND_URL=http://localhost:5173
-```
+| Service | Keys |
+|---|---|
+| mysql | `MYSQL_ROOT_PASSWORD` (admin), `MYSQL_DATABASE`, `MYSQL_USER` and `MYSQL_PASSWORD` (the app user) |
+| backend | `NODE_ENV`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_CALLBACK_URL`, `JWT_SECRET`, `SESSION_IDLE_MINUTES`, `SESSION_MAX_HOURS`, `FRONTEND_URL`, `STUDENT_EMAIL_DOMAIN`, `STUDENT_ID_DIGITS`, `DEGREE_EMAIL_PREFIXES`, `STAFF_EMAIL_DOMAINS` |
+| frontend | `VITE_API_URL`, `VITE_CONTACT_EMAIL` |
+| activemq | `ARTEMIS_USER`, `ARTEMIS_PASSWORD` |
 
-### Frontend (.env)
-
-```env
-VITE_API_URL=http://localhost:3000
-```
+docker compose passes the database settings to the backend as `DB_HOST`, `DB_PORT`,
+`DB_NAME`, `DB_USER` and `DB_PASSWORD`; the backend builds the Prisma `DATABASE_URL`
+from them, so the password is written once.
 
 ## Testing
 
