@@ -41,6 +41,7 @@ const env = {
 
   session_secret: process.env.SESSION_SECRET,
   frontend_url: process.env.FRONTEND_URL,
+  trust_proxy: Number(process.env.TRUST_PROXY) || 0,
 
   is_production: process.env.NODE_ENV === 'production',
   is_development: process.env.NODE_ENV !== 'production',

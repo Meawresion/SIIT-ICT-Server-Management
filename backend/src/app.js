@@ -2,6 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import session from 'express-session';
 import env from './config/env.js';
+import prisma from './lib/prisma.js';
 import { errorHandler, notFoundHandler } from './middleware/error.middleware.js';
 import auth_routes from './routes/auth.routes.js';
 import user_routes from './routes/user.routes.js';
@@ -9,6 +10,10 @@ import request_routes from './routes/request.routes.js';
 import reviewer_routes from './routes/reviewer.routes.js';
 
 const app = express();
+
+// On AWS the requests come through CloudFront and the ALB; TRUST_PROXY is the number of those
+// hops, so req.protocol and req.ip come from their X-Forwarded-* headers.
+if (env.trust_proxy) app.set('trust proxy', env.trust_proxy);
 
 // CORS Configuration
 app.use(cors({
@@ -33,9 +38,19 @@ app.use(session({
   },
 }));
 
-// Health check
+// Health check: liveness for the ALB target group, so a slow database doesn't cycle the tasks.
 app.get('/health', (req, res) => {
   res.json({ status: 'ok' });
+});
+
+// Readiness: the database answers.
+app.get('/health/ready', async (req, res) => {
+  try {
+    await prisma.$queryRaw`SELECT 1`;
+    res.json({ status: 'ok' });
+  } catch {
+    res.status(503).json({ status: 'database unavailable' });
+  }
 });
 
 // Routes
