@@ -1,4 +1,5 @@
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000';
+// An empty VITE_API_URL means the same origin as the page (on AWS, CloudFront serves /api/*).
+const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:3000';
 
 export class ApiError extends Error {
   constructor(message, status, details) {

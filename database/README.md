@@ -317,7 +317,7 @@ npm test
 npm run test:db
 ```
 
-`test:db` exercises the real services against the configured `DATABASE_URL` inside
+`test:db` exercises the real services against the configured database (`DB_*` keys) inside
 one transaction, then rolls back all test records. It requires insert/update
 permissions as well as read access.
 
@@ -367,11 +367,10 @@ The approver home page is `/admin`; requests are reviewed there and on
 Google sign-in, `/dashboard` sends approvers to `/admin`.
 
 The person must sign in with Google once to create their account. Then run this
-command on the backend server, using the same `DATABASE_URL` as the application:
+command in the backend container, which has the same database settings as the application:
 
 ```bash
-cd backend
-npm run user:role -- person@siit.tu.ac.th Approver
+docker compose exec backend npm run user:role -- person@siit.tu.ac.th Approver
 ```
 
 To remove reviewer access:

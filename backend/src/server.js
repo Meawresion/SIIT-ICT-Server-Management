@@ -1,8 +1,9 @@
 import app from './app.js';
-import env from './config/env.js';
+import env, { checkEnv } from './config/env.js';
 import { loadIdentityRules } from './config/identity.js';
 
-// Fail at start, not at the first sign-in, when the sign-in settings are missing or wrong.
+// Fail at start, not at the first request, when settings are missing or wrong.
+checkEnv();
 loadIdentityRules();
 
 const port = env.port;
