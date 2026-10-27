@@ -1,6 +1,6 @@
 import { apiRequest } from './client.js';
 
-export async function getRequests(filters = {}) {
+export async function getRequests(filters = {}, options) {
   const params = new URLSearchParams();
   if (filters.status) params.append('status', filters.status);
   if (filters.resource_type) params.append('resource_type', filters.resource_type);
@@ -9,7 +9,7 @@ export async function getRequests(filters = {}) {
   const query = params.toString();
   const url = query ? `/api/reviewer/requests?${query}` : '/api/reviewer/requests';
   
-  return apiRequest(url);
+  return apiRequest(url, options);
 }
 
 export async function getRequest(id) {

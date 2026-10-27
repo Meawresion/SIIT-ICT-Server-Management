@@ -7,8 +7,8 @@ export async function createRequest(data) {
   });
 }
 
-export async function getMyRequests() {
-  return apiRequest('/api/requests/me');
+export async function getMyRequests(options) {
+  return apiRequest('/api/requests/me', options);
 }
 
 export async function getRequest(id) {

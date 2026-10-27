@@ -1,23 +1,20 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { getCurrentUser, logout as apiLogout } from '../api/auth.js';
+import { onSessionEnded } from '../api/client.js';
 import { getUserProfile } from '../api/users.js';
-import { getRequests as getReviewerRequests } from '../api/reviewer.js';
 import { AuthContext } from './context.js';
 
-// Works out who is signed in and what they are.
-// /api/auth/me only returns ids, so the role is found by probing:
-//   reviewer endpoint answers  -> reviewer
-//   profile exists             -> student
-//   neither                    -> student who still needs to complete a profile,
-//                                 or a staff account with no approver access yet (noAccess)
+// Works out who is signed in and what they are. /api/auth/me gives the role (from the database):
+//   reviewer                -> reviewer
+//   profile exists          -> student
+//   neither                 -> student who still needs to complete a profile,
+//                              or a staff account with no approver access yet (noAccess)
 async function resolveSession() {
   const me = await getCurrentUser();
   if (!me?.account_id) return { status: 'anon' };
 
-  const [isReviewer, profile] = await Promise.all([
-    getReviewerRequests({ status: 'PENDING' }).then(() => true, () => false),
-    getUserProfile().catch(() => null),
-  ]);
+  const isReviewer = me.role === 'reviewer';
+  const profile = await getUserProfile().catch(() => null);
 
   const noAccess = !isReviewer && me.kind === 'staff';
   return {
@@ -51,6 +48,9 @@ export default function AuthProvider({ children }) {
       cancelled = true;
     };
   }, []);
+
+  // The sign-in ended on the server (inactivity): back to the landing page, which says why.
+  useEffect(() => onSessionEnded(() => setState((s) => (s.status === 'ready' ? { status: 'anon', expired: true } : s))), []);
 
   const logout = useCallback(async () => {
     try {
