@@ -1,0 +1,34 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  TLS certificate for the zone and every name under it (apex + wildcard), validated through DNS
+  in the hosted zone. Deploy in us-east-1: CloudFront only uses certificates from there, and the
+  ALB in the same region uses this one too. The delegation must already work, or validation waits.
+
+Parameters:
+  DnsStack:
+    Type: String
+    Description: Name of the dns stack
+
+Resources:
+  Certificate:
+    Type: AWS::CertificateManager::Certificate
+    Properties:
+      DomainName:
+        Fn::ImportValue: !Sub '${DnsStack}-ZoneName'
+      SubjectAlternativeNames:
+        - !Sub
+          - '*.${Zone}'
+          - Zone:
+              Fn::ImportValue: !Sub '${DnsStack}-ZoneName'
+      ValidationMethod: DNS
+      DomainValidationOptions:
+        - DomainName:
+            Fn::ImportValue: !Sub '${DnsStack}-ZoneName'
+          HostedZoneId:
+            Fn::ImportValue: !Sub '${DnsStack}-HostedZoneId'
+
+Outputs:
+  CertificateArn:
+    Value: !Ref Certificate
+    Export:
+      Name: !Sub '${AWS::StackName}-CertificateArn'

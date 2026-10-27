@@ -1,0 +1,32 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  Public hosted zone for the portal's subdomain. The parent domain stays at its own DNS provider,
+  which delegates this subdomain with NS records (D29). Keep this stack between deploys: deleting
+  and recreating the zone gives new name servers, and the delegation would have to be redone.
+
+Parameters:
+  ZoneName:
+    Type: String
+    Description: The delegated subdomain, e.g. portal.example.org
+    AllowedPattern: '^([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$'
+
+Resources:
+  Zone:
+    Type: AWS::Route53::HostedZone
+    Properties:
+      Name: !Ref ZoneName
+      HostedZoneConfig:
+        Comment: SIIT ICT resource portal (delegated subdomain)
+
+Outputs:
+  HostedZoneId:
+    Value: !Ref Zone
+    Export:
+      Name: !Sub '${AWS::StackName}-HostedZoneId'
+  ZoneName:
+    Value: !Ref ZoneName
+    Export:
+      Name: !Sub '${AWS::StackName}-ZoneName'
+  NameServers:
+    Description: Add one NS record per name server for this subdomain at the parent domain's DNS provider.
+    Value: !Join [',', !GetAtt Zone.NameServers]

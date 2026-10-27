@@ -1,0 +1,92 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  Shared pieces that outlive the data and app stacks: the ECR repositories (deploy this before
+  pushing images), the ECS cluster, the private DNS namespace for service discovery and the
+  backend tasks' security group (the database stack refers to it before the app stack exists).
+
+Parameters:
+  Project:
+    Type: String
+    Default: siit
+  NetworkStack:
+    Type: String
+  NamespaceName:
+    Type: String
+    Default: siit.internal
+  ImagesToKeep:
+    Type: Number
+    Default: 10
+
+Resources:
+  BackendRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Sub '${Project}-backend'
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      LifecyclePolicy:
+        LifecyclePolicyText: !Sub '{"rules":[{"rulePriority":1,"description":"Keep the newest images","selection":{"tagStatus":"any","countType":"imageCountMoreThan","countNumber":${ImagesToKeep}},"action":{"type":"expire"}}]}'
+  MysqlRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Sub '${Project}-mysql'
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      LifecyclePolicy:
+        LifecyclePolicyText: !Sub '{"rules":[{"rulePriority":1,"description":"Keep the newest images","selection":{"tagStatus":"any","countType":"imageCountMoreThan","countNumber":${ImagesToKeep}},"action":{"type":"expire"}}]}'
+
+  Cluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: !Ref Project
+      ClusterSettings:
+        - Name: containerInsights
+          Value: disabled
+
+  # mysql.<namespace> etc. resolve inside the VPC only.
+  Namespace:
+    Type: AWS::ServiceDiscovery::PrivateDnsNamespace
+    Properties:
+      Name: !Ref NamespaceName
+      Vpc:
+        Fn::ImportValue: !Sub '${NetworkStack}-VpcId'
+
+  BackendSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Backend tasks (inbound only from the ALB, added by the app stack)
+      VpcId:
+        Fn::ImportValue: !Sub '${NetworkStack}-VpcId'
+      SecurityGroupEgress:
+        - IpProtocol: '-1'
+          CidrIp: 0.0.0.0/0
+          Description: ECR, Secrets Manager, SQS, Google OAuth, the database
+      Tags:
+        - Key: Name
+          Value: !Sub '${Project}-backend'
+
+Outputs:
+  BackendRepositoryUri:
+    Value: !GetAtt BackendRepository.RepositoryUri
+    Export:
+      Name: !Sub '${AWS::StackName}-BackendRepositoryUri'
+  MysqlRepositoryUri:
+    Value: !GetAtt MysqlRepository.RepositoryUri
+    Export:
+      Name: !Sub '${AWS::StackName}-MysqlRepositoryUri'
+  ClusterName:
+    Value: !Ref Cluster
+    Export:
+      Name: !Sub '${AWS::StackName}-ClusterName'
+  NamespaceId:
+    Value: !GetAtt Namespace.Id
+    Export:
+      Name: !Sub '${AWS::StackName}-NamespaceId'
+  NamespaceName:
+    Value: !Ref NamespaceName
+    Export:
+      Name: !Sub '${AWS::StackName}-NamespaceName'
+  BackendSecurityGroupId:
+    Value: !Ref BackendSecurityGroup
+    Export:
+      Name: !Sub '${AWS::StackName}-BackendSecurityGroupId'
