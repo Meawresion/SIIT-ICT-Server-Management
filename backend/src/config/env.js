@@ -1,7 +1,7 @@
 // The backend reads only the process environment (D24): docker compose passes each key from the
 // root .env, and ECS passes them from the task definition and Secrets Manager (D13).
 
-const REQUIRED = ['GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET', 'GOOGLE_CALLBACK_URL', 'FRONTEND_URL', 'SESSION_SECRET'];
+const REQUIRED = ['GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET', 'GOOGLE_CALLBACK_URL', 'FRONTEND_URL', 'JWT_SECRET'];
 const DB_KEYS = ['DB_HOST', 'DB_NAME', 'DB_USER', 'DB_PASSWORD'];
 const MIN_SECRET_LENGTH = 32;
 
@@ -22,8 +22,8 @@ export function checkEnv(source = process.env) {
   if (source.DB_HOST) missing.push(...DB_KEYS.filter(key => !source[key]));
   else if (!source.DATABASE_URL) missing.push('DB_HOST (or DATABASE_URL)');
   if (missing.length) throw new Error(`Missing settings: ${missing.join(', ')}`);
-  if (source.NODE_ENV === 'production' && source.SESSION_SECRET.length < MIN_SECRET_LENGTH) {
-    throw new Error(`SESSION_SECRET must be at least ${MIN_SECRET_LENGTH} characters in production`);
+  if (source.NODE_ENV === 'production' && source.JWT_SECRET.length < MIN_SECRET_LENGTH) {
+    throw new Error(`JWT_SECRET must be at least ${MIN_SECRET_LENGTH} characters in production`);
   }
 }
 
@@ -39,7 +39,11 @@ const env = {
   google_client_secret: process.env.GOOGLE_CLIENT_SECRET,
   google_callback_url: process.env.GOOGLE_CALLBACK_URL,
 
-  session_secret: process.env.SESSION_SECRET,
+  // Signs the sign-in token (D1). Sign-in ends after SESSION_IDLE_MINUTES without activity, and
+  // SESSION_MAX_HOURS after sign-in at the latest (FR-1.4).
+  jwt_secret: process.env.JWT_SECRET,
+  session_idle_minutes: Number(process.env.SESSION_IDLE_MINUTES) || 30,
+  session_max_hours: Number(process.env.SESSION_MAX_HOURS) || 12,
   frontend_url: process.env.FRONTEND_URL,
   trust_proxy: Number(process.env.TRUST_PROXY) || 0,
 

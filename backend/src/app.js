@@ -1,6 +1,5 @@
 import express from 'express';
 import cors from 'cors';
-import session from 'express-session';
 import env from './config/env.js';
 import prisma from './lib/prisma.js';
 import { errorHandler, notFoundHandler } from './middleware/error.middleware.js';
@@ -21,22 +20,17 @@ app.use(cors({
   credentials: true,
 }));
 
-// Middleware
+// Middleware. JSON bodies only: an HTML form on another site can't send JSON (B5).
 app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
 
-// Session configuration
-app.use(session({
-  secret: env.session_secret,
-  resave: false,
-  saveUninitialized: false,
-  cookie: {
-    httpOnly: true,
-    secure: env.is_production,
-    sameSite: env.is_production ? 'none' : 'lax',
-    maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
-  },
-}));
+// CSRF (B5): the sign-in cookie is SameSite=Lax; on top of that, refuse state changes that a
+// browser sent from another origin. Requests without an Origin header (not from a browser) pass.
+const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
+app.use((req, res, next) => {
+  const origin = req.get('Origin');
+  if (SAFE_METHODS.has(req.method) || !origin || origin === new URL(env.frontend_url).origin) return next();
+  res.status(403).json({ message: 'Forbidden: request from another site' });
+});
 
 // Health check: liveness for the ALB target group, so a slow database doesn't cycle the tasks.
 app.get('/health', (req, res) => {

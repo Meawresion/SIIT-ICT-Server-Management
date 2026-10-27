@@ -9,8 +9,17 @@ import { CreateRequestSchema, UpdateRequestSchema, UserProfileSchema } from '../
 import { parseId, requestView } from '../utils/db-mapping.js';
 import { setUserRoleByEmail } from './role.service.js';
 import { requireReviewer } from '../middleware/auth.middleware.js';
+import env from '../config/env.js';
+import { signToken } from '../auth/token.js';
 
 after(() => prisma.$disconnect());
+// A request carrying a valid sign-in token for the account (the token holds only the id).
+function signedIn(account_id) {
+  env.jwt_secret ||= 'unit-test-secret-not-used-anywhere-else';
+  const now = Math.floor(Date.now() / 1000);
+  const token = signToken({ sub: String(account_id), iat: now, exp: now + 600, auth_time: now }, env.jwt_secret);
+  return { headers: { cookie: `auth=${token}` }, get: () => undefined };
+}
 function mockMethod(t, object, key, implementation) {
   const original = object[key];
   object[key] = implementation;
@@ -124,12 +133,12 @@ test('review filters use new enums and student relation', async t => {
   await assert.rejects(getAllRequests({ status: 'bad' }), { statusCode: 400 });
 });
 
-test('review authorization checks the database rather than a stale session role', async t => {
+test('review authorization checks the role in the database on every request', async t => {
   mockMethod(t, prisma.user, 'findUnique', async () => ({ uid: 1, role: 'Student' }));
-  const req = { session: { account_id: 1, role: 'reviewer' } };
+  const req = signedIn(1);
   const res = { status(code) { assert.equal(code, 403); return this; }, json(body) { assert.match(body.message, /Reviewer/); } };
   await requireReviewer(req, res, () => assert.fail('must deny access'));
-  assert.equal(req.session.role, 'user');
+  assert.equal(req.auth.role, 'user');
 });
 
 test('validation rejects invalid IDs, database field overflow, and invalid dates', () => {
@@ -166,11 +175,11 @@ test('server role assignment requires a Google-created account', async () => {
 
 test('review authorization accepts database approvers without a student profile', async t => {
   mockMethod(t, prisma.user, 'findUnique', async () => ({ uid: 2, role: 'Approver' }));
-  const req = { session: { account_id: 2, role: 'user' } };
+  const req = signedIn(2);
   let allowed = false;
   const res = { status() { assert.fail('should allow'); } };
   await requireReviewer(req, res, () => { allowed = true; });
   assert.equal(allowed, true);
-  assert.equal(req.session.role, 'reviewer');
-  assert.equal(req.session.user_id, null);
+  assert.equal(req.auth.role, 'reviewer');
+  assert.equal(req.auth.user_id, null);
 });

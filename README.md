@@ -67,7 +67,7 @@ A full-stack web application for SIIT students to submit ICT/resource requests a
    ```bash
    # One env file for the whole stack: mysql, backend, frontend and activemq
    cp .env.example .env
-   # Edit .env: Google OAuth credentials, database passwords, SESSION_SECRET
+   # Edit .env: Google OAuth credentials, database passwords, JWT_SECRET
    ```
    Each container gets only its own keys (see `docker-compose.yml`). If you change
    `MYSQL_USER` or `MYSQL_PASSWORD` later, recreate the database volume
@@ -278,7 +278,7 @@ The backend stops at start if a required key is missing.
 | Service | Keys |
 |---|---|
 | mysql | `MYSQL_ROOT_PASSWORD` (admin), `MYSQL_DATABASE`, `MYSQL_USER` and `MYSQL_PASSWORD` (the app user) |
-| backend | `NODE_ENV`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_CALLBACK_URL`, `SESSION_SECRET`, `FRONTEND_URL`, `STUDENT_EMAIL_DOMAIN`, `STUDENT_ID_DIGITS`, `DEGREE_EMAIL_PREFIXES`, `STAFF_EMAIL_DOMAINS` |
+| backend | `NODE_ENV`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_CALLBACK_URL`, `JWT_SECRET`, `SESSION_IDLE_MINUTES`, `SESSION_MAX_HOURS`, `FRONTEND_URL`, `STUDENT_EMAIL_DOMAIN`, `STUDENT_ID_DIGITS`, `DEGREE_EMAIL_PREFIXES`, `STAFF_EMAIL_DOMAINS` |
 | frontend | `VITE_API_URL`, `VITE_CONTACT_EMAIL` |
 | activemq | `ARTEMIS_USER`, `ARTEMIS_PASSWORD` |
 
