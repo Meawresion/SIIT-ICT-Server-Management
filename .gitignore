@@ -41,3 +41,6 @@ Thumbs.db
 *.njsproj
 *.sln
 *.sw?
+
+# Infra settings for this machine (infra/config.example.env is the template)
+infra/config.env
