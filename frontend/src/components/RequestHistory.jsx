@@ -13,6 +13,8 @@ const ACTION_LABEL = {
   REVOKED: 'Access removed',
   REVOKE_FAILED: 'Access removal failed',
   RETRIED: 'Setup retried',
+  REMINDED: 'End-date reminder sent',
+  EXPIRED: 'End date passed',
 };
 const VPN_NOTE = { created: 'New VPN account.', reactivated: 'VPN account re-enabled.', kept: 'Existing VPN account kept.', disabled: 'VPN account disabled.' };
 
@@ -61,6 +63,9 @@ export default function RequestHistory({ events, mine }) {
               )}
               {e.action === 'PROVISIONED' && mine && <p className="timeline-note">Your login details were emailed to your SIIT address.</p>}
               {e.details?.gpu_node && !mine && <p className="timeline-note">GPU node <span className="mono">{e.details.gpu_node}</span>{VPN_NOTE[e.details.vpn] ? `. ${VPN_NOTE[e.details.vpn]}` : ''}</p>}
+              {e.action === 'EXPIRED' && (
+                <p className="timeline-note">{e.details?.job_id ? 'Access is being turned off.' : mine ? 'SIIT ICT will turn off the access.' : 'Set up by hand: turn off the access, then mark it Completed.'}</p>
+              )}
               {e.details?.backfilled && <p className="timeline-note muted">From records made before the history was kept.</p>}
             </li>
           );

@@ -79,6 +79,21 @@ Parameters:
   SessionMaxHours:
     Type: Number
     Default: 12
+  # Scheduler (FR-8.2, FR-8.4): end-date reminders, ended requests, dead letters.
+  SchedulerIntervalSeconds:
+    Type: Number
+    Default: 300
+    MinValue: 30
+  ExpiryReminderDays:
+    Type: Number
+    Default: 3
+    MinValue: 0
+    MaxValue: 60
+    Description: Days before the end date the student is reminded; 0 = no reminders
+  SiteTimeZone:
+    Type: String
+    Default: Asia/Bangkok
+    Description: The time zone request dates are in
   LogRetentionDays:
     Type: Number
     Default: 14
@@ -359,6 +374,12 @@ Resources:
               Value: !Ref SessionIdleMinutes
             - Name: SESSION_MAX_HOURS
               Value: !Ref SessionMaxHours
+            - Name: SCHEDULER_INTERVAL_SEC
+              Value: !Ref SchedulerIntervalSeconds
+            - Name: EXPIRY_REMINDER_DAYS
+              Value: !Ref ExpiryReminderDays
+            - Name: SITE_TIME_ZONE
+              Value: !Ref SiteTimeZone
             # Automatic provisioning through acc-prov-vm (plan §2), only with a queues stack.
             - !If
               - HasQueues
@@ -381,6 +402,18 @@ Resources:
               - Name: SQS_RESULT_QUEUE_URL
                 Value:
                   Fn::ImportValue: !Sub '${QueuesStack}-ResultQueueUrl'
+              - !Ref AWS::NoValue
+            - !If
+              - HasQueues
+              - Name: SQS_REQUEST_DLQ_URL
+                Value:
+                  Fn::ImportValue: !Sub '${QueuesStack}-RequestDeadLetterQueueUrl'
+              - !Ref AWS::NoValue
+            - !If
+              - HasQueues
+              - Name: SQS_RESULT_DLQ_URL
+                Value:
+                  Fn::ImportValue: !Sub '${QueuesStack}-ResultDeadLetterQueueUrl'
               - !Ref AWS::NoValue
             - !If
               - HasQueues

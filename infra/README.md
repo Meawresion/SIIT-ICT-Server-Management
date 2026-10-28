@@ -29,6 +29,10 @@ ECS backend ──job──▶ SQS provision-requests (+DLQ) ──▶ acc-prov-
             ◀─result─ SQS provision-results  (+DLQ) ◀──┘
 ```
 
+The backend's scheduler (every `SCHEDULER_INTERVAL_SEC`, in one task at a time) reads both
+dead-letter queues and fails the jobs it finds there, so the approvers are told (FR-6.7). It also
+sends the end-date reminders and removes access when a request ends (FR-8.2, FR-8.4).
+
 ## Stacks (`cloudformation/`)
 
 | Stack | Template | Contents |
@@ -70,7 +74,10 @@ checks:
 - `check-db.js` passes in a one-off task;
 - provisioning through the real queues: a one-off task (`check-provisioning.js`) approves a GPU
   request, the backend service sends the job, `fake-site.mjs` plays acc-prov-vm and answers, the
-  request becomes On Use; then the same for the removal.
+  request becomes On Use; then the same for the removal;
+- the service's scheduler (every 30 s here, `check-scheduler.js`): a GPU request that ended gets
+  its removal and is completed, a VM request gets its reminder and then the approvers' notice, and
+  a job put into the request dead-letter queue is failed.
 
 Then it deletes the test stacks (`web`, `app`, `queues`, `data`, `test-google`), even after a
 failure or Ctrl+C, and lists anything left behind (stacks, ECS services and tasks, load
@@ -98,6 +105,7 @@ only uploads the images whose code changed. The smoke test creates them when the
   Manager). Give the `BackendPublicKey` output to acc-prov-vm (`MSG_PEER_PUBLIC_KEYS` in its
   `.env`), and put acc-prov-vm's public bundle into `SITE_PUBLIC_KEYS` in `config.env`. Both are
   public. A new key pair: raise `MESSAGE_KEY_GENERATION` and redeploy queues and app.
+- Scheduler: `SCHEDULER_INTERVAL_SEC`, `EXPIRY_REMINDER_DAYS` and `SITE_TIME_ZONE` in `config.env`.
 - Set once by you: the Google OAuth client, with `scripts/set-google-secret.sh`.
 - The backend gets plain values from the task definition and secret ones from Secrets Manager;
   ECS reads them when a task starts.

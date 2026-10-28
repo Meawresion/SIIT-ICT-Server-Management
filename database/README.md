@@ -117,7 +117,7 @@ cascade), so the log stays complete.
 |--------|-------|
 | `eid` | Unsigned auto-increment primary key; orders the events of a request |
 | `rid` | The request, references `Request.rid` |
-| `action` | `CREATED`, `EDITED`, `APPROVED`, `REJECTED`, `ACTIVATED`, `COMPLETED`; from provisioning: `PROVISIONED`, `PROVISION_FAILED`, `REVOKED`, `REVOKE_FAILED` (system), `RETRIED` (approver) |
+| `action` | `CREATED`, `EDITED`, `APPROVED`, `REJECTED`, `ACTIVATED`, `COMPLETED`; from provisioning: `PROVISIONED`, `PROVISION_FAILED`, `REVOKED`, `REVOKE_FAILED` (system), `RETRIED` (approver); from the scheduler: `REMINDED` (end-date reminder sent), `EXPIRED` (the end date passed) |
 | `from_status` | Status before the event; `NULL` when the request is created |
 | `to_status` | Status after the event (the same as `from_status` for an edit) |
 | `actor_uid` | Who acted, references `User.uid`; `NULL` for the system (provisioning results, scheduler) |
@@ -141,7 +141,7 @@ insert and update jobs, but not delete them.
 | `job_id` | UUID primary key; also the message `jti` |
 | `rid` | The request, references `Request.rid` (no cascade) |
 | `action` | `CREATE` or `REVOKE` |
-| `status` | `Queued` → `Sent` → `Succeeded` or `Failed`. A send that fails stays `Queued` and is retried with backoff |
+| `status` | `Queued` → `Sent` → `Succeeded` or `Failed`. A send that fails stays `Queued` and is retried with backoff. The scheduler fails a `Sent` job that was dead-lettered or got no answer before it expired |
 | `payload` | The job as sent (username, name, email, node, period, links); never a password |
 | `attempts` | Publish attempts |
 | `last_error` | The last publish error, or the error acc-prov-vm reported |
@@ -151,6 +151,18 @@ insert and update jobs, but not delete them.
 
 The node a GPU request was given is also kept in `request.extra_details.gpu_node`, so the
 `REVOKE` goes to the same node.
+
+### Scheduler Lease
+
+The backend's scheduler (FR-8.4) runs in every backend task; a pass runs only in the task that
+holds the lease, so two tasks never send the same reminder or REVOKE. The holder renews it on
+every pass, and another task takes over once it lapses. The app user may select and update it.
+
+| Column | Notes |
+|--------|-------|
+| `name` | `scheduler` (one row, created with the table) |
+| `owner` | The backend task holding the lease |
+| `lease_until` | When the lease lapses |
 
 ## Enum Values
 
@@ -413,8 +425,9 @@ docker compose exec -T mysql sh -c 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" "$MYSQ
 | `2026-10-25-user-advisor-name.sql` | Adds `user.advisor_name` |
 | `2026-10-28-request-event.sql` | Adds the `request_event` audit log, its triggers and the logging procedures; backfills each request's creation and latest review. Then run `privileges.sh` once (below). |
 | `2026-10-28-provision-job.sql` | Adds the `provision_job` outbox. Then run `privileges.sh` again (below). |
+| `2026-10-28-scheduler-lease.sql` | Adds the `scheduler_lease` table. Then run `privileges.sh` again (below). |
 
-After `2026-10-28-request-event.sql` and `2026-10-28-provision-job.sql`, set the app user's rights (recreate the mysql container first, so
+After `2026-10-28-request-event.sql`, `2026-10-28-provision-job.sql` and `2026-10-28-scheduler-lease.sql`, set the app user's rights (recreate the mysql container first, so
 `privileges.sh` is mounted: `docker compose up -d mysql`):
 
 ```bash

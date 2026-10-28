@@ -110,6 +110,12 @@ model provision_job {
   @@index([rid, created_at], map: "provision_job_rid_index")
 }
 
+model scheduler_lease {
+  name        String   @id @db.VarChar(32)
+  owner       String?  @db.VarChar(100)
+  lease_until DateTime @db.DateTime(3)
+}
+
 enum provision_job_action {
   CREATE
   REVOKE

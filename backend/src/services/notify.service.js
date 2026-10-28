@@ -1,5 +1,6 @@
-// Status emails from the backend (S2, FR-4.3): the student hears about every status change, and
-// approvers hear about a failed setup. acc-prov-vm still sends the login details itself (S1), so
+// Status emails from the backend (S2, FR-4.3): the student hears about every status change and
+// before the end date (FR-8.2), and approvers hear about a failed setup (FR-6.7) and about an ended
+// request they must turn off by hand. acc-prov-vm still sends the login details itself (S1), so
 // these emails never carry credentials.
 //
 // Sent after the change is committed, best effort: a mail failure is logged and never undoes or
@@ -56,6 +57,14 @@ export function studentEmail({ action, from, to, comment, request, firstFailure 
         `${what[0].toUpperCase()}${what.slice(1)} is completed.`,
         ...(automated ? ['Your access to this resource has been turned off. Your files are kept.'] : []),
       ] };
+    case 'REMINDED':
+      return { subject: `Request ${formatId(request.rid)}: access ends on ${day(request.end_date)}`, lines: [
+        `Your access for ${what} ends at the end of ${day(request.end_date)}.`,
+        automated
+          ? 'After that day your login is turned off. Your files are kept, but copy anything you need before then.'
+          : 'SIIT ICT will turn off the access after that day.',
+        'If you need more time, contact SIIT ICT before then.',
+      ] };
     case 'PROVISION_FAILED':
       // Once per request; retries don't send it again.
       return firstFailure ? { subject: `Request ${formatId(request.rid)}: setup delayed`, lines: [
@@ -85,8 +94,8 @@ export function createNotifier(config, { transport, log = () => {}, portalUrl = 
     log('mail.sent', { subject, messageId: info.messageId });
   }
 
-  // event: { rid, action, from, to, comment } (statuses as stored, e.g. 'On_Use').
-  async function requestEvent({ rid, action, from, to, comment }) {
+  // event: { rid, action, from, to, comment, details? } (statuses as stored, e.g. 'On_Use').
+  async function requestEvent({ rid, action, from, to, comment, details }) {
     if (!transporter) {
       log('mail.skipped', { rid, action, reason: 'SMTP is not configured' });
       return;
@@ -104,8 +113,18 @@ export function createNotifier(config, { transport, log = () => {}, portalUrl = 
       for (const a of approvers) {
         await send({ to: a.siitemail, fullName: a.fullname, subject: `${kind} failed for request ${formatId(rid)}`, path: '/history', lines: [
           `${kind} failed for ${student.fullname}'s request ${formatId(rid)} (${RESOURCE_LABEL[request.resource_type]}).`,
-          `Error from the SIIT site: ${comment ?? 'not given'}`,
+          `Error: ${comment ?? 'not given'}`,
           'Open the request to retry, or set it up by hand.',
+        ] });
+      }
+    }
+    if (action === 'EXPIRED' && details?.by_hand) {
+      // D7 for a request set up by hand (S8): the system can't turn it off.
+      const approvers = await prisma.user.findMany({ where: { role: 'Approver' } });
+      for (const a of approvers) {
+        await send({ to: a.siitemail, fullName: a.fullname, subject: `Request ${formatId(rid)} ended: turn off the access`, path: '/history', lines: [
+          `${student.fullname}'s request ${formatId(rid)} (${RESOURCE_LABEL[request.resource_type]}) ended on ${day(request.end_date)}.`,
+          'It was set up by hand: turn off the access, then mark the request Completed.',
         ] });
       }
     }

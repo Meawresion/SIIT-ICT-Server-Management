@@ -71,7 +71,9 @@ deploy_app() {
     "DesiredCount=${BACKEND_DESIRED_COUNT:-1}" \
     "StudentEmailDomain=$STUDENT_EMAIL_DOMAIN" "StudentIdDigits=$STUDENT_ID_DIGITS" \
     "DegreeEmailPrefixes=$DEGREE_EMAIL_PREFIXES" "StaffEmailDomains=$STAFF_EMAIL_DOMAINS" \
-    "SessionIdleMinutes=${SESSION_IDLE_MINUTES:-30}" "SessionMaxHours=${SESSION_MAX_HOURS:-12}"     "${provisioning[@]}"
+    "SessionIdleMinutes=${SESSION_IDLE_MINUTES:-30}" "SessionMaxHours=${SESSION_MAX_HOURS:-12}" \
+    "SchedulerIntervalSeconds=${SCHEDULER_INTERVAL_SEC:-300}" "ExpiryReminderDays=${EXPIRY_REMINDER_DAYS:-3}" \
+    "SiteTimeZone=${SITE_TIME_ZONE:-Asia/Bangkok}" "${provisioning[@]}"
   echo "Backend: $(stack_output "$STACK_APP" PublicUrl)"
 }
 
