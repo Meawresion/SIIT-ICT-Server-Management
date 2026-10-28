@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import Modal from './Modal.jsx';
 import StatusBadge from './StatusBadge.jsx';
 import RequestHistory from './RequestHistory.jsx';
+import ProvisioningPanel from './ProvisioningPanel.jsx';
 import { useAuth } from '../auth/context.js';
 import { createRequest, getRequest, updateRequest } from '../api/requests.js';
 import {
@@ -10,6 +11,7 @@ import {
   completeRequest,
   getRequest as getReviewRequest,
   rejectRequest,
+  retryProvisioning,
 } from '../api/reviewer.js';
 import { saveDraft } from '../api/drafts.js';
 import { RESOURCE_TYPES, STATUS_HELP, STATUS_LABEL, degreeLabel } from '../constants.js';
@@ -109,6 +111,17 @@ export default function RequestFormModal({ mode, requestId, draft, onClose, onDo
     };
   }, [requestId, mode]);
 
+  // While the automatic setup runs, keep the approver's view of it current.
+  const lastJob = detail?.provisioning?.jobs?.at(-1);
+  const setupRunning = mode === 'review' && ['Queued', 'Sent'].includes(lastJob?.status);
+  useEffect(() => {
+    if (!setupRunning) return undefined;
+    const timer = setInterval(() => {
+      getReviewRequest(requestId).then(setDetail).catch(() => {});
+    }, 5000);
+    return () => clearInterval(timer);
+  }, [setupRunning, requestId]);
+
   // The question sits above the form; the Approve button is at the bottom.
   useEffect(() => {
     if (confirmingOverlap) overlapRef.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
@@ -166,6 +179,19 @@ export default function RequestFormModal({ mode, requestId, draft, onClose, onDo
     }
     setBusy(action);
     setApiError('');
+    if (action === 'retry') {
+      // D4: a new job; the modal stays open to show it.
+      try {
+        await retryProvisioning(requestId);
+        setDetail(await getReviewRequest(requestId));
+        notifyRequestsChanged();
+      } catch (err) {
+        setApiError(err.message);
+      } finally {
+        setBusy('');
+      }
+      return;
+    }
     try {
       const res = action === 'approve'
         ? await approveRequest(requestId, comment.trim(), confirmingOverlap)
@@ -209,6 +235,12 @@ export default function RequestFormModal({ mode, requestId, draft, onClose, onDo
   const title = mode === 'new' ? 'Resource Request Form' : `Request ${formatId(requestId)}`;
   const status = detail?.status;
   const overlaps = (mode === 'review' && status === 'PENDING' && detail?.overlaps) || [];
+  const lastCreate = detail?.provisioning?.jobs?.filter((j) => j.action === 'CREATE').at(-1);
+  const retryButton = (
+    <button type="button" className="btn btn-primary" onClick={() => review('retry')} disabled={Boolean(busy)}>
+      {busy === 'retry' ? 'Retrying…' : lastJob?.action === 'REVOKE' ? 'Retry removal' : 'Retry setup'}
+    </button>
+  );
 
   let footer;
   if (mode === 'new') {
@@ -250,6 +282,26 @@ export default function RequestFormModal({ mode, requestId, draft, onClose, onDo
         </button>
       </>
     );
+  } else if (mode === 'review' && status === 'APPROVED' && lastCreate?.status === 'Failed') {
+    // Retry, or set it up by hand and mark it active.
+    footer = (
+      <>
+        <button type="button" className="btn btn-secondary" onClick={() => review('activate')} disabled={Boolean(busy)}>
+          {busy === 'activate' ? 'Updating…' : 'Set up by hand: Mark as Active'}
+        </button>
+        {retryButton}
+      </>
+    );
+  } else if (mode === 'review' && status === 'APPROVED' && lastCreate) {
+    // Becomes active by itself when the setup succeeds (D10).
+    footer = <button type="button" className="btn btn-secondary" onClick={onClose}>Close</button>;
+  } else if (mode === 'review' && lastJob?.action === 'REVOKE' && lastJob.status === 'Failed') {
+    footer = (
+      <>
+        <button type="button" className="btn btn-secondary" onClick={onClose}>Close</button>
+        {retryButton}
+      </>
+    );
   } else if (mode === 'review' && status === 'APPROVED') {
     footer = (
       <button type="button" className="btn btn-primary" onClick={() => review('activate')} disabled={Boolean(busy)}>
@@ -280,6 +332,8 @@ export default function RequestFormModal({ mode, requestId, draft, onClose, onDo
               {detail.created_at && <span className="muted">Submitted {formatDateTime(detail.created_at)}</span>}
             </div>
           )}
+
+          {mode === 'review' && <ProvisioningPanel provisioning={detail?.provisioning} />}
 
           {overlaps.length > 0 && (
             <div ref={overlapRef} className={`alert alert-warning ${confirmingOverlap ? 'is-confirming' : ''}`} role={confirmingOverlap ? 'alert' : 'status'}>

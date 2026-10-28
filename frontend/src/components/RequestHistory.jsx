@@ -8,7 +8,13 @@ const ACTION_LABEL = {
   ACTIVATED: 'Marked as active',
   COMPLETED: 'Completed',
   REOPENED: 'Reopened',
+  PROVISIONED: 'Access set up',
+  PROVISION_FAILED: 'Setup failed',
+  REVOKED: 'Access removed',
+  REVOKE_FAILED: 'Access removal failed',
+  RETRIED: 'Setup retried',
 };
+const VPN_NOTE = { created: 'New VPN account.', reactivated: 'VPN account re-enabled.', kept: 'Existing VPN account kept.', disabled: 'VPN account disabled.' };
 
 const FIELD_LABEL = {
   purpose: 'project title',
@@ -26,7 +32,7 @@ const FIELD_LABEL = {
 // Students get the actor's role only; approvers also get the name (the API decides).
 function actorLabel(actor, mine) {
   if (actor.name) return actor.name;
-  if (actor.role === 'System') return 'System';
+  if (actor.role === 'System') return 'the system';
   if (actor.role === 'Approver') return 'SIIT ICT approver';
   return mine ? 'You' : 'Student';
 }
@@ -53,6 +59,8 @@ export default function RequestHistory({ events, mine }) {
               {confirmed?.length > 0 && (
                 <p className="timeline-note">Approved despite overlapping {confirmed.length === 1 ? 'request' : 'requests'} {confirmed.map(formatId).join(', ')}</p>
               )}
+              {e.action === 'PROVISIONED' && mine && <p className="timeline-note">Your login details were emailed to your SIIT address.</p>}
+              {e.details?.gpu_node && !mine && <p className="timeline-note">GPU node <span className="mono">{e.details.gpu_node}</span>{VPN_NOTE[e.details.vpn] ? `. ${VPN_NOTE[e.details.vpn]}` : ''}</p>}
               {e.details?.backfilled && <p className="timeline-note muted">From records made before the history was kept.</p>}
             </li>
           );
