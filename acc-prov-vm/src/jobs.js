@@ -1,10 +1,10 @@
-// Job handlers: what CREATE and REVOKE do for a GPU request (runbooks in plan.md §6b).
+// Job handlers: what CREATE, REVOKE and EXTEND do for a GPU request (runbooks in plan.md §6b).
 //
 // Job payload (from the backend, inside the envelope; never contains passwords):
-//   { action: 'CREATE' | 'REVOKE', resource: 'GPU_SERVER',
+//   { action: 'CREATE' | 'REVOKE' | 'EXTEND', resource: 'GPU_SERVER',
 //     student: { username, fullName, email },
 //     gpuNode: '<node name from gpu-nodes.json>',
-//     period: { start, end },                          CREATE only
+//     period: { start, end },                          CREATE and EXTEND (the new end date)
 //     links: { ovpnProfileUrl, manualUrl },            CREATE only
 //     revokeVpn: boolean }                             REVOKE only (no other active request)
 //
@@ -34,7 +34,7 @@ function check(fn) {
 
 export function parseJobPayload(p) {
   if (!p || typeof p !== 'object') reject('payload must be an object');
-  if (!['CREATE', 'REVOKE'].includes(p.action)) reject(`unsupported action ${p.action}`);
+  if (!['CREATE', 'REVOKE', 'EXTEND'].includes(p.action)) reject(`unsupported action ${p.action}`);
   if (!RESOURCES.includes(p.resource)) reject(`unsupported resource ${p.resource}`);
   const s = p.student ?? {};
   check(() => assertUsername(s.username));
@@ -48,6 +48,10 @@ export function parseJobPayload(p) {
     for (const k of ['ovpnProfileUrl', 'manualUrl']) {
       if (!/^https?:\/\/\S+$/.test(p.links?.[k] ?? '')) reject(`links.${k} must be an http(s) URL`);
     }
+  } else if (p.action === 'EXTEND') {
+    check(() => assertIsoDate(p.period?.start));
+    check(() => assertIsoDate(p.period?.end));
+    if (p.period.end < p.period.start) reject('period.end is before period.start');
   } else if (typeof p.revokeVpn !== 'boolean') {
     reject('revokeVpn must be true or false');
   }
@@ -160,9 +164,35 @@ export function createJobHandlers(deps) {
     return { ok: true, action: 'REVOKE', resource: p.resource, username, gpuNode: p.gpuNode, gpu, vpn };
   }
 
+  // FR-8.3: a later end date. The VPN account's expiration moves to it, never earlier (the account
+  // is shared by the student's requests). Linux accounts carry no expiration (REVOKE locks them
+  // at the end), so nothing changes on the GPU node. A missing or disabled VPN account is reported,
+  // not created or enabled: that is CREATE's job.
+  async function extend(p) {
+    const { username, fullName } = p.student;
+    let vpn = 'skipped';
+    if (deps.pfsenseEnabled) {
+      try {
+        vpn = await deps.withPfSense(async (pf) => {
+          const state = await pf.getUserState(username);
+          if (!state.exists) return 'missing';
+          if (state.disabled) return 'disabled';
+          if (state.expires === null || state.expires >= p.period.end) return 'kept';
+          await pf.setExpiration({ username, expires: p.period.end, fullName });
+          return 'extended';
+        });
+      } catch (err) {
+        if (err instanceof PfSenseIdentityError) reject(`VPN account ${username} belongs to a different full name`);
+        throw err;
+      }
+    }
+    log('job.extended', { user: username, vpn, end: p.period.end });
+    return { ok: true, action: 'EXTEND', resource: p.resource, username, gpuNode: p.gpuNode, vpn };
+  }
+
   return {
     run(payload, ctx) {
-      return payload.action === 'CREATE' ? create(payload, ctx) : revoke(payload, ctx);
+      return { CREATE: create, REVOKE: revoke, EXTEND: extend }[payload.action](payload, ctx);
     },
   };
 }

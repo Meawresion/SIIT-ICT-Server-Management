@@ -8,7 +8,7 @@ Runs at the SIIT resource site, behind pfSense. When a GPU or Big Data request i
 - HUE user (planned)
 - **Messaging:** signed + encrypted envelopes (`src/envelope.js`) over local ActiveMQ (`src/amqp.js`) or AWS SQS (`src/sqs.js`)
 - **Student email** with credentials and links, via SMTP (`src/mail.js`)
-- **Worker** (`npm start`): runs CREATE / REVOKE jobs from the queue (`src/worker.js`, `src/jobs.js`)
+- **Worker** (`npm start`): runs CREATE / REVOKE / EXTEND jobs from the queue (`src/worker.js`, `src/jobs.js`)
 
 ## Setup
 
@@ -198,6 +198,7 @@ Setup, from the stack outputs:
 |-----|--------------|
 | `CREATE` (GPU) | 1. Generate a password (`PASSWORD_LENGTH`; letters and digits, no look-alikes). 2. **VPN (D15)**, if `PFSENSE_ENABLED=true`: create the account if it's missing; keep an active one, extending its expiration only if it was set; re-activate a disabled or expired one with the new password. 3. GPU account and conda kernel on the named node. 4. Both emails, **last**. |
 | `REVOKE` (GPU) | Lock the Linux account. Disable the VPN account only when `revokeVpn` is true (the student has no other active request). |
+| `EXTEND` (GPU) | A later end date (FR-8.3): move the VPN account's expiration to `period.end`, never earlier, after checking its full name. A missing or disabled VPN account is reported (`vpn`), not created or enabled. Nothing changes on the GPU node: Linux accounts have no expiration, `REVOKE` locks them at the end. |
 
 - **Retries and failures:**
   - A transient failure is retried through redelivery, up to `WORKER_MAX_ATTEMPTS`.

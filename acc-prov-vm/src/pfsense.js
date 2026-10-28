@@ -221,10 +221,11 @@ export class PfSenseSession {
     this.#log('pfsense.setPassword', { user: username });
   }
 
-  async setExpiration({ username, expires }) {
+  // fullName (optional): checked on the edit page first, like setPassword.
+  async setExpiration({ username, expires, fullName }) {
     assertUsername(username);
     const pfExpires = toPfDate(expires);
-    await this.#requireEdit(username);
+    await this.#requireEdit(username, { fullName });
     await this.#page.locator('#expires').fill(pfExpires);
     await this.#save();
     if ((await this.getUserState(username)).expires !== expires) {
