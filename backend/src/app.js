@@ -18,6 +18,8 @@ if (env.trust_proxy) app.set('trust proxy', env.trust_proxy);
 app.use(cors({
   origin: env.frontend_url,
   credentials: true,
+  // The CSV export's file name, readable by the page when it is on another origin (local dev).
+  exposedHeaders: ['Content-Disposition'],
 }));
 
 // Middleware. JSON bodies only: an HTML form on another site can't send JSON (B5).

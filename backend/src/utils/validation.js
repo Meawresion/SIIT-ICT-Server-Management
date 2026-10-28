@@ -40,6 +40,8 @@ const RequestFields = z.object({
   ),
   impact_score: z.number().int().min(1).max(10),
   supervisor_confirmation: z.enum(['CONFIRMED', 'NOT_CONFIRMED']),
+  // FR-3.1: e.g. GPU memory, software, dataset size.
+  technical_requirements: z.string().trim().max(2000).optional(),
 });
 
 export const CreateRequestSchema = RequestFields.refine(
@@ -54,6 +56,12 @@ export const UpdateRequestSchema = RequestFields.partial().refine(
   data => !data.estimated_start_date || !data.estimated_end_date || new Date(data.estimated_end_date) >= new Date(data.estimated_start_date),
   { message: 'End date must be after or equal to start date', path: ['estimated_end_date'] }
 );
+
+// FR-8.3: a later end date for a request in use.
+export const ExtensionRequestSchema = z.object({
+  end_date: z.string().regex(/^d{4}-d{2}-d{2}$/, 'Pick a date').refine(d => !isNaN(Date.parse(d)), 'Invalid date'),
+  reason: z.string().trim().min(1, 'Say why you need more time').max(1000),
+});
 
 export const ReviewRequestSchema = z.object({
   review_comment: z.string().min(1, 'Review comment is required'),

@@ -117,7 +117,7 @@ cascade), so the log stays complete.
 |--------|-------|
 | `eid` | Unsigned auto-increment primary key; orders the events of a request |
 | `rid` | The request, references `Request.rid` |
-| `action` | `CREATED`, `EDITED`, `APPROVED`, `REJECTED`, `ACTIVATED`, `COMPLETED`; from provisioning: `PROVISIONED`, `PROVISION_FAILED`, `REVOKED`, `REVOKE_FAILED` (system), `RETRIED` (approver); from the scheduler: `REMINDED` (end-date reminder sent), `EXPIRED` (the end date passed) |
+| `action` | `CREATED`, `EDITED`, `APPROVED`, `REJECTED`, `ACTIVATED`, `COMPLETED`; from provisioning: `PROVISIONED`, `PROVISION_FAILED`, `REVOKED`, `REVOKE_FAILED` (system), `RETRIED` (approver); from the scheduler: `REMINDED` (end-date reminder sent), `EXPIRED` (the end date passed); extensions (FR-8.3): `EXTENSION_REQUESTED` (student), `EXTENSION_APPROVED`, `EXTENSION_REJECTED` (approver), `EXTENDED`, `EXTEND_FAILED` (system) |
 | `from_status` | Status before the event; `NULL` when the request is created |
 | `to_status` | Status after the event (the same as `from_status` for an edit) |
 | `actor_uid` | Who acted, references `User.uid`; `NULL` for the system (provisioning results, scheduler) |
@@ -140,7 +140,7 @@ insert and update jobs, but not delete them.
 |--------|-------|
 | `job_id` | UUID primary key; also the message `jti` |
 | `rid` | The request, references `Request.rid` (no cascade) |
-| `action` | `CREATE` or `REVOKE` |
+| `action` | `CREATE`, `REVOKE` or `EXTEND` (a later end date, FR-8.3) |
 | `status` | `Queued` → `Sent` → `Succeeded` or `Failed`. A send that fails stays `Queued` and is retried with backoff. The scheduler fails a `Sent` job that was dead-lettered or got no answer before it expired |
 | `payload` | The job as sent (username, name, email, node, period, links); never a password |
 | `attempts` | Publish attempts |

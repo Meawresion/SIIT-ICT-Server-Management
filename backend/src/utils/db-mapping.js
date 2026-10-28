@@ -22,6 +22,9 @@ export function requestView(row) {
     project_supervisor_email: row.spv_email, resource_type: reverse(resourceToDb, row.resource_type),
     justification: row.justify, estimated_start_date: row.start_date, estimated_end_date: row.end_date,
     impact_score: extra.impact_score ?? null, supervisor_confirmation: extra.supervisor_confirmation ?? 'NOT_CONFIRMED',
+    technical_requirements: extra.technical_requirements ?? '',
+    // FR-8.3: a pending ask for a later end date, { end_date, reason, requested_at }, or null.
+    extension: extra.extension ?? null,
     review_comment: extra.review_comment ?? null, status: reverse(statusToDb, row.status),
     user: userView(row.user_request_student_uidTouser), reviewed_by: accountView(row.user_request_approver_uidTouser) };
 }
@@ -50,6 +53,7 @@ export function requestResponse(request) {
   return Object.fromEntries([
     'id', 'purpose', 'project_name', 'project_description', 'project_supervisor_name', 'project_supervisor_email',
     'resource_type', 'justification', 'estimated_start_date', 'estimated_end_date', 'impact_score',
-    'supervisor_confirmation', 'status', 'review_comment', 'reviewed_at', 'created_at', 'updated_at', 'events',
+    'supervisor_confirmation', 'technical_requirements', 'extension', 'status', 'review_comment', 'reviewed_at', 'created_at',
+    'updated_at', 'events',
   ].map(key => [key, request[key]]));
 }

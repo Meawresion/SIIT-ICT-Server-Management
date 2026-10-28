@@ -7,6 +7,7 @@
 //   CREATE { action, resource, student: { username, fullName, email }, gpuNode, period: { start, end },
 //            links: { ovpnProfileUrl, manualUrl } }
 //   REVOKE { action, resource, student: { username, fullName }, gpuNode, revokeVpn }
+//   EXTEND { action, resource, student: { username, fullName }, gpuNode, period: { start, end } } (FR-8.3)
 
 import { randomUUID } from 'node:crypto';
 import prisma from '../lib/prisma.js';
@@ -20,7 +21,7 @@ export const AUTOMATED_RESOURCES = ['GPU_SERVER'];
 // D20: the same username on pfSense, Linux and JupyterHub.
 const USERNAME_PREFIX = { Undergraduate: 'st', Master: 'stm', PhD: 'std' };
 const ACTIVE_JOB = ['Queued', 'Sent'];
-const RESULT_EVENT = { CREATE: ['PROVISIONED', 'PROVISION_FAILED'], REVOKE: ['REVOKED', 'REVOKE_FAILED'] };
+const RESULT_EVENT = { CREATE: ['PROVISIONED', 'PROVISION_FAILED'], REVOKE: ['REVOKED', 'REVOKE_FAILED'], EXTEND: ['EXTENDED', 'EXTEND_FAILED'] };
 // The only result fields kept: all non-secret (acc-prov-vm never sends a password).
 const RESULT_FIELDS = ['ok', 'action', 'resource', 'username', 'gpuNode', 'vpn', 'linuxCreated', 'emailed', 'gpu', 'error', 'permanent'];
 const MAX_ERROR_LENGTH = 2000;
@@ -98,6 +99,19 @@ export async function buildRevokeJob(tx, row) {
   return { job_id: randomUUID(), rid: row.rid, action: 'REVOKE', payload };
 }
 
+// FR-8.3: called inside the transaction that approves a later end date (row has the new one).
+// -> the job row data, or null when the request was not set up automatically.
+export async function buildExtendJob(tx, row, config) {
+  const gpu_node = row.extra_details?.gpu_node;
+  if (!isAutomated(row, config) || !gpu_node) return null;
+  const student = await tx.user.findUnique({ where: { uid: row.student_uid } });
+  const payload = {
+    action: 'EXTEND', resource: row.resource_type, student: { username: usernameFor(student), fullName: student.fullname },
+    gpuNode: gpu_node, period: { start: day(row.start_date), end: day(row.end_date) },
+  };
+  return { job_id: randomUUID(), rid: row.rid, action: 'EXTEND', payload };
+}
+
 // Manual Activate stays for automated requests only as a fallback after a failed setup.
 export async function assertManualActivationAllowed(tx, row) {
   const last = await tx.provision_job.findFirst({ where: { rid: row.rid, action: 'CREATE' }, orderBy: { created_at: 'desc' } });
@@ -122,6 +136,9 @@ export async function retryProvisioning(request_id, reviewer_account_id) {
     if (last.action === 'CREATE') {
       if (row.status !== 'Approved') throw httpError('Invalid state transition', 400);
       payload = { ...payload, links: { ovpnProfileUrl: config.links.ovpnProfileUrl, manualUrl: config.links.manualGpuUrl } };
+    } else if (last.action === 'EXTEND') {
+      if (row.status !== 'On_Use') throw httpError('Invalid state transition', 400);
+      payload = { ...payload, period: { start: day(row.start_date), end: day(row.end_date) } };
     } else {
       payload = { ...payload, revokeVpn: !(await keepsVpn(tx, row)) };
     }

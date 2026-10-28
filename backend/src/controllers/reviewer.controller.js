@@ -8,6 +8,8 @@ import {
   completeRequest,
 } from '../services/reviewer.service.js';
 import { retryProvisioning } from '../services/provisioning.service.js';
+import { exportCsv } from '../services/export.service.js';
+import { decideExtension } from '../services/extension.service.js';
 import { ReviewRequestSchema } from '../utils/validation.js';
 
 export async function listRequests(req, res, next) {
@@ -28,6 +30,7 @@ export async function listRequests(req, res, next) {
       status: r.status,
       student_name: r.user.account.full_name,
       student_id: r.user.student_id,
+      extension_asked: Boolean(r.extension),
       created_at: r.created_at,
       reviewed_at: r.reviewed_at,
     })));
@@ -59,6 +62,8 @@ export async function getRequestDetail(req, res, next) {
       estimated_end_date: request.estimated_end_date,
       impact_score: request.impact_score,
       supervisor_confirmation: request.supervisor_confirmation,
+      technical_requirements: request.technical_requirements,
+      extension: request.extension,
       status: request.status,
       review_comment: request.review_comment,
       reviewed_at: request.reviewed_at,
@@ -202,3 +207,28 @@ export async function completeRequestHandler(req, res, next) {
     next(err);
   }
 }
+
+// FR-9.3: GET /api/reviewer/export?type=requests|events&from=YYYY-MM-DD&to=YYYY-MM-DD[&status=ACTIVE]
+export async function exportHandler(req, res, next) {
+  try {
+    const { filename, csv } = await exportCsv(req.query);
+    res.set({ 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': `attachment; filename="${filename}"`, 'Cache-Control': 'no-store' });
+    res.send(csv);
+  } catch (err) {
+    next(err);
+  }
+}
+
+// FR-8.3: { review_comment } -> the request's id, status and end date.
+const extensionHandler = (approve) => async (req, res, next) => {
+  try {
+    const validation = ReviewRequestSchema.safeParse(req.body);
+    if (!validation.success) return res.status(400).json({ message: 'Validation error', errors: validation.error.errors });
+    const request = await decideExtension(parseId(req.params.id), req.auth.account_id, approve, validation.data.review_comment);
+    res.json({ id: request.id, status: request.status, estimated_end_date: request.estimated_end_date });
+  } catch (err) {
+    next(err);
+  }
+};
+export const approveExtensionHandler = extensionHandler(true);
+export const rejectExtensionHandler = extensionHandler(false);

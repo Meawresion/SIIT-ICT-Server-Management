@@ -9,7 +9,8 @@
 //   the approvers like a failed result;
 // - no answer: a Sent job still unanswered after it expired fails the same way.
 // Each action appends a request_event (actor NULL = the system) in the same transaction; the
-// event is also what keeps it from being done twice.
+// event, with the end date it was for, is also what keeps it from being done twice. An approved
+// extension (FR-8.3) moves the end date, so the request is reminded again before the new one.
 
 import { randomBytes } from 'node:crypto';
 import { hostname } from 'node:os';
@@ -47,14 +48,23 @@ export async function releaseLease({ owner = OWNER } = {}) {
   await prisma.$executeRaw`UPDATE scheduler_lease SET lease_until = NOW(3) WHERE name = ${LEASE_NAME} AND owner = ${owner}`;
 }
 
+// The requests matching where that have no event with this action for their current end date.
+async function withoutEvent(where, action) {
+  const rows = await prisma.request.findMany({ where,
+    select: { rid: true, end_date: true, request_event: { where: { action }, select: { details: true } } } });
+  return rows.filter(r => !r.request_event.some(e => e.details?.end_date === day(r.end_date))).map(r => r.rid);
+}
+
 // Appends a system event for an On Use request, unless the request moved on or already has one with
-// this action. work(tx, row) may add to the same transaction and returns extra details.
-// -> the event for notify, or null.
+// this action for its current end date. work(tx, row) may add to the same transaction and returns
+// extra details. -> the event for notify, or null.
 async function systemEvent(rid, action, work = async () => ({})) {
   return prisma.$transaction(async tx => {
     const row = await tx.request.findUnique({ where: { rid } });
-    if (row?.status !== 'On_Use' || await tx.request_event.count({ where: { rid, action } })) return null;
-    const details = { end_date: day(row.end_date), ...(await work(tx, row)) };
+    if (row?.status !== 'On_Use') return null;
+    const end_date = day(row.end_date);
+    if (await tx.request_event.count({ where: { rid, action, details: { path: '$.end_date', equals: end_date } } })) return null;
+    const details = { end_date, ...(await work(tx, row)) };
     await tx.request_event.create({ data: { rid, action, from_status: row.status, to_status: row.status, actor_uid: null, details } });
     return { rid, action, from: row.status, to: row.status, comment: null, details };
   });
@@ -63,13 +73,10 @@ async function systemEvent(rid, action, work = async () => ({})) {
 // FR-8.2. -> number of reminders.
 export async function remindEndingRequests({ today, reminderDays, log = () => {}, notify = () => {} }) {
   if (!reminderDays) return 0;
-  const rows = await prisma.request.findMany({
-    where: { status: 'On_Use', end_date: { gte: midnightUtc(today), lte: midnightUtc(addDays(today, reminderDays)) },
-      request_event: { none: { action: 'REMINDED' } } },
-    select: { rid: true },
-  });
+  const rids = await withoutEvent(
+    { status: 'On_Use', end_date: { gte: midnightUtc(today), lte: midnightUtc(addDays(today, reminderDays)) } }, 'REMINDED');
   let count = 0;
-  for (const { rid } of rows) {
+  for (const rid of rids) {
     try {
       const event = await systemEvent(rid, 'REMINDED');
       if (!event) continue;
@@ -85,12 +92,9 @@ export async function remindEndingRequests({ today, reminderDays, log = () => {}
 
 // D7. provisioning: the provisioning settings, or null when it is off. -> number of requests.
 export async function expireEndedRequests({ today, provisioning, log = () => {}, notify = () => {} }) {
-  const rows = await prisma.request.findMany({
-    where: { status: 'On_Use', end_date: { lt: midnightUtc(today) }, request_event: { none: { action: 'EXPIRED' } } },
-    select: { rid: true },
-  });
+  const rids = await withoutEvent({ status: 'On_Use', end_date: { lt: midnightUtc(today) } }, 'EXPIRED');
   let count = 0;
-  for (const { rid } of rows) {
+  for (const rid of rids) {
     try {
       const event = await systemEvent(rid, 'EXPIRED', async (tx, row) => {
         const job = isAutomated(row, provisioning) ? await buildRevokeJob(tx, row) : null;

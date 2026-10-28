@@ -69,7 +69,7 @@ CREATE TABLE `draft`(
 CREATE TABLE `request_event`(
     `eid` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
     `rid` INT UNSIGNED NOT NULL,
-    `action` VARCHAR(32) NOT NULL COMMENT 'CREATED, EDITED, APPROVED, REJECTED, ACTIVATED, COMPLETED; PROVISIONED, PROVISION_FAILED, REVOKED, REVOKE_FAILED, RETRIED; REMINDED, EXPIRED',
+    `action` VARCHAR(32) NOT NULL COMMENT 'CREATED, EDITED, APPROVED, REJECTED, ACTIVATED, COMPLETED; PROVISIONED, PROVISION_FAILED, REVOKED, REVOKE_FAILED, RETRIED; REMINDED, EXPIRED; EXTENSION_REQUESTED, EXTENSION_APPROVED, EXTENSION_REJECTED, EXTENDED, EXTEND_FAILED',
     `from_status` ENUM('Pending', 'Approved', 'Rejected', 'On Use', 'Completed') NULL COMMENT 'NULL when the request is created',
     `to_status` ENUM('Pending', 'Approved', 'Rejected', 'On Use', 'Completed') NOT NULL,
     `actor_uid` INT UNSIGNED NULL COMMENT 'NULL: the system (provisioning results, scheduler)',
@@ -86,7 +86,7 @@ ALTER TABLE
 CREATE TABLE `provision_job`(
     `job_id` CHAR(36) NOT NULL PRIMARY KEY COMMENT 'UUID; also the message jti, so acc-prov-vm runs each job once',
     `rid` INT UNSIGNED NOT NULL,
-    `action` ENUM('CREATE', 'REVOKE') NOT NULL,
+    `action` ENUM('CREATE', 'REVOKE', 'EXTEND') NOT NULL,
     `status` ENUM('Queued', 'Sent', 'Succeeded', 'Failed') NOT NULL DEFAULT 'Queued',
     `payload` JSON NOT NULL COMMENT 'The job as sent, encrypted at send time; never a password',
     `attempts` INT UNSIGNED NOT NULL DEFAULT 0 COMMENT 'Publish attempts',
