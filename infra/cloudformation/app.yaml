@@ -6,7 +6,7 @@ Description: >-
   entry, over HTTPS with a domain, or over HTTP on its AWS name for smoke tests (no sign-in: the
   cookie needs HTTPS); it sends /api/* and /health to the backend, and the web stack adds the
   frontend for everything else. Plain settings go in the task definition; secret ones come from Secrets
-  Manager (D13).
+  Manager (D13). With a queues stack, the backend also provisions GPU requests through SQS.
 
 Parameters:
   Project:
@@ -82,6 +82,28 @@ Parameters:
   LogRetentionDays:
     Type: Number
     Default: 14
+  QueuesStack:
+    Type: String
+    Default: ''
+    Description: Empty = automatic provisioning off (GPU requests are activated by hand)
+  SitePublicKeys:
+    Type: String
+    Default: ''
+    Description: acc-prov-vm's public key bundle(s), comma-separated (MSG_PEER_PUBLIC_KEYS; public, not secret)
+  GpuNodes:
+    Type: String
+    Default: ''
+    Description: GPU node names as in acc-prov-vm's gpu-nodes.json, comma-separated
+  OvpnProfileUrl:
+    Type: String
+    Default: ''
+  ManualGpuUrl:
+    Type: String
+    Default: ''
+  MessageJobTtlSeconds:
+    Type: Number
+    Default: 259200
+    Description: How long a job stays valid, so it survives the site being offline
 
 Rules:
   CloudFrontNeedsDomain:
@@ -92,6 +114,15 @@ Rules:
           - !Not [!Equals [!Ref CertStack, '']]
           - !Not [!Equals [!Ref CloudFrontPrefixListId, '']]
         AssertDescription: cloudfront mode needs DnsStack, CertStack and CloudFrontPrefixListId
+  ProvisioningNeedsSettings:
+    RuleCondition: !Not [!Equals [!Ref QueuesStack, '']]
+    Assertions:
+      - Assert: !And
+          - !Not [!Equals [!Ref SitePublicKeys, '']]
+          - !Not [!Equals [!Ref GpuNodes, '']]
+          - !Not [!Equals [!Ref OvpnProfileUrl, '']]
+          - !Not [!Equals [!Ref ManualGpuUrl, '']]
+        AssertDescription: provisioning needs SitePublicKeys, GpuNodes, OvpnProfileUrl and ManualGpuUrl
   CertNeedsDomain:
     RuleCondition: !Not [!Equals [!Ref CertStack, '']]
     Assertions:
@@ -103,6 +134,7 @@ Conditions:
   HasDomain: !Not [!Equals [!Ref DnsStack, '']]
   HasCert: !Not [!Equals [!Ref CertStack, '']]
   NoCert: !Equals [!Ref CertStack, '']
+  HasQueues: !Not [!Equals [!Ref QueuesStack, '']]
 
 Resources:
   AppSecret:
@@ -327,6 +359,59 @@ Resources:
               Value: !Ref SessionIdleMinutes
             - Name: SESSION_MAX_HOURS
               Value: !Ref SessionMaxHours
+            # Automatic provisioning through acc-prov-vm (plan §2), only with a queues stack.
+            - !If
+              - HasQueues
+              - Name: MESSAGE_TRANSPORT
+                Value: sqs
+              - !Ref AWS::NoValue
+            - !If
+              - HasQueues
+              - Name: AWS_REGION
+                Value: !Ref AWS::Region
+              - !Ref AWS::NoValue
+            - !If
+              - HasQueues
+              - Name: SQS_REQUEST_QUEUE_URL
+                Value:
+                  Fn::ImportValue: !Sub '${QueuesStack}-RequestQueueUrl'
+              - !Ref AWS::NoValue
+            - !If
+              - HasQueues
+              - Name: SQS_RESULT_QUEUE_URL
+                Value:
+                  Fn::ImportValue: !Sub '${QueuesStack}-ResultQueueUrl'
+              - !Ref AWS::NoValue
+            - !If
+              - HasQueues
+              - Name: MSG_PEER_PUBLIC_KEYS
+                Value: !Ref SitePublicKeys
+              - !Ref AWS::NoValue
+            - !If
+              - HasQueues
+              - Name: MSG_JOB_TTL_SEC
+                Value: !Ref MessageJobTtlSeconds
+              - !Ref AWS::NoValue
+            - !If
+              - HasQueues
+              - Name: MSG_MAX_TTL_SEC
+                Value: !Ref MessageJobTtlSeconds
+              - !Ref AWS::NoValue
+            - !If
+              - HasQueues
+              - Name: GPU_NODES
+                Value: !Ref GpuNodes
+              - !Ref AWS::NoValue
+            - !If
+              - HasQueues
+              - Name: OVPN_PROFILE_URL
+                Value: !Ref OvpnProfileUrl
+              - !Ref AWS::NoValue
+            - !If
+              - HasQueues
+              - Name: MANUAL_GPU_URL
+                Value: !Ref ManualGpuUrl
+              - !Ref AWS::NoValue
           Secrets:
             - Name: DB_USER
               ValueFrom: !Sub
@@ -344,6 +429,14 @@ Resources:
               ValueFrom: !Sub '${GoogleSecretArn}:GOOGLE_CLIENT_ID::'
             - Name: GOOGLE_CLIENT_SECRET
               ValueFrom: !Sub '${GoogleSecretArn}:GOOGLE_CLIENT_SECRET::'
+            - !If
+              - HasQueues
+              - Name: MSG_PRIVATE_KEY
+                ValueFrom: !Sub
+                  - '${Arn}:MSG_PRIVATE_KEY::'
+                  - Arn:
+                      Fn::ImportValue: !Sub '${QueuesStack}-BackendKeysSecretArn'
+              - !Ref AWS::NoValue
           LogConfiguration:
             LogDriver: awslogs
             Options:

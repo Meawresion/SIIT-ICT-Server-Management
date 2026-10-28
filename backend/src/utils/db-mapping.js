@@ -25,14 +25,16 @@ export function requestView(row) {
     review_comment: extra.review_comment ?? null, status: reverse(statusToDb, row.status),
     user: userView(row.user_request_student_uidTouser), reviewed_by: accountView(row.user_request_approver_uidTouser) };
 }
-// Status history (FR-4.2). Students see who acted only by role; approvers also see the name.
+// Status history (FR-4.2). Students see who acted only by role, and not the site's technical
+// error on a failed setup; approvers see both.
 export const eventInclude = { user: { select: { fullname: true, role: true } } };
 export function eventView(row, { names = false } = {}) {
+  const systemError = row.actor_uid === null && row.action.endsWith('_FAILED');
   return {
     id: Number(row.eid), action: row.action,
     from: row.from_status ? reverse(statusToDb, row.from_status) : null, to: reverse(statusToDb, row.to_status),
     actor: row.actor_uid === null ? { role: 'System' } : { role: row.user?.role ?? null, ...(names && { name: row.user?.fullname ?? null }) },
-    comment: row.comment ?? null, details: row.details ?? null, at: row.created_at,
+    comment: systemError && !names ? null : row.comment ?? null, details: row.details ?? null, at: row.created_at,
   };
 }
 export const overlapView = row => ({ id: row.rid, status: reverse(statusToDb, row.status), start: row.start_date, end: row.end_date });

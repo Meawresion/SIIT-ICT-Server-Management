@@ -46,6 +46,7 @@ model request {
   user_request_approver_uidTouser user?                 @relation("request_approver_uidTouser", fields: [approver_uid], references: [uid], onDelete: Restrict, onUpdate: Restrict, map: "request_approver_uid_foreign")
   user_request_student_uidTouser  user                  @relation("request_student_uidTouser", fields: [student_uid], references: [uid], onUpdate: Restrict, map: "request_student_uid_foreign")
   request_event                   request_event[]
+  provision_job                   provision_job[]
 
   @@index([approver_uid], map: "request_approver_uid_foreign")
   @@index([student_uid], map: "request_student_uid_foreign")
@@ -86,6 +87,39 @@ model request_event {
 
   @@index([rid, eid], map: "request_event_rid_index")
   @@index([actor_uid], map: "request_event_actor_uid_foreign")
+}
+
+/// Outbox of jobs for acc-prov-vm (plan §2.1). A retry is a new row with a new job_id.
+model provision_job {
+  job_id          String               @id @db.Char(36)
+  rid             Int                  @db.UnsignedInt
+  action          provision_job_action
+  status          provision_job_status @default(Queued)
+  payload         Json
+  attempts        Int                  @default(0) @db.UnsignedInt
+  last_error      String?              @db.Text
+  result          Json?
+  next_attempt_at DateTime             @default(now()) @db.Timestamp(0)
+  sent_at         DateTime?            @db.Timestamp(0)
+  completed_at    DateTime?            @db.Timestamp(0)
+  created_at      DateTime             @default(now()) @db.Timestamp(0)
+  updated_at      DateTime             @default(now()) @updatedAt @db.Timestamp(0)
+  request         request              @relation(fields: [rid], references: [rid], onDelete: Restrict, onUpdate: Restrict, map: "provision_job_rid_foreign")
+
+  @@index([status, next_attempt_at], map: "provision_job_status_index")
+  @@index([rid, created_at], map: "provision_job_rid_index")
+}
+
+enum provision_job_action {
+  CREATE
+  REVOKE
+}
+
+enum provision_job_status {
+  Queued
+  Sent
+  Succeeded
+  Failed
 }
 
 enum draft_resource_type {

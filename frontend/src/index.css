@@ -377,3 +377,11 @@ input[type='range']:disabled { cursor: default; opacity: 0.75; }
   .table-empty { display: block !important; background: var(--surface); border: 1px dashed var(--border) !important; border-radius: var(--radius); }
   .table-empty::before { content: none !important; }
 }
+
+.provisioning { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; display: flex; flex-direction: column; gap: 4px; }
+.provisioning h3 { font-size: 0.95rem; margin: 0; }
+.provisioning p { margin: 0; overflow-wrap: anywhere; }
+.provisioning-state.is-failed strong, .provisioning-error { color: var(--danger); }
+.provisioning-state.is-succeeded strong { color: var(--success); }
+.provisioning-jobs { margin: 4px 0 0; padding-left: 1.1rem; font-size: 0.85rem; }
+.provisioning details summary { cursor: pointer; font-size: 0.85rem; color: var(--muted); }

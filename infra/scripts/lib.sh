@@ -12,7 +12,7 @@ if [ ! -f "$CONFIG" ]; then
   exit 1
 fi
 # Values set in the environment (ENTRY_MODE=direct deploy.sh app) win over config.env.
-overrides=$(declare -p ENTRY_MODE USE_DOMAIN GOOGLE_SECRET_ARN 2>/dev/null || true)
+overrides=$(declare -p ENTRY_MODE USE_DOMAIN GOOGLE_SECRET_ARN PROVISIONING SITE_PUBLIC_KEYS GPU_NODES OVPN_PROFILE_URL MANUAL_GPU_URL 2>/dev/null || true)
 set -a
 # shellcheck source=/dev/null
 . "$CONFIG"
@@ -26,6 +26,8 @@ export AWS_DEFAULT_REGION="$AWS_REGION"
 ENTRY_MODE=${ENTRY_MODE:-cloudfront}
 # false: no hosted zone or certificate; the ALB answers on its AWS name over HTTP (smoke tests).
 USE_DOMAIN=${USE_DOMAIN:-true}
+# true: the queues stack and automatic provisioning of GPU requests through acc-prov-vm.
+PROVISIONING=${PROVISIONING:-false}
 
 STACK_DNS="$PROJECT-dns"
 STACK_CERT="$PROJECT-cert"
@@ -35,6 +37,7 @@ STACK_DATA="$PROJECT-data"
 STACK_APP="$PROJECT-app"
 STACK_EDGE="$PROJECT-edge"
 STACK_WEB="$PROJECT-web"
+STACK_QUEUES="$PROJECT-queues"
 
 # aws with text output and without the Windows carriage returns
 awst() { aws --output text "$@" | tr -d '\r'; }
@@ -96,3 +99,95 @@ docker_path() {
   fi
 }
 docker_() { MSYS_NO_PATHCONV=1 $DOCKER "$@"; }
+
+# Kept between test runs (they run nothing; platform holds the ECR images, so a run only uploads
+# what changed). Only teardown-all.sh deletes them.
+KEPT_STACKS=("$STACK_NETWORK" "$STACK_PLATFORM")
+
+delete_one() {
+  local stack=$1 bucket
+  aws cloudformation describe-stacks --stack-name "$stack" >/dev/null 2>&1 || return 0
+  if [ "$stack" = "$STACK_EDGE" ]; then
+    bucket=$(stack_output "$stack" BucketName 2>/dev/null || true)
+    [ -n "$bucket" ] && aws s3 rm "s3://$bucket" --recursive --quiet
+  fi
+  echo "== deleting $stack"
+  aws cloudformation delete-stack --stack-name "$stack"
+  if aws cloudformation wait stack-delete-complete --stack-name "$stack"; then
+    echo "== $stack deleted"
+  else
+    echo "!! $stack did not delete cleanly; check the console" >&2
+    return 1
+  fi
+}
+
+# delete_stacks <stack>...: stops every ECS task at once, then deletes the given stacks in waves:
+# a stack goes only after the stacks that import from it, and the stacks of one wave go in parallel.
+delete_stacks() {
+  local wanted=" $* " wave stack failed=0 pids p service
+  for service in frontend backend mysql; do
+    if service_exists "$service"; then
+      aws ecs update-service --cluster "$PROJECT" --service "$service" --desired-count 0 >/dev/null || true
+    fi
+  done
+  for wave in "$STACK_EDGE $STACK_WEB" "$STACK_APP" "$STACK_QUEUES $STACK_DATA $PROJECT-test-google" \
+    "$STACK_PLATFORM $STACK_CERT" "$STACK_NETWORK $STACK_DNS"; do
+    pids=()
+    for stack in $wave; do
+      [[ $wanted == *" $stack "* ]] || continue
+      delete_one "$stack" &
+      pids+=($!)
+    done
+    for p in "${pids[@]}"; do wait "$p" || failed=1; done
+  done
+  return "$failed"
+}
+
+# leftovers [<stack allowed to stay>...]: lists anything of this project still in the account,
+# except the given stacks and what they hold (network: the VPC; platform: ECR and the cluster).
+leftovers() {
+  local found=0 allowed=" $* "
+  check() { # check <label> <aws args...>: anything listed, or a failed query, counts as left behind
+    local label=$1 out
+    shift
+    if ! out=$(MSYS_NO_PATHCONV=1 aws --output text "$@" 2>&1 | tr -d '\r'); then
+      echo "LEFT? $label: the check failed: $out"
+      found=1
+    elif [ -n "$out" ] && [ "$out" != None ]; then
+      echo "LEFT  $label: $out"
+      found=1
+    fi
+  }
+  local skip
+  skip=$(printf "'%s'," "$@")
+  check "stacks" cloudformation list-stacks \
+    --query "StackSummaries[?starts_with(StackName,'$PROJECT-') && !contains([${skip%,}], StackName) && StackStatus!='DELETE_COMPLETE'].[StackName,StackStatus]"
+  if [[ $allowed != *" $STACK_PLATFORM "* ]]; then
+    check "ECR repositories" ecr describe-repositories --query "repositories[?starts_with(repositoryName,'$PROJECT-')].repositoryName"
+    check "ECS clusters" ecs list-clusters --query "clusterArns[?ends_with(@,'/$PROJECT')]"
+  else
+    check "ECS services" ecs list-services --cluster "$PROJECT" --query 'serviceArns'
+    check "ECS tasks" ecs list-tasks --cluster "$PROJECT" --query 'taskArns'
+  fi
+  if [[ $allowed != *" $STACK_NETWORK "* ]]; then
+    check "VPCs" ec2 describe-vpcs --filters "Name=tag:Name,Values=$PROJECT-vpc" --query 'Vpcs[].VpcId'
+  fi
+  check "load balancers" elbv2 describe-load-balancers --query 'LoadBalancers[].LoadBalancerName'
+  check "EFS file systems" efs describe-file-systems --query "FileSystems[?Name=='$PROJECT-mysql-data'].FileSystemId"
+  check "log groups" logs describe-log-groups --log-group-name-prefix "/$PROJECT/" --query 'logGroups[].logGroupName'
+  check "SQS queues" sqs list-queues --queue-name-prefix "$PROJECT-" --query 'QueueUrls'
+  check "Lambda functions" lambda list-functions --query "Functions[?starts_with(FunctionName,'$PROJECT-')].FunctionName"
+  check "secrets (incl. pending deletion)" secretsmanager list-secrets --include-planned-deletion \
+    --query "SecretList[?starts_with(Description,'$PROJECT ')].[Name,DeletedDate]"
+  if [ "$found" = 0 ]; then echo "Nothing left behind${1:+ (kept: $*)}."; else echo "Something is left behind (above)."; return 1; fi
+}
+
+# What the kept stacks hold, for the end of a test run.
+show_kept() {
+  local repo
+  for repo in backend mysql frontend; do
+    echo "  ECR $PROJECT-$repo: $(awst ecr describe-images --repository-name "$PROJECT-$repo" \
+      --query 'imageDetails[].[imageTags[0], imageSizeInBytes]' 2>/dev/null |
+      awk '{ printf "%s%s (%.0f MB)", (NR > 1 ? ", " : ""), $1, $2 / 1048576 } END { if (!NR) printf "none" }')"
+  done
+}

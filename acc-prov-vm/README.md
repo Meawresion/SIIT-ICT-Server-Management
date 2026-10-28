@@ -6,7 +6,7 @@ Runs at the SIIT resource site, behind pfSense. When a GPU or Big Data request i
 - **GPU node** Linux user + conda Jupyter kernel, over SSH (`src/ssh.js`, `src/linux.js`, `src/gpu.js`)
 - Hadoop Linux / HDFS accounts over SSH (planned)
 - HUE user (planned)
-- **Messaging:** signed + encrypted envelopes (`src/envelope.js`) over local ActiveMQ (`src/amqp.js`), later SQS
+- **Messaging:** signed + encrypted envelopes (`src/envelope.js`) over local ActiveMQ (`src/amqp.js`) or AWS SQS (`src/sqs.js`)
 - **Student email** with credentials and links, via SMTP (`src/mail.js`)
 - **Worker** (`npm start`): runs CREATE / REVOKE jobs from the queue (`src/worker.js`, `src/jobs.js`)
 
@@ -169,6 +169,26 @@ For local testing, the backend and acc-prov-vm exchange envelopes through **Acti
 docker compose up -d activemq                     # from the repo root
 cd acc-prov-vm && npm run test:amqp               # throwaway queue; real queues untouched
 ```
+
+## AWS SQS
+
+With `MESSAGE_TRANSPORT=sqs` the worker uses the queues from the root `infra` queues stack
+(`infra/cloudformation/queues.yaml`). `src/sqs.js` has the same contract as `src/amqp.js`:
+
+| Call | Behaviour |
+|------|-----------|
+| `SqsConnection.connect(loadSqsConfig())` | Region and the queue URLs `SQS_REQUEST_QUEUE_URL` / `SQS_RESULT_QUEUE_URL`; credentials as for the AWS CLI. |
+| `send(queueUrl, text)` | Resolves once SQS has stored the message. |
+| `consume(queueUrl, handler)` | One message at a time. **Deleted only after `handler` resolves**; if it throws, the message comes back after a short back-off. While a job runs its visibility is extended, so a slow job is never handed out twice. A forged message is made visible at once, and the queue's redrive policy moves it to the dead-letter queue after `MaxReceiveCount` (5) deliveries. |
+
+Setup, from the stack outputs:
+- `SQS_REQUEST_QUEUE_URL`, `SQS_RESULT_QUEUE_URL`: `RequestQueueUrl`, `ResultQueueUrl`;
+- `MSG_PEER_PUBLIC_KEYS`: `BackendPublicKey` (the backend's private key exists only in Secrets Manager);
+- this site's public bundle (`npm run keygen`) goes into `SITE_PUBLIC_KEYS` in `infra/config.env`;
+- credentials: on Learner Lab, the session's `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` and
+  `AWS_SESSION_TOKEN` in `.env` each session (plan §10.1); with the full account, IAM Roles Anywhere.
+- Keep `WORKER_MAX_ATTEMPTS` below `MaxReceiveCount`, so the backend always gets a failed result
+  instead of a silent dead-letter.
 
 ## Worker (`npm start`)
 

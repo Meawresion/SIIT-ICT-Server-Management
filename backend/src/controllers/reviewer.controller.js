@@ -7,6 +7,7 @@ import {
   activateRequest,
   completeRequest,
 } from '../services/reviewer.service.js';
+import { retryProvisioning } from '../services/provisioning.service.js';
 import { ReviewRequestSchema } from '../utils/validation.js';
 
 export async function listRequests(req, res, next) {
@@ -64,6 +65,7 @@ export async function getRequestDetail(req, res, next) {
       created_at: request.created_at,
       overlaps: request.overlaps,
       events: request.events,
+      provisioning: request.provisioning,
       student: {
         id: request.user.id,
         name: request.user.account.full_name,
@@ -164,6 +166,16 @@ export async function activateRequestHandler(req, res, next) {
     if (err.message.includes('Invalid state')) {
       return res.status(400).json({ message: err.message });
     }
+    next(err);
+  }
+}
+
+// D4: a new job after a failed setup or revoke; the request keeps its status.
+export async function retryProvisioningHandler(req, res, next) {
+  try {
+    const job = await retryProvisioning(parseId(req.params.id), req.auth.account_id);
+    res.status(201).json(job);
+  } catch (err) {
     next(err);
   }
 }

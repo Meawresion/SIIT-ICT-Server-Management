@@ -45,3 +45,8 @@ export async function completeRequest(id) {
     body: JSON.stringify({}),
   });
 }
+
+// D4: after a failed setup or removal, queue a new job.
+export async function retryProvisioning(id) {
+  return apiRequest(`/api/reviewer/requests/${id}/provision/retry`, { method: 'POST', body: JSON.stringify({}) });
+}

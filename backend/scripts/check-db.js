@@ -41,7 +41,9 @@ try {
     await setUserRoleByEmail(email, 'Student', tx);
     assert.equal((await tx.user.findUnique({ where: { uid: account.id } })).role, 'Student');
     await tx.draft.create({ data: { student_uid: account.id, por: 'Draft' } });
-    const request = await createRequest(account.id, { purpose: 'Integration check', project_description: 'Test project', project_supervisor_name: 'Test supervisor', resource_type: 'HPC_GPU', justification: 'Database verification', estimated_start_date: '2026-10-16', estimated_end_date: '2026-10-17', impact_score: 5, supervisor_confirmation: 'NOT_CONFIRMED' });
+    // A VM is set up by hand, so this follows the manual path; check-provisioning.js covers the
+    // automated GPU path (it needs a numeric student ID, and Mark as Active only follows a failed setup).
+    const request = await createRequest(account.id, { purpose: 'Integration check', project_description: 'Test project', project_supervisor_name: 'Test supervisor', resource_type: 'VM', justification: 'Database verification', estimated_start_date: '2026-10-16', estimated_end_date: '2026-10-17', impact_score: 5, supervisor_confirmation: 'NOT_CONFIRMED' });
     assert.equal(request.status, 'PENDING');
     assert.equal(await tx.draft.findUnique({ where: { student_uid: account.id } }), null);
     assert.equal((await getUserRequests(account.id)).length, 1);
@@ -49,7 +51,7 @@ try {
     assert.equal((await updateRequest(request.id, account.id, { purpose: 'Edited purpose', impact_score: 8 })).impact_score, 8);
     const reviewer = await tx.user.create({ data: { role: 'Approver', fullname: 'Test approver', siitemail: `approver-${marker}@example.invalid`, phone_number: '' } });
     // D28: a second request for the same resource and dates is flagged, and approving needs a confirmation.
-    const second = await createRequest(account.id, { purpose: 'Overlap check', project_description: 'Test project', project_supervisor_name: 'Test supervisor', resource_type: 'HPC_GPU', justification: 'Database verification', estimated_start_date: '2026-10-17', estimated_end_date: '2026-10-20', impact_score: 5, supervisor_confirmation: 'CONFIRMED' });
+    const second = await createRequest(account.id, { purpose: 'Overlap check', project_description: 'Test project', project_supervisor_name: 'Test supervisor', resource_type: 'VM', justification: 'Database verification', estimated_start_date: '2026-10-17', estimated_end_date: '2026-10-20', impact_score: 5, supervisor_confirmation: 'CONFIRMED' });
     assert.deepEqual((await getRequestForReview(request.id)).overlaps.map(o => o.id), [second.id]);
     await assert.rejects(approveRequest(request.id, reviewer.uid, 'Verified'), err => err.statusCode === 409 && err.overlaps[0].id === second.id);
     assert.equal((await approveRequest(request.id, reviewer.uid, 'Verified', { confirm_overlap: true })).status, 'APPROVED');

@@ -20,6 +20,7 @@
     "send-test-job": "node --env-file=.env scripts/send-test-job.js"
   },
   "dependencies": {
+    "@aws-sdk/client-sqs": "3.1151.0",
     "nodemailer": "10.0.16",
     "playwright": "1.64.1",
     "rhea": "3.0.5",

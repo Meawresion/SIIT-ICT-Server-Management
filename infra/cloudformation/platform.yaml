@@ -12,7 +12,7 @@ Parameters:
     Type: String
   ImagesToKeep:
     Type: Number
-    Default: 10
+    Default: 5
 
 Resources:
   BackendRepository:

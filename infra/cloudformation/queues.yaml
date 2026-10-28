@@ -1,0 +1,237 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  Provisioning messages between the backend and acc-prov-vm (plan §2.3, D22): the request and
+  result queues, each with a dead-letter queue, and the backend's message keys. A small Lambda
+  (custom resource) generates the backend's key bundle and writes it straight into Secrets Manager,
+  so the private key never leaves AWS; the public bundle is an output for acc-prov-vm's .env
+  (MSG_PEER_PUBLIC_KEYS). Messages are signed and encrypted by the apps; SQS adds TLS-only access
+  and encryption at rest.
+
+Parameters:
+  Project:
+    Type: String
+    Default: siit
+  LambdaRoleArn:
+    Type: String
+    Description: Role of the key generator; needs secretsmanager:PutSecretValue (Learner Lab - LabRole, D30)
+  KeyGeneration:
+    Type: Number
+    Default: 1
+    Description: Change it to make a new backend key pair (rotation); the key id becomes <project>-backend-<n>
+  JobVisibilitySeconds:
+    Type: Number
+    Default: 900
+    Description: Longer than the slowest job at the site (pfSense UI + conda env), so a job isn't handed out twice
+  MaxReceiveCount:
+    Type: Number
+    Default: 5
+    Description: Deliveries before a message moves to its dead-letter queue
+  LogRetentionDays:
+    Type: Number
+    Default: 14
+
+Resources:
+  # 14 days everywhere (NFR-1.2): jobs wait while the site is offline.
+  RequestDeadLetterQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub '${Project}-provision-requests-dlq'
+      MessageRetentionPeriod: 1209600
+      SqsManagedSseEnabled: true
+  RequestQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub '${Project}-provision-requests'
+      MessageRetentionPeriod: 1209600
+      VisibilityTimeout: !Ref JobVisibilitySeconds
+      SqsManagedSseEnabled: true
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt RequestDeadLetterQueue.Arn
+        maxReceiveCount: !Ref MaxReceiveCount
+  ResultDeadLetterQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub '${Project}-provision-results-dlq'
+      MessageRetentionPeriod: 1209600
+      SqsManagedSseEnabled: true
+  ResultQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub '${Project}-provision-results'
+      MessageRetentionPeriod: 1209600
+      VisibilityTimeout: 60
+      SqsManagedSseEnabled: true
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt ResultDeadLetterQueue.Arn
+        maxReceiveCount: !Ref MaxReceiveCount
+  # Who may send and receive is IAM's job (one LabRole on Learner Lab; separate backend and site
+  # roles with the full account, D30). The queues themselves refuse plain HTTP (SQS wants one
+  # statement per queue, so one policy each).
+  RequestQueueTlsOnly:
+    Type: AWS::SQS::QueuePolicy
+    Properties:
+      Queues: [!Ref RequestQueue]
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: DenyPlainHttp
+            Effect: Deny
+            Principal: '*'
+            Action: 'sqs:*'
+            Resource: !GetAtt RequestQueue.Arn
+            Condition:
+              Bool:
+                aws:SecureTransport: 'false'
+  RequestDeadLetterQueueTlsOnly:
+    Type: AWS::SQS::QueuePolicy
+    Properties:
+      Queues: [!Ref RequestDeadLetterQueue]
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: DenyPlainHttp
+            Effect: Deny
+            Principal: '*'
+            Action: 'sqs:*'
+            Resource: !GetAtt RequestDeadLetterQueue.Arn
+            Condition:
+              Bool:
+                aws:SecureTransport: 'false'
+  ResultQueueTlsOnly:
+    Type: AWS::SQS::QueuePolicy
+    Properties:
+      Queues: [!Ref ResultQueue]
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: DenyPlainHttp
+            Effect: Deny
+            Principal: '*'
+            Action: 'sqs:*'
+            Resource: !GetAtt ResultQueue.Arn
+            Condition:
+              Bool:
+                aws:SecureTransport: 'false'
+  ResultDeadLetterQueueTlsOnly:
+    Type: AWS::SQS::QueuePolicy
+    Properties:
+      Queues: [!Ref ResultDeadLetterQueue]
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: DenyPlainHttp
+            Effect: Deny
+            Principal: '*'
+            Action: 'sqs:*'
+            Resource: !GetAtt ResultDeadLetterQueue.Arn
+            Condition:
+              Bool:
+                aws:SecureTransport: 'false'
+
+  # The generator overwrites this placeholder; ECS reads MSG_PRIVATE_KEY from it.
+  BackendKeysSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Description: !Sub '${Project} backend message keys (D22): MSG_PRIVATE_KEY'
+      SecretString: '{"MSG_PRIVATE_KEY":"not generated yet"}'
+  KeyGeneratorLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/${Project}/message-keys'
+      RetentionInDays: !Ref LogRetentionDays
+  KeyGeneratorFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${Project}-message-keys'
+      Description: Generates the backend message key bundle into Secrets Manager (custom resource)
+      Runtime: nodejs22.x
+      Handler: index.handler
+      Role: !Ref LambdaRoleArn
+      Timeout: 30
+      # Only warnings and errors are logged, and the delete path logs nothing: Lambda delivers logs
+      # after the invocation, and a late line would recreate the log group after the stack deleted it.
+      LoggingConfig:
+        LogGroup: !Ref KeyGeneratorLogGroup
+        LogFormat: JSON
+        ApplicationLogLevel: WARN
+        SystemLogLevel: WARN
+      Code:
+        # The same bundle format as acc-prov-vm's npm run keygen: <kid>.<ed25519>.<x25519>, raw
+        # 32-byte keys in base64url. The private bundle goes only to Secrets Manager; the response
+        # (and the log) carries the public bundle only.
+        ZipFile: |
+          const https = require('node:https');
+          const { createPrivateKey, createPublicKey, generateKeyPairSync } = require('node:crypto');
+          const { SecretsManagerClient, GetSecretValueCommand, PutSecretValueCommand } = require('@aws-sdk/client-secrets-manager');
+
+          const raw = (key, part) => Buffer.from(key.export({ format: 'jwk' })[part], 'base64url').toString('base64url');
+          const PKCS8 = { Ed25519: '302e020100300506032b657004220420', X25519: '302e020100300506032b656e04220420' };
+          const publicOf = (crv, b64) => raw(createPublicKey(createPrivateKey({
+            key: Buffer.concat([Buffer.from(PKCS8[crv], 'hex'), Buffer.from(b64, 'base64url')]), format: 'der', type: 'pkcs8',
+          })), 'x');
+          const secrets = new SecretsManagerClient({});
+
+          function respond(event, status, data, reason) {
+            const body = JSON.stringify({
+              Status: status, Reason: reason || 'see the /message-keys log group', PhysicalResourceId: data.Kid || event.PhysicalResourceId || 'none',
+              StackId: event.StackId, RequestId: event.RequestId, LogicalResourceId: event.LogicalResourceId, Data: data,
+            });
+            return new Promise((resolve, reject) => {
+              const req = https.request(event.ResponseURL, { method: 'PUT', headers: { 'content-type': '', 'content-length': Buffer.byteLength(body) } }, (res) => { res.resume(); res.on('end', resolve); });
+              req.on('error', reject);
+              req.end(body);
+            });
+          }
+
+          exports.handler = async (event) => {
+            try {
+              if (event.RequestType === 'Delete') return await respond(event, 'SUCCESS', {});
+              const { SecretArn, Kid } = event.ResourceProperties;
+              if (!/^[a-z0-9][a-z0-9-]{0,39}$/.test(Kid)) throw new Error('bad kid');
+              // A new key pair on create, and on an update only when the kid (KeyGeneration) changes.
+              if (event.RequestType === 'Update' && event.PhysicalResourceId === Kid) {
+                const stored = JSON.parse((await secrets.send(new GetSecretValueCommand({ SecretId: SecretArn }))).SecretString).MSG_PRIVATE_KEY;
+                const [kid, sk, ek] = stored.split('.');
+                return await respond(event, 'SUCCESS', { Kid, PublicBundle: `${kid}.${publicOf('Ed25519', sk)}.${publicOf('X25519', ek)}` });
+              }
+              const s = generateKeyPairSync('ed25519');
+              const e = generateKeyPairSync('x25519');
+              const privateBundle = `${Kid}.${raw(s.privateKey, 'd')}.${raw(e.privateKey, 'd')}`;
+              const publicBundle = `${Kid}.${raw(s.publicKey, 'x')}.${raw(e.publicKey, 'x')}`;
+              await secrets.send(new PutSecretValueCommand({
+                SecretId: SecretArn, SecretString: JSON.stringify({ MSG_PRIVATE_KEY: privateBundle }),
+              }));
+              console.warn(JSON.stringify({ event: 'keys.generated', kid: Kid, publicBundle }));
+              return await respond(event, 'SUCCESS', { Kid, PublicBundle: publicBundle });
+            } catch (err) {
+              console.error(JSON.stringify({ event: 'keys.failed', error: err.message }));
+              return respond(event, 'FAILED', {}, err.message);
+            }
+          };
+  BackendKeys:
+    Type: Custom::MessageKeys
+    Properties:
+      ServiceToken: !GetAtt KeyGeneratorFunction.Arn
+      SecretArn: !Ref BackendKeysSecret
+      Kid: !Sub '${Project}-backend-${KeyGeneration}'
+
+Outputs:
+  RequestQueueUrl:
+    Value: !Ref RequestQueue
+    Export:
+      Name: !Sub '${AWS::StackName}-RequestQueueUrl'
+  ResultQueueUrl:
+    Value: !Ref ResultQueue
+    Export:
+      Name: !Sub '${AWS::StackName}-ResultQueueUrl'
+  RequestDeadLetterQueueUrl:
+    Value: !Ref RequestDeadLetterQueue
+  ResultDeadLetterQueueUrl:
+    Value: !Ref ResultDeadLetterQueue
+  BackendKeysSecretArn:
+    Value: !Ref BackendKeysSecret
+    Export:
+      Name: !Sub '${AWS::StackName}-BackendKeysSecretArn'
+  BackendPublicKey:
+    Description: Put this into acc-prov-vm's .env as MSG_PEER_PUBLIC_KEYS (public, not secret)
+    Value: !GetAtt BackendKeys.PublicBundle
