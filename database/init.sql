@@ -69,7 +69,7 @@ CREATE TABLE `draft`(
 CREATE TABLE `request_event`(
     `eid` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
     `rid` INT UNSIGNED NOT NULL,
-    `action` VARCHAR(32) NOT NULL COMMENT 'CREATED, EDITED, APPROVED, REJECTED, ACTIVATED, COMPLETED; PROVISIONED, PROVISION_FAILED, REVOKED, REVOKE_FAILED, RETRIED',
+    `action` VARCHAR(32) NOT NULL COMMENT 'CREATED, EDITED, APPROVED, REJECTED, ACTIVATED, COMPLETED; PROVISIONED, PROVISION_FAILED, REVOKED, REVOKE_FAILED, RETRIED; REMINDED, EXPIRED',
     `from_status` ENUM('Pending', 'Approved', 'Rejected', 'On Use', 'Completed') NULL COMMENT 'NULL when the request is created',
     `to_status` ENUM('Pending', 'Approved', 'Rejected', 'On Use', 'Completed') NOT NULL,
     `actor_uid` INT UNSIGNED NULL COMMENT 'NULL: the system (provisioning results, scheduler)',
@@ -102,6 +102,15 @@ ALTER TABLE
     `provision_job` ADD INDEX `provision_job_status_index`(`status`, `next_attempt_at`);
 ALTER TABLE
     `provision_job` ADD INDEX `provision_job_rid_index`(`rid`, `created_at`);
+-- Scheduler lease (FR-8.4): every backend task runs the scheduler loop, and only the one that
+-- holds the lease does a pass. MySQL GET_LOCK belongs to one connection, which Prisma's pool
+-- doesn't keep.
+CREATE TABLE `scheduler_lease`(
+    `name` VARCHAR(32) NOT NULL PRIMARY KEY,
+    `owner` VARCHAR(100) NULL COMMENT 'The backend task holding the lease',
+    `lease_until` DATETIME(3) NOT NULL
+) COMMENT 'One row per scheduled job; the app user may only read and update it';
+INSERT INTO `scheduler_lease` (`name`, `lease_until`) VALUES ('scheduler', '1970-01-01 00:00:00');
 
 ALTER TABLE
     `draft` ADD CONSTRAINT `draft_student_uid_foreign` FOREIGN KEY(`student_uid`) REFERENCES `user`(`uid`) ON DELETE CASCADE;

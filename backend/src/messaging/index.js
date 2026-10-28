@@ -15,7 +15,7 @@ export async function createTransport(config, { log }) {
   return createAmqpTransport(config.amqp, { log });
 }
 
-// -> { stop() }
+// -> { transport, stop() } (the scheduler reads the dead letters through transport)
 export async function startProvisioning(config, { log }) {
   const transport = await createTransport(config, { log });
   const consumer = transport.consume((text) => handleResult(text, { config, log, notify: notifyRequestEvent }));
@@ -35,6 +35,7 @@ export async function startProvisioning(config, { log }) {
   tick();
   log('provision.started', { transport: config.transport, kid: config.me.kid, gpu_nodes: config.gpuNodes });
   return {
+    transport,
     async stop() {
       clearInterval(timer);
       await consumer.stop();

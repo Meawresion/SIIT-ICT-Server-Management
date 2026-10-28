@@ -3,14 +3,15 @@
 // - consume(handler): long-polls the result queue; a message is deleted only after handler
 //   resolves. If it throws, the message comes back after the queue's visibility timeout; a
 //   PoisonMessageError makes it visible again at once, so the redrive policy moves it to the DLQ
-//   after maxReceiveCount without waiting.
+//   after maxReceiveCount without waiting;
+// - drainDeadLetters(handler): the scheduler reads the request and result DLQs.
 // Every running backend task polls; SQS gives each message to one of them, and handleResult is
 // idempotent because standard queues deliver at least once.
 
 import { ChangeMessageVisibilityCommand, DeleteMessageCommand, ReceiveMessageCommand, SendMessageCommand, SQSClient } from '@aws-sdk/client-sqs';
 import { PoisonMessageError } from './errors.js';
 
-export function createSqsTransport({ region, requestQueueUrl, resultQueueUrl },
+export function createSqsTransport({ region, requestQueueUrl, resultQueueUrl, deadLetterQueues = [] },
   { log = () => {}, client = new SQSClient({ region }), retryDelayMs = 5_000 } = {}) {
   async function send(text) {
     await client.send(new SendMessageCommand({ QueueUrl: requestQueueUrl, MessageBody: text }));
@@ -56,5 +57,31 @@ export function createSqsTransport({ region, requestQueueUrl, resultQueueUrl },
     };
   }
 
-  return { send, consume, close: () => client.destroy() };
+  // The scheduler's look into the dead-letter queues (FR-6.7): reads what is waiting, at most max
+  // messages, and deletes each one handler resolved for; one it throws for comes back on a later
+  // pass. -> number handled.
+  async function drainDeadLetters(handler, { max = 50 } = {}) {
+    let seen = 0, handled = 0;
+    for (const queueUrl of deadLetterQueues) {
+      while (seen < max) {
+        const { Messages: messages = [] } = await client.send(new ReceiveMessageCommand({
+          QueueUrl: queueUrl, MaxNumberOfMessages: Math.min(10, max - seen), WaitTimeSeconds: 1, VisibilityTimeout: 120,
+        }));
+        if (!messages.length) break;
+        seen += messages.length;
+        for (const m of messages) {
+          try {
+            await handler(m.Body);
+            await client.send(new DeleteMessageCommand({ QueueUrl: queueUrl, ReceiptHandle: m.ReceiptHandle }));
+            handled++;
+          } catch (err) {
+            log('sqs.dead_letter_kept', { error: err.message });
+          }
+        }
+      }
+    }
+    return handled;
+  }
+
+  return { send, consume, drainDeadLetters, close: () => client.destroy() };
 }

@@ -4,6 +4,9 @@
 //   MESSAGE_TRANSPORT      amqp (local ActiveMQ, D23) | sqs (AWS) | empty = off
 //   AMQP_URL, AMQP_USER, AMQP_PASSWORD, AMQP_REQUEST_QUEUE, AMQP_RESULT_QUEUE      (amqp)
 //   SQS_REQUEST_QUEUE_URL, SQS_RESULT_QUEUE_URL, AWS_REGION                         (sqs)
+//   AMQP_DEAD_LETTER_QUEUE (Artemis: DLQ), or SQS_REQUEST_DLQ_URL and SQS_RESULT_DLQ_URL: optional;
+//                          the scheduler inspects them (FR-6.7). Without them, a job that never
+//                          gets an answer is still failed once it expires.
 //   MSG_PRIVATE_KEY        this backend's key bundle (D22); MSG_PEER_PUBLIC_KEYS: acc-prov-vm's,
 //                          comma-separated during a rotation, the first one is used for sending
 //   MSG_JOB_TTL_SEC        how long a job stays valid, so it survives the site being offline
@@ -36,17 +39,19 @@ export function loadProvisioningConfig(source = process.env) {
   if (transport === 'amqp') {
     need(['AMQP_URL', 'AMQP_USER', 'AMQP_PASSWORD', 'AMQP_REQUEST_QUEUE', 'AMQP_RESULT_QUEUE']);
     if (source.AMQP_URL && !/^amqps?:\/\//.test(source.AMQP_URL)) problems.push('AMQP_URL must be amqp:// or amqps://');
-    for (const k of ['AMQP_REQUEST_QUEUE', 'AMQP_RESULT_QUEUE']) {
+    for (const k of ['AMQP_REQUEST_QUEUE', 'AMQP_RESULT_QUEUE', 'AMQP_DEAD_LETTER_QUEUE']) {
       if (source[k] && !QUEUE_NAME_RE.test(source[k])) problems.push(`${k} must be a plain queue name`);
     }
     amqp = { url: source.AMQP_URL, username: source.AMQP_USER, password: source.AMQP_PASSWORD,
-      requestQueue: source.AMQP_REQUEST_QUEUE, resultQueue: source.AMQP_RESULT_QUEUE };
+      requestQueue: source.AMQP_REQUEST_QUEUE, resultQueue: source.AMQP_RESULT_QUEUE,
+      deadLetterQueues: source.AMQP_DEAD_LETTER_QUEUE ? [source.AMQP_DEAD_LETTER_QUEUE] : [] };
   } else if (transport === 'sqs') {
     need(['SQS_REQUEST_QUEUE_URL', 'SQS_RESULT_QUEUE_URL', 'AWS_REGION']);
-    for (const k of ['SQS_REQUEST_QUEUE_URL', 'SQS_RESULT_QUEUE_URL']) {
+    for (const k of ['SQS_REQUEST_QUEUE_URL', 'SQS_RESULT_QUEUE_URL', 'SQS_REQUEST_DLQ_URL', 'SQS_RESULT_DLQ_URL']) {
       if (source[k] && !/^https:\/\/sqs\./.test(source[k])) problems.push(`${k} must be an SQS queue URL`);
     }
-    sqs = { region: source.AWS_REGION, requestQueueUrl: source.SQS_REQUEST_QUEUE_URL, resultQueueUrl: source.SQS_RESULT_QUEUE_URL };
+    sqs = { region: source.AWS_REGION, requestQueueUrl: source.SQS_REQUEST_QUEUE_URL, resultQueueUrl: source.SQS_RESULT_QUEUE_URL,
+      deadLetterQueues: [source.SQS_REQUEST_DLQ_URL, source.SQS_RESULT_DLQ_URL].filter(Boolean) };
   } else {
     problems.push('MESSAGE_TRANSPORT must be amqp, sqs or empty');
   }

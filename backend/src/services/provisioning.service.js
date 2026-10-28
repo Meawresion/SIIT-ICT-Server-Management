@@ -180,6 +180,32 @@ export async function dispatchQueued({ config, transport, log = () => {}, now = 
   }, { timeout: 120_000 });
 }
 
+// Fails a job that is still waiting for its answer, as a failed result does (D4): the request
+// keeps its status, and the event alerts the approvers, who can retry. Used by the scheduler for
+// dead letters and jobs that got no answer. -> 'failed', 'unknown' (no such job for that request)
+// or 'finished' (it already has its outcome).
+export async function failJob({ job_id, rid, error, details = {}, log = () => {}, notify = () => {} }) {
+  let event = null;
+  const outcome = await prisma.$transaction(async tx => {
+    const job = await tx.provision_job.findUnique({ where: { job_id } });
+    if (!job || job.rid !== rid) return 'unknown';
+    const failed = await tx.provision_job.updateMany({ where: { job_id, status: { in: ACTIVE_JOB } }, data: {
+      status: 'Failed', last_error: error.slice(0, MAX_ERROR_LENGTH), completed_at: new Date(),
+    } });
+    if (!failed.count) return 'finished';
+    const row = await tx.request.findUnique({ where: { rid } });
+    event = { rid, action: RESULT_EVENT[job.action][1], from: row.status, to: row.status, comment: error };
+    await tx.request_event.create({ data: {
+      rid, action: event.action, from_status: row.status, to_status: row.status, actor_uid: null, comment: error,
+      details: { job_id, gpu_node: job.payload?.gpuNode ?? null, ...details },
+    } });
+    log('provision.job_failed', { job_id, rid, action: job.action, ...details });
+    return 'failed';
+  });
+  if (event) notify(event);
+  return outcome;
+}
+
 // One result message from acc-prov-vm. Throws PoisonMessageError for anything forged or
 // malformed (the transport dead-letters it), and any other error to have it delivered again.
 // A result for a job that is already finished, or unknown here, is dropped (it was a redelivery,
