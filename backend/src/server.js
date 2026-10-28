@@ -2,6 +2,7 @@ import app from './app.js';
 import env, { checkEnv } from './config/env.js';
 import { loadIdentityRules } from './config/identity.js';
 import { provisioningConfig } from './config/provisioning.js';
+import { loadMailConfig } from './config/mail.js';
 import prisma from './lib/prisma.js';
 import { startProvisioning } from './messaging/index.js';
 
@@ -9,6 +10,7 @@ import { startProvisioning } from './messaging/index.js';
 checkEnv();
 loadIdentityRules();
 const provisioning = provisioningConfig();
+if (!loadMailConfig()) console.log('Status emails are off (no SMTP_HOST): they are only logged');
 
 // JSON lines, like acc-prov-vm; never message plaintext or secrets.
 const log = (event, fields = {}) => console.log(JSON.stringify({ ts: new Date().toISOString(), event, ...fields }));

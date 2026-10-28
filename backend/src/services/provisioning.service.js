@@ -183,8 +183,8 @@ export async function dispatchQueued({ config, transport, log = () => {}, now = 
 // One result message from acc-prov-vm. Throws PoisonMessageError for anything forged or
 // malformed (the transport dead-letters it), and any other error to have it delivered again.
 // A result for a job that is already finished, or unknown here, is dropped (it was a redelivery,
-// or belongs to another environment that shares the broker).
-export async function handleResult(text, { config, log = () => {} }) {
+// or belongs to another environment that shares the broker). notify gets the event after commit.
+export async function handleResult(text, { config, log = () => {}, notify = () => {} }) {
   let msg;
   try {
     msg = open(text, { me: config.me, peers: config.peers, expectedTyp: 'result', maxTtlSec: config.maxTtlSec });
@@ -199,7 +199,8 @@ export async function handleResult(text, { config, log = () => {} }) {
   const ok = result.ok === true;
   const error = ok ? null : String(result.error ?? 'acc-prov-vm reported a failure').slice(0, MAX_ERROR_LENGTH);
 
-  return prisma.$transaction(async tx => {
+  let event = null;
+  const outcome = await prisma.$transaction(async tx => {
     const job = await tx.provision_job.findUnique({ where: { job_id: msg.jti } });
     if (!job || job.rid !== msg.rid) {
       log('provision.result_unknown', { job_id: msg.jti, rid: msg.rid });
@@ -222,12 +223,15 @@ export async function handleResult(text, { config, log = () => {} }) {
       // Changed in the meantime: roll back and let the message come again.
       if (!moved.count) throw new Error(`request ${row.rid} changed while its result was applied`);
     }
+    event = { rid: job.rid, action: RESULT_EVENT[job.action][ok ? 0 : 1], from: row.status, to, comment: error };
     await tx.request_event.create({ data: {
-      rid: job.rid, action: RESULT_EVENT[job.action][ok ? 0 : 1], from_status: row.status, to_status: to, actor_uid: null,
+      rid: job.rid, action: event.action, from_status: row.status, to_status: to, actor_uid: null,
       comment: error, details: { job_id: job.job_id, gpu_node: job.payload?.gpuNode ?? null,
         ...(result.vpn !== undefined && { vpn: result.vpn }), ...(!ok && { permanent: result.permanent === true }) },
     } });
     log('provision.result', { job_id: job.job_id, rid: job.rid, action: job.action, ok });
     return ok ? 'succeeded' : 'failed';
   });
+  if (event) notify(event);
+  return outcome;
 }

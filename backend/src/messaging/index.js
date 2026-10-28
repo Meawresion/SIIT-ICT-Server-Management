@@ -2,6 +2,7 @@
 // transport MESSAGE_TRANSPORT names. The rest of the code doesn't know which one is in use.
 
 import { dispatchQueued, handleResult } from '../services/provisioning.service.js';
+import { notifyRequestEvent } from '../services/notify.service.js';
 
 const DISPATCH_INTERVAL_MS = 3_000;
 
@@ -17,7 +18,7 @@ export async function createTransport(config, { log }) {
 // -> { stop() }
 export async function startProvisioning(config, { log }) {
   const transport = await createTransport(config, { log });
-  const consumer = transport.consume((text) => handleResult(text, { config, log }));
+  const consumer = transport.consume((text) => handleResult(text, { config, log, notify: notifyRequestEvent }));
   let running = false;
   const tick = async () => {
     if (running) return;

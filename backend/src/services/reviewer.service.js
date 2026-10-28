@@ -2,6 +2,7 @@ import prisma from '../lib/prisma.js';
 import { resourceToDb, statusToDb, requestInclude, requestView, eventInclude, eventView, overlapView } from '../utils/db-mapping.js';
 import { provisioningConfig } from '../config/provisioning.js';
 import { assertManualActivationAllowed, buildCreateJob, buildRevokeJob, isAutomated, jobsFor } from './provisioning.service.js';
+import { notifyRequestEvent } from './notify.service.js';
 
 export async function getAllRequests(filters = {}) {
   const where = {};
@@ -43,7 +44,13 @@ export async function getRequestForReview(request_id) {
 // Every decision changes the status and appends its event in one transaction (FR-5.5, FR-9.1).
 // With provisioning on, approving a GPU request also picks its node and queues the CREATE job, and
 // completing it queues the REVOKE job, in the same transaction (outbox, plan §2.1).
-async function transition(request_id, reviewer_account_id, from, to, action, review_comment, { confirm_overlap = false } = {}) {
+// The student's status email goes out after the commit (S2).
+async function transition(request_id, reviewer_account_id, from, to, action, review_comment, options) {
+  const result = await applyTransition(request_id, reviewer_account_id, from, to, action, review_comment, options);
+  notifyRequestEvent({ rid: request_id, action, from, to, comment: review_comment ?? null });
+  return result;
+}
+async function applyTransition(request_id, reviewer_account_id, from, to, action, review_comment, { confirm_overlap = false } = {}) {
   return prisma.$transaction(async tx => {
     const reviewer = await tx.user.findUnique({ where: { uid: reviewer_account_id } });
     if (reviewer?.role !== 'Approver') throw Object.assign(new Error('Reviewer access required'), { statusCode: 403 });
