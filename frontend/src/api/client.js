@@ -49,3 +49,15 @@ export async function apiRequest(path, options = {}) {
 
   return data;
 }
+
+// A file download (e.g. the CSV export): the body as a Blob and the server's file name.
+export async function apiDownload(path) {
+  const response = await fetch(`${API_URL}${path}`, { credentials: 'include' });
+  if (!response.ok) {
+    const data = await response.json().catch(() => null);
+    if (response.status === 401) window.dispatchEvent(new Event(SESSION_ENDED));
+    throw new ApiError(data?.message || `Download failed: ${response.status}`, response.status, data?.errors, data);
+  }
+  const name = /filename="([^"]+)"/.exec(response.headers.get('Content-Disposition') ?? '')?.[1] ?? 'export.csv';
+  return { blob: await response.blob(), name };
+}

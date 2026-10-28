@@ -3,8 +3,10 @@ import { formatDateTime } from '../utils/format.js';
 const JOB_LABEL = {
   CREATE: { Queued: 'Waiting to be sent to the SIIT site', Sent: 'Being set up at the SIIT site', Succeeded: 'Set up; the student was emailed', Failed: 'Setup failed' },
   REVOKE: { Queued: 'Removal waiting to be sent', Sent: 'Access being removed', Succeeded: 'Access removed', Failed: 'Removal failed' },
+  EXTEND: { Queued: 'Extension waiting to be sent', Sent: 'Access being extended', Succeeded: 'Access extended', Failed: 'Extension failed' },
 };
-const VPN_LABEL = { created: 'new VPN account', reactivated: 'VPN account re-enabled', kept: 'existing VPN kept', disabled: 'VPN disabled', skipped: 'VPN step off' };
+const VPN_LABEL = { created: 'new VPN account', reactivated: 'VPN account re-enabled', kept: 'existing VPN kept', disabled: 'VPN disabled', skipped: 'VPN step off',
+  extended: 'VPN expiration moved', missing: 'no VPN account' };
 
 /** Automatic setup through acc-prov-vm, for approvers (plan §4.3): node, job state, error. */
 export default function ProvisioningPanel({ provisioning }) {

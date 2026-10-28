@@ -4,18 +4,20 @@ import StatusBadge from './StatusBadge.jsx';
 import RequestHistory from './RequestHistory.jsx';
 import ProvisioningPanel from './ProvisioningPanel.jsx';
 import { useAuth } from '../auth/context.js';
-import { createRequest, getRequest, updateRequest } from '../api/requests.js';
+import { createRequest, getRequest, requestExtension, updateRequest } from '../api/requests.js';
 import {
   activateRequest,
+  approveExtension,
   approveRequest,
   completeRequest,
   getRequest as getReviewRequest,
+  rejectExtension,
   rejectRequest,
   retryProvisioning,
 } from '../api/reviewer.js';
 import { saveDraft } from '../api/drafts.js';
 import { RESOURCE_TYPES, STATUS_HELP, STATUS_LABEL, degreeLabel } from '../constants.js';
-import { formatDateTime, formatId, formatPeriod, toInputDate } from '../utils/format.js';
+import { formatDate, formatDateTime, formatId, formatPeriod, toInputDate } from '../utils/format.js';
 import { notifyRequestsChanged } from '../utils/requestEvents.js';
 
 const EMPTY = {
@@ -24,6 +26,7 @@ const EMPTY = {
   project_supervisor_name: '',
   resource_type: '',
   justification: '',
+  technical_requirements: '',
   estimated_start_date: '',
   estimated_end_date: '',
   impact_score: 5,
@@ -37,6 +40,7 @@ function fromRequest(r) {
     project_supervisor_name: r.project_supervisor_name ?? '',
     resource_type: r.resource_type ?? '',
     justification: r.justification ?? '',
+    technical_requirements: r.technical_requirements ?? '',
     estimated_start_date: toInputDate(r.estimated_start_date),
     estimated_end_date: toInputDate(r.estimated_end_date),
     impact_score: r.impact_score ?? 5,
@@ -51,9 +55,17 @@ function toPayload(f) {
     project_description: f.project_description.trim(),
     project_supervisor_name: f.project_supervisor_name.trim(),
     justification: f.justification.trim(),
+    technical_requirements: f.technical_requirements.trim(),
     impact_score: Number(f.impact_score),
   };
 }
+
+const pad = (n) => String(n).padStart(2, '0');
+const localToday = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+};
+const nextDay = (day) => new Date(Date.parse(`${day}T00:00:00Z`) + 86_400_000).toISOString().slice(0, 10);
 
 function validate(f) {
   const e = {};
@@ -91,6 +103,8 @@ export default function RequestFormModal({ mode, requestId, draft, onClose, onDo
   const [confirmingOverlap, setConfirmingOverlap] = useState(false);
   const [draftId, setDraftId] = useState(draft?.id ?? null);
   const [draftSavedAt, setDraftSavedAt] = useState(null);
+  // FR-8.3: the student's ask for a later end date.
+  const [extension, setExtension] = useState({ end_date: '', reason: '' });
   const commentRef = useRef(null);
   const overlapRef = useRef(null);
 
@@ -166,10 +180,29 @@ export default function RequestFormModal({ mode, requestId, draft, onClose, onDo
     onDone({ type: 'draft', draft: saved, keepOpen: true });
   };
 
+  // FR-8.3: the student asks; the modal stays open to show the ask as waiting.
+  const askForMoreTime = async () => {
+    const e = {};
+    if (!extension.end_date || extension.end_date <= toInputDate(detail.estimated_end_date)) e.extension_date = 'Pick a date after the current end date.';
+    if (!extension.reason.trim()) e.extension_reason = 'Say why you need more time.';
+    setErrors(e);
+    if (Object.keys(e).length) return;
+    setBusy('extension');
+    setApiError('');
+    try {
+      setDetail(await requestExtension(requestId, { end_date: extension.end_date, reason: extension.reason.trim() }));
+      notifyRequestsChanged();
+    } catch (err) {
+      setApiError(err.message);
+    } finally {
+      setBusy('');
+    }
+  };
+
   // ---- reviewer actions
   const review = async (action) => {
-    if ((action === 'approve' || action === 'reject') && !comment.trim()) {
-      setErrors({ comment: action === 'reject' ? 'Give the student a reason for rejecting.' : 'Add a short note for the student.' });
+    if (['approve', 'reject', 'approve-extension', 'reject-extension'].includes(action) && !comment.trim()) {
+      setErrors({ comment: action.startsWith('reject') ? 'Give the student a reason for rejecting.' : 'Add a short note for the student.' });
       commentRef.current?.focus();
       return;
     }
@@ -195,7 +228,10 @@ export default function RequestFormModal({ mode, requestId, draft, onClose, onDo
     try {
       const res = action === 'approve'
         ? await approveRequest(requestId, comment.trim(), confirmingOverlap)
-        : await { reject: rejectRequest, activate: activateRequest, complete: completeRequest }[action](requestId, comment.trim());
+        : await {
+          reject: rejectRequest, activate: activateRequest, complete: completeRequest,
+          'approve-extension': approveExtension, 'reject-extension': rejectExtension,
+        }[action](requestId, comment.trim());
       notifyRequestsChanged();
       onDone({ type: 'reviewed', request: res });
     } catch (err) {
@@ -236,9 +272,12 @@ export default function RequestFormModal({ mode, requestId, draft, onClose, onDo
   const status = detail?.status;
   const overlaps = (mode === 'review' && status === 'PENDING' && detail?.overlaps) || [];
   const lastCreate = detail?.provisioning?.jobs?.filter((j) => j.action === 'CREATE').at(-1);
+  // FR-8.3: a waiting ask for more time, and whether the current end date has passed.
+  const ask = status === 'ACTIVE' ? detail?.extension : null;
+  const ended = status === 'ACTIVE' && toInputDate(detail?.estimated_end_date) < localToday();
   const retryButton = (
     <button type="button" className="btn btn-primary" onClick={() => review('retry')} disabled={Boolean(busy)}>
-      {busy === 'retry' ? 'Retrying…' : lastJob?.action === 'REVOKE' ? 'Retry removal' : 'Retry setup'}
+      {busy === 'retry' ? 'Retrying…' : { REVOKE: 'Retry removal', EXTEND: 'Retry extension' }[lastJob?.action] ?? 'Retry setup'}
     </button>
   );
 
@@ -302,6 +341,26 @@ export default function RequestFormModal({ mode, requestId, draft, onClose, onDo
         {retryButton}
       </>
     );
+  } else if (mode === 'review' && ask) {
+    footer = (
+      <>
+        <button type="button" className="btn btn-danger-outline" onClick={() => review('reject-extension')} disabled={Boolean(busy)}>
+          {busy === 'reject-extension' ? 'Rejecting…' : 'Reject extension'}
+        </button>
+        <button type="button" className="btn btn-primary" onClick={() => review('approve-extension')} disabled={Boolean(busy) || ended}>
+          {busy === 'approve-extension' ? 'Approving…' : 'Approve extension'}
+        </button>
+      </>
+    );
+  } else if (mode === 'review' && status === 'ACTIVE' && lastJob?.action === 'EXTEND' && lastJob.status === 'Failed') {
+    footer = (
+      <>
+        <button type="button" className="btn btn-secondary" onClick={() => review('complete')} disabled={Boolean(busy)}>
+          {busy === 'complete' ? 'Updating…' : 'Mark as Completed'}
+        </button>
+        {retryButton}
+      </>
+    );
   } else if (mode === 'review' && status === 'APPROVED') {
     footer = (
       <button type="button" className="btn btn-primary" onClick={() => review('activate')} disabled={Boolean(busy)}>
@@ -349,6 +408,17 @@ export default function RequestFormModal({ mode, requestId, draft, onClose, onDo
                   </li>
                 ))}
               </ul>
+            </div>
+          )}
+
+          {ask && (
+            <div className="alert alert-warning" role="status">
+              <strong>
+                {mode === 'review' ? 'The student asks for more time' : 'You asked for more time'}: until {formatDate(ask.end_date)} instead of {formatDate(detail.estimated_end_date)}.
+              </strong>
+              <p>{ask.reason}</p>
+              {mode !== 'review' && <p className="muted">Waiting for an approver. You get an email with the answer.</p>}
+              {mode === 'review' && ended && <p>The current end date has passed, so this can only be rejected; the student can submit a new request.</p>}
             </div>
           )}
 
@@ -406,6 +476,10 @@ export default function RequestFormModal({ mode, requestId, draft, onClose, onDo
               <textarea rows={4} value={form.justification} onChange={set('justification')} readOnly={readOnly} placeholder="Briefly explain why this specific resource is essential for your project/research…" />
             </Field>
 
+            <Field label="Technical Requirements" hint={readOnly ? undefined : 'Optional. What the resource must offer, e.g. GPU memory, software and versions, dataset size.'}>
+              <textarea rows={3} value={form.technical_requirements} onChange={set('technical_requirements')} readOnly={readOnly} maxLength={2000} placeholder={readOnly ? 'None given' : 'e.g. 24 GB GPU memory, PyTorch 2.x, about 200 GB of data'} />
+            </Field>
+
             <div className="field">
               <span className="field-label">Estimated Resource Usage Period {!readOnly && <span className="req">*</span>}</span>
               <div className="date-range">
@@ -456,7 +530,34 @@ export default function RequestFormModal({ mode, requestId, draft, onClose, onDo
 
           <RequestHistory events={detail?.events} mine={mode !== 'review'} />
 
-          {mode === 'review' && status === 'PENDING' && (
+          {mode === 'view' && status === 'ACTIVE' && !ask && !ended && (
+            <fieldset>
+              <legend>Need more time?</legend>
+              <p className="hint">Ask for a later end date before {formatDate(detail.estimated_end_date)}. An approver decides; you get an email with the answer.</p>
+              <Field label="New end date" error={errors.extension_date} required>
+                <input
+                  type="date"
+                  value={extension.end_date}
+                  min={nextDay(toInputDate(detail.estimated_end_date))}
+                  onChange={(e) => { setExtension((x) => ({ ...x, end_date: e.target.value })); setErrors({}); }}
+                />
+              </Field>
+              <Field label="Why do you need more time?" error={errors.extension_reason} required>
+                <textarea
+                  rows={2}
+                  maxLength={1000}
+                  value={extension.reason}
+                  placeholder="e.g. The experiments need two more weeks."
+                  onChange={(e) => { setExtension((x) => ({ ...x, reason: e.target.value })); setErrors({}); }}
+                />
+              </Field>
+              <button type="button" className="btn btn-primary" onClick={askForMoreTime} disabled={Boolean(busy)}>
+                {busy === 'extension' ? 'Sending…' : 'Ask for more time'}
+              </button>
+            </fieldset>
+          )}
+
+          {mode === 'review' && (status === 'PENDING' || ask) && (
             <fieldset>
               <legend>Decision</legend>
               <Field label="Comment to the student" error={errors.comment} required hint="Required for both approve and reject. The student sees this.">

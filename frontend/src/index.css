@@ -164,6 +164,8 @@ a { color: var(--brand); }
 .badge::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
 .badge-pending { background: #fef6e7; color: #93500a; }
 .badge-approved { background: #eaf2ff; color: #1d4ed8; }
+.badge-ask { background: #fdf0ff; color: #86198f; }
+.badge-group { display: inline-flex; flex-wrap: wrap; gap: 0.3rem; }
 .badge-active { background: var(--success-soft); color: var(--success); }
 .badge-completed { background: #f0f1f3; color: #475467; }
 .badge-rejected { background: var(--danger-soft); color: var(--danger); }
@@ -279,6 +281,12 @@ input[type='range']:disabled { cursor: default; opacity: 0.75; }
 .filter-inputs { display: flex; gap: 0.5rem; }
 .filter-inputs select { width: auto; }
 .filter-inputs input { width: 240px; }
+.export-panel { margin: 0.75rem 0; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 0.5rem 0.9rem; }
+.export-panel summary { cursor: pointer; font-weight: 600; color: var(--text-2); }
+.export-panel[open] summary { margin-bottom: 0.6rem; }
+.export-body { display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: flex-end; }
+.export-body label { display: flex; flex-direction: column; gap: 0.25rem; }
+.export-panel .hint { margin: 0.5rem 0 0; }
 
 /* ---------- account ---------- */
 .profile-card { display: grid; grid-template-columns: 240px 1fr; background: var(--surface); border: 1px solid var(--border); border-radius: 14px; box-shadow: var(--shadow-sm); overflow: hidden; }

@@ -67,7 +67,7 @@ export default function StudentHomePage() {
     { key: 'purpose', label: 'Project', className: 'col-wide' },
     { key: 'resource_type', label: 'Resource Type', render: (r) => resourceShort(r.resource_type) },
     { key: 'period', label: 'Borrow Period', render: borrowPeriod },
-    { key: 'status', label: 'Request Status', render: (r) => <StatusBadge status={r.status} /> },
+    { key: 'status', label: 'Request Status', render: (r) => <StatusBadge status={r.status} extensionAsked={r.extension_asked} /> },
     {
       key: 'action',
       label: '',
