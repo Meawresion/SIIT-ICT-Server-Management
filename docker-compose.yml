@@ -62,6 +62,7 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+      target: dev
     container_name: siit_frontend
     environment:
       VITE_API_URL: ${VITE_API_URL}
