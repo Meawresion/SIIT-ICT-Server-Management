@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Deploys a throwaway copy of the backend (network, platform, data, app in direct mode on the ALB's
-# AWS name, with a placeholder Google client), checks it, then deletes every stack it created and
-# checks that nothing is left behind. The stacks are deleted even when a step fails.
+# Deploys a throwaway copy of the portal (network, platform, data, app and web in direct mode on
+# the ALB's AWS name, with a placeholder Google client), checks it, then deletes every stack it
+# created and checks that nothing is left behind. The stacks are deleted even when a step fails.
+# A dns stack, if any, is left alone (it may stay between runs).
 # Usage: smoke-test.sh [--keep]   (--keep: leave the stacks running; delete them with destroy.sh)
 export ENTRY_MODE=direct USE_DOMAIN=false
 . "$(dirname "$0")/lib.sh"
@@ -40,7 +41,7 @@ leftovers() {
     fi
   }
   check "stacks" cloudformation list-stacks \
-    --query "StackSummaries[?starts_with(StackName,'$PROJECT-') && StackStatus!='DELETE_COMPLETE'].[StackName,StackStatus]"
+    --query "StackSummaries[?starts_with(StackName,'$PROJECT-') && StackName!='$STACK_DNS' && StackStatus!='DELETE_COMPLETE'].[StackName,StackStatus]"
   check "ECR repositories" ecr describe-repositories --query "repositories[?starts_with(repositoryName,'$PROJECT-')].repositoryName"
   check "ECS clusters" ecs list-clusters --query "clusterArns[?ends_with(@,'/$PROJECT')]"
   check "VPCs" ec2 describe-vpcs --filters "Name=tag:Name,Values=$PROJECT-vpc" --query 'Vpcs[].VpcId'
@@ -55,11 +56,11 @@ leftovers() {
 teardown() {
   local status=$?
   if [ "$keep" = true ]; then
-    echo "Kept the stacks (--keep). Delete them with: destroy.sh app data platform network; and the $STACK_TEST_GOOGLE stack"
+    echo "Kept the stacks (--keep). Delete them with: destroy.sh web app data platform network; and the $STACK_TEST_GOOGLE stack"
     exit "$status"
   fi
   echo "== teardown"
-  for stack in "$STACK_APP" "$STACK_DATA" "$STACK_TEST_GOOGLE" "$STACK_PLATFORM" "$STACK_NETWORK"; do
+  for stack in "$STACK_WEB" "$STACK_APP" "$STACK_DATA" "$STACK_TEST_GOOGLE" "$STACK_PLATFORM" "$STACK_NETWORK"; do
     delete_stack "$stack"
   done
   leftovers || status=1
@@ -76,7 +77,7 @@ echo "== deploy (ENTRY_MODE=$ENTRY_MODE, USE_DOMAIN=$USE_DOMAIN)"
 deploy "$STACK_TEST_GOOGLE" test-google.yaml "Project=$PROJECT"
 GOOGLE_SECRET_ARN=$(stack_output "$STACK_TEST_GOOGLE" SecretArn)
 export GOOGLE_SECRET_ARN
-"$SCRIPTS/deploy.sh" data app
+"$SCRIPTS/deploy.sh" data app web
 
 url=$(stack_output "$STACK_APP" PublicUrl)
 echo "== checks against $url"
@@ -86,9 +87,14 @@ wait_for_200() { # the ALB registers the task, and MySQL may still be running in
 }
 wait_for_200 "$url/health"
 wait_for_200 "$url/health/ready"
+wait_for_200 "$url/"
 expect "backend answers through the ALB (/health)" 200 "$(curl -s -o /dev/null -w '%{http_code}' "$url/health")"
 expect "backend reaches MySQL through the internal NLB as the app user (/health/ready)" \
   200 "$(curl -s -o /dev/null -w '%{http_code}' "$url/health/ready")"
+has_root() { curl -s "$1" | grep -c '<div id="root">'; }
+expect "frontend answers through the ALB (/)" 1 "$(has_root "$url/")"
+expect "a client-side route gets index.html (/requests)" 1 "$(has_root "$url/requests")"
+expect "an unknown asset is 404, not index.html" 404 "$(status "$url/assets/missing.js")"
 expect "no sign-in token gives 401 (/api/auth/me)" 401 "$(curl -s -o /dev/null -w '%{http_code}' "$url/api/auth/me")"
 expect "a state change from another origin gives 403" \
   403 "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Origin: https://evil.example' "$url/api/auth/logout")"

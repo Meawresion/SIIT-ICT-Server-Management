@@ -4,7 +4,8 @@ Description: >-
   EntryMode cloudfront (the target design): only CloudFront can use the ALB (prefix list + a secret
   header). EntryMode direct (accounts without CloudFront, e.g. Learner Lab): the ALB is the public
   entry, over HTTPS with a domain, or over HTTP on its AWS name for smoke tests (no sign-in: the
-  cookie needs HTTPS). Plain settings go in the task definition; secret ones come from Secrets
+  cookie needs HTTPS); it sends /api/* and /health to the backend, and the web stack adds the
+  frontend for everything else. Plain settings go in the task definition; secret ones come from Secrets
   Manager (D13).
 
 Parameters:
@@ -216,7 +217,8 @@ Resources:
             StatusCode: '403'
             ContentType: text/plain
             MessageBody: Forbidden
-  # cloudfront: forward only requests with the secret header; direct: forward everything.
+  # cloudfront: forward only requests with the secret header (CloudFront sends only /api/* here).
+  # direct: forward the API paths; the web stack's lower-priority rule takes the rest.
   ForwardRule:
     Type: AWS::ElasticLoadBalancingV2::ListenerRule
     Properties:
@@ -232,7 +234,7 @@ Resources:
                 - !Sub '{{resolve:secretsmanager:${OriginVerifySecret}:SecretString:value}}'
           - Field: path-pattern
             PathPatternConfig:
-              Values: ['/*']
+              Values: ['/api/*', '/health', '/health/*']
       Actions:
         - Type: forward
           TargetGroupArn: !Ref TargetGroup
@@ -388,6 +390,15 @@ Outputs:
     Value: !Ref OriginVerifySecret
     Export:
       Name: !Sub '${AWS::StackName}-OriginVerifySecretArn'
+  ListenerArn:
+    Description: The web stack adds its frontend rule here (direct mode)
+    Value: !If [HasCert, !Ref HttpsListener, !Ref HttpListener]
+    Export:
+      Name: !Sub '${AWS::StackName}-ListenerArn'
+  AlbSecurityGroupId:
+    Value: !Ref AlbSecurityGroup
+    Export:
+      Name: !Sub '${AWS::StackName}-AlbSecurityGroupId'
   ServiceName:
     Value: !GetAtt Service.Name
   TaskDefinitionArn:
@@ -396,7 +407,7 @@ Outputs:
   LoadBalancerDnsName:
     Value: !GetAtt LoadBalancer.DNSName
   PublicUrl:
-    Description: Where the backend answers in direct mode (cloudfront mode - the edge stack's AppUrl)
+    Description: The portal in direct mode (cloudfront mode - the edge stack's AppUrl)
     Value: !If
       - HasDomain
       - !Sub

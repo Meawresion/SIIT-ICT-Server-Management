@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Deploys stacks in order. Usage: deploy.sh all | <stack>...   (dns cert network platform data app edge)
+# Deploys stacks in order. Usage: deploy.sh all | <stack>...   (dns cert network platform data app edge web)
 # First time: dns, then the NS records at the parent domain, then the rest (see infra/README.md).
+# The frontend comes from edge (CloudFront + S3) or web (ECS behind the ALB, direct mode).
 . "$(dirname "$0")/lib.sh"
 
 deploy_dns() {
@@ -60,6 +61,20 @@ deploy_app() {
   echo "Backend: $(stack_output "$STACK_APP" PublicUrl)"
 }
 
+deploy_web() {
+  local tag
+  if [ "$ENTRY_MODE" != direct ]; then
+    echo "web needs ENTRY_MODE=direct (with CloudFront, edge serves the frontend from S3)." >&2
+    exit 1
+  fi
+  tag=$(frontend_tag)
+  require_image "$PROJECT-frontend" "$tag"
+  deploy "$STACK_WEB" web.yaml "Project=$PROJECT" "NetworkStack=$STACK_NETWORK" \
+    "PlatformStack=$STACK_PLATFORM" "AppStack=$STACK_APP" "ImageTag=$tag" \
+    "ExecutionRoleArn=$(role_arn)" "DesiredCount=${FRONTEND_DESIRED_COUNT:-1}"
+  echo "Portal: $(stack_output "$STACK_APP" PublicUrl)"
+}
+
 deploy_edge() {
   if [ "$ENTRY_MODE" != cloudfront ]; then
     echo "edge needs ENTRY_MODE=cloudfront (this account may not allow CloudFront)." >&2
@@ -70,11 +85,15 @@ deploy_edge() {
   echo "Portal: $(stack_output "$STACK_EDGE" AppUrl) (publish the frontend with publish-frontend.sh)"
 }
 
-[ $# -gt 0 ] || { echo "Usage: $0 all | dns cert network platform data app edge" >&2; exit 1; }
-[ "$1" = all ] && set -- dns cert network platform data app edge
+[ $# -gt 0 ] || { echo "Usage: $0 all | dns cert network platform data app edge web" >&2; exit 1; }
+if [ "$1" = all ]; then
+  set -- network platform data app
+  if [ "$USE_DOMAIN" = true ]; then set -- dns cert "$@"; fi
+  if [ "$ENTRY_MODE" = cloudfront ]; then set -- "$@" edge; else set -- "$@" web; fi
+fi
 for stack in "$@"; do
   case $stack in
-    dns|cert|network|platform|data|app|edge) "deploy_$stack" ;;
+    dns|cert|network|platform|data|app|edge|web) "deploy_$stack" ;;
     *) echo "Unknown stack: $stack" >&2; exit 1 ;;
   esac
 done

@@ -35,6 +35,17 @@ Resources:
       LifecyclePolicy:
         LifecyclePolicyText: !Sub '{"rules":[{"rulePriority":1,"description":"Keep the newest images","selection":{"tagStatus":"any","countType":"imageCountMoreThan","countNumber":${ImagesToKeep}},"action":{"type":"expire"}}]}'
 
+  # The frontend image (nginx + the React build), used where CloudFront isn't available (web stack).
+  FrontendRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Sub '${Project}-frontend'
+      EmptyOnDelete: true
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      LifecyclePolicy:
+        LifecyclePolicyText: !Sub '{"rules":[{"rulePriority":1,"description":"Keep the newest images","selection":{"tagStatus":"any","countType":"imageCountMoreThan","countNumber":${ImagesToKeep}},"action":{"type":"expire"}}]}'
+
   Cluster:
     Type: AWS::ECS::Cluster
     Properties:
@@ -66,6 +77,10 @@ Outputs:
     Value: !GetAtt MysqlRepository.RepositoryUri
     Export:
       Name: !Sub '${AWS::StackName}-MysqlRepositoryUri'
+  FrontendRepositoryUri:
+    Value: !GetAtt FrontendRepository.RepositoryUri
+    Export:
+      Name: !Sub '${AWS::StackName}-FrontendRepositoryUri'
   ClusterName:
     Value: !Ref Cluster
     Export:

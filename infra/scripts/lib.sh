@@ -34,6 +34,7 @@ STACK_PLATFORM="$PROJECT-platform"
 STACK_DATA="$PROJECT-data"
 STACK_APP="$PROJECT-app"
 STACK_EDGE="$PROJECT-edge"
+STACK_WEB="$PROJECT-web"
 
 # aws with text output and without the Windows carriage returns
 awst() { aws --output text "$@" | tr -d '\r'; }
@@ -66,6 +67,16 @@ image_tag() {
 }
 backend_tag() { image_tag backend; }
 mysql_tag() { image_tag database/Dockerfile database/init.sql; }
+frontend_tag() { image_tag frontend; }
+
+# The portal's address: CloudFront (edge stack) or the ALB itself (direct mode).
+portal_url() {
+  if [ "$ENTRY_MODE" = cloudfront ]; then stack_output "$STACK_EDGE" AppUrl; else stack_output "$STACK_APP" PublicUrl; fi
+}
+
+service_exists() {
+  [ "$(awst ecs describe-services --cluster "$PROJECT" --services "$1" --query "services[?status=='ACTIVE'] | length(@)" 2>/dev/null)" = 1 ]
+}
 
 require_image() {
   if ! aws ecr describe-images --repository-name "$1" --image-ids "imageTag=$2" >/dev/null 2>&1; then

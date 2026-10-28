@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-# Deletes stacks, newest first. Usage: destroy.sh <stack>...   e.g. destroy.sh edge app
-# For a long break, delete edge and app; keep dns and cert (name servers, certificate), network,
+# Deletes stacks, newest first. Usage: destroy.sh <stack>...   e.g. destroy.sh web app
+# For a long break, delete edge/web and app; keep dns and cert (name servers, certificate), network,
 # platform (images) and data (the database). Deleting data deletes the database for good.
+# The dns stack may stay between test runs (user's OK, 2026-10-28): it runs nothing.
 . "$(dirname "$0")/lib.sh"
 
-order=(edge app data platform network cert dns)
+order=(edge web app data platform network cert dns)
 [ $# -gt 0 ] || { echo "Usage: $0 <stack>...   (${order[*]})" >&2; exit 1; }
 for stack in "$@"; do
   [[ " ${order[*]} " == *" $stack "* ]] || { echo "Unknown stack: $stack" >&2; exit 1; }
