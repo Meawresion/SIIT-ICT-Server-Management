@@ -410,29 +410,20 @@ therefore saves an empty string.
 The profile's primary advisor is stored in `user.advisor_name`. The supervisor of
 an individual request is stored separately in `request.spv_name`.
 
-## Schema changes on an existing database
+## Schema changes
 
-`init.sql` runs only when the `mysql_data` volume is created. When it changes, a
-matching script in `migrations/` brings an existing database up to date. Run each
-script once, in date order, then regenerate the Prisma client:
-
-```bash
-docker compose exec -T mysql sh -c 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" "$MYSQL_DATABASE"' < database/migrations/2026-10-25-user-advisor-name.sql
-```
-
-| Script | Change |
-|--------|--------|
-| `2026-10-25-user-advisor-name.sql` | Adds `user.advisor_name` |
-| `2026-10-28-request-event.sql` | Adds the `request_event` audit log, its triggers and the logging procedures; backfills each request's creation and latest review. Then run `privileges.sh` once (below). |
-| `2026-10-28-provision-job.sql` | Adds the `provision_job` outbox. Then run `privileges.sh` again (below). |
-| `2026-10-28-scheduler-lease.sql` | Adds the `scheduler_lease` table. Then run `privileges.sh` again (below). |
-
-After `2026-10-28-request-event.sql`, `2026-10-28-provision-job.sql` and `2026-10-28-scheduler-lease.sql`, set the app user's rights (recreate the mysql container first, so
-`privileges.sh` is mounted: `docker compose up -d mysql`):
+`init.sql` and `privileges.sh` run only when the `mysql_data` volume is created, and there are
+no migration scripts: after a schema change, delete the volume and let MySQL create a new one.
+This deletes all local data.
 
 ```bash
-docker compose exec -T mysql sh /docker-entrypoint-initdb.d/privileges.sh
+docker compose rm -sf mysql backend
+docker volume rm siit-ict-server-management_mysql_data
+docker compose up -d --build
 ```
+
+The volume name is `<compose project>_mysql_data` (`docker volume ls`). On AWS, a new data stack
+starts from the same `init.sql`.
 
 ## Assign reviewer access by email
 
