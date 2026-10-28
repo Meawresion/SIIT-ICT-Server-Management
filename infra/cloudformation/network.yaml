@@ -23,7 +23,7 @@ Resources:
     Type: AWS::EC2::VPC
     Properties:
       CidrBlock: !Ref VpcCidr
-      # Cloud Map private DNS names need both.
+      # EFS mount target and load balancer names resolve through the VPC DNS.
       EnableDnsSupport: true
       EnableDnsHostnames: true
       Tags:

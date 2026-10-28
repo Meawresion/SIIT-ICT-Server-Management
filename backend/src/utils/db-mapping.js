@@ -25,6 +25,18 @@ export function requestView(row) {
     review_comment: extra.review_comment ?? null, status: reverse(statusToDb, row.status),
     user: userView(row.user_request_student_uidTouser), reviewed_by: accountView(row.user_request_approver_uidTouser) };
 }
+// Status history (FR-4.2). Students see who acted only by role; approvers also see the name.
+export const eventInclude = { user: { select: { fullname: true, role: true } } };
+export function eventView(row, { names = false } = {}) {
+  return {
+    id: Number(row.eid), action: row.action,
+    from: row.from_status ? reverse(statusToDb, row.from_status) : null, to: reverse(statusToDb, row.to_status),
+    actor: row.actor_uid === null ? { role: 'System' } : { role: row.user?.role ?? null, ...(names && { name: row.user?.fullname ?? null }) },
+    comment: row.comment ?? null, details: row.details ?? null, at: row.created_at,
+  };
+}
+export const overlapView = row => ({ id: row.rid, status: reverse(statusToDb, row.status), start: row.start_date, end: row.end_date });
+
 export function parseId(value) {
   if (!/^\d+$/.test(String(value)) || !Number.isSafeInteger(Number(value)) || Number(value) < 1 || Number(value) > 4294967295) {
     throw Object.assign(new Error('Invalid ID'), { statusCode: 400 });
@@ -36,6 +48,6 @@ export function requestResponse(request) {
   return Object.fromEntries([
     'id', 'purpose', 'project_name', 'project_description', 'project_supervisor_name', 'project_supervisor_email',
     'resource_type', 'justification', 'estimated_start_date', 'estimated_end_date', 'impact_score',
-    'supervisor_confirmation', 'status', 'review_comment', 'reviewed_at', 'created_at', 'updated_at',
+    'supervisor_confirmation', 'status', 'review_comment', 'reviewed_at', 'created_at', 'updated_at', 'events',
   ].map(key => [key, request[key]]));
 }

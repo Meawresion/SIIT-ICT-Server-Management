@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
-# Builds the backend (production stage) and MySQL images and pushes them to ECR.
-# Usage: push-images.sh [backend] [mysql]   (default: both). Needs the platform stack.
+# Builds the images (production stages) and pushes them to ECR. Needs the platform stack.
+# Usage: push-images.sh [backend] [mysql] [frontend]
+#   default: backend and mysql, plus frontend in direct mode (with CloudFront it goes to S3:
+#   publish-frontend.sh).
 . "$(dirname "$0")/lib.sh"
 
 registry="$(account_id).dkr.ecr.$AWS_REGION.amazonaws.com"
@@ -20,11 +22,18 @@ push() {
   docker_ push "$image"
 }
 
-[ $# -gt 0 ] || set -- backend mysql
+if [ $# -eq 0 ]; then
+  set -- backend mysql
+  if [ "$ENTRY_MODE" = direct ]; then set -- "$@" frontend; fi
+fi
 for name in "$@"; do
   case $name in
     backend) push backend "$(backend_tag)" "$REPO_DIR/backend" --target prod ;;
     mysql) push mysql "$(mysql_tag)" "$REPO_DIR/database" ;;
+    # Same origin as the API: VITE_API_URL stays empty. A new CONTACT_EMAIL needs a new commit
+    # in frontend/ (or a -dirty build), because the tag follows frontend/ only.
+    frontend) push frontend "$(frontend_tag)" "$REPO_DIR/frontend" --target prod \
+      --build-arg "VITE_CONTACT_EMAIL=${CONTACT_EMAIL:-}" ;;
     *) echo "Unknown image: $name" >&2; exit 1 ;;
   esac
 done

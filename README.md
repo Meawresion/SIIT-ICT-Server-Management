@@ -304,37 +304,15 @@ Tests cover:
 
 ## Production Deployment
 
-### AWS ECS Fargate Deployment
+AWS is built with CloudFormation; the templates, scripts and steps are in
+[`infra/README.md`](infra/README.md). In short:
 
-1. **Prepare Images**
-   ```bash
-   # Build and push to ECR
-   aws ecr get-login-password | docker login --username AWS --password-stdin <registry>
-   docker tag siit-backend <registry>/siit-backend:latest
-   docker push <registry>/siit-backend:latest
-   docker tag siit-frontend <registry>/siit-frontend:latest
-   docker push <registry>/siit-frontend:latest
-   ```
-
-2. **Create ECS Services**
-   - Backend task definition (port 3000)
-   - Frontend task definition (port 5173)
-   - Auto-scaling policies
-
-3. **Configure RDS MySQL**
-   - Create MySQL 8 database
-   - Run initialization script
-   - Configure security groups
-
-4. **Set Up Application Load Balancer**
-   - Create ALB
-   - Configure routing rules
-   - Attach SSL certificate
-
-5. **Environment Configuration**
-   - Update production environment variables
-   - Enable HTTPS
-   - Configure CloudFront CDN
+- **Backend:** ECS Fargate behind an Application Load Balancer (`backend/Dockerfile`, `prod` stage).
+- **Frontend:** CloudFront + S3 (the target design), or, where CloudFront isn't allowed (AWS
+  Learner Lab), its own ECS service behind the same load balancer (`frontend/Dockerfile`, `prod`
+  stage: nginx with the React build). Either way it is built and deployed separately from the
+  backend, on the same origin as the API.
+- **Database:** MySQL as an ECS task on EFS for now, RDS later.
 
 ## Development Commands
 

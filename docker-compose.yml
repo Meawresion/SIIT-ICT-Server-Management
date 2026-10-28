@@ -4,7 +4,8 @@ services:
     container_name: siit_mysql
     environment:
       # root is the admin user (schema, init.sql); the backend connects as MYSQL_USER, which the
-      # image creates on the first start with rights on MYSQL_DATABASE only.
+      # image creates on the first start; privileges.sh then limits it to the app's tables, with
+      # only SELECT and INSERT on the request_event audit log (FR-9.1).
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
       MYSQL_DATABASE: ${MYSQL_DATABASE}
       MYSQL_USER: ${MYSQL_USER}
@@ -13,6 +14,7 @@ services:
       - "127.0.0.1:3306:3306"
     volumes:
       - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql
+      - ./database/privileges.sh:/docker-entrypoint-initdb.d/privileges.sh
       - mysql_data:/var/lib/mysql
     networks:
       - siit-network
@@ -62,6 +64,7 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+      target: dev
     container_name: siit_frontend
     environment:
       VITE_API_URL: ${VITE_API_URL}

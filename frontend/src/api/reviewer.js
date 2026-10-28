@@ -16,10 +16,12 @@ export async function getRequest(id) {
   return apiRequest(`/api/reviewer/requests/${id}`);
 }
 
-export async function approveRequest(id, review_comment) {
+// confirm_overlap: the approver saw the student's overlapping requests (D28). Without it the API
+// answers 409 with the list when there are any.
+export async function approveRequest(id, review_comment, confirm_overlap = false) {
   return apiRequest(`/api/reviewer/requests/${id}/approve`, {
     method: 'PATCH',
-    body: JSON.stringify({ review_comment }),
+    body: JSON.stringify({ review_comment, ...(confirm_overlap && { confirm_overlap: true }) }),
   });
 }
 

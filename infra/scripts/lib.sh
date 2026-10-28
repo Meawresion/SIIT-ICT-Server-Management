@@ -11,14 +11,21 @@ if [ ! -f "$CONFIG" ]; then
   echo "Missing $CONFIG: copy infra/config.example.env and fill it in." >&2
   exit 1
 fi
+# Values set in the environment (ENTRY_MODE=direct deploy.sh app) win over config.env.
+overrides=$(declare -p ENTRY_MODE USE_DOMAIN GOOGLE_SECRET_ARN 2>/dev/null || true)
 set -a
 # shellcheck source=/dev/null
 . "$CONFIG"
 set +a
+eval "$overrides"
 for key in AWS_PROFILE AWS_REGION PROJECT ZONE_NAME APP_HOST ORIGIN_HOST ROLE_NAME GOOGLE_SECRET_NAME DOCKER; do
   if [ -z "${!key:-}" ]; then echo "Missing $key in $CONFIG" >&2; exit 1; fi
 done
 export AWS_DEFAULT_REGION="$AWS_REGION"
+# cloudfront: the target design. direct: the ALB is the public entry (accounts without CloudFront).
+ENTRY_MODE=${ENTRY_MODE:-cloudfront}
+# false: no hosted zone or certificate; the ALB answers on its AWS name over HTTP (smoke tests).
+USE_DOMAIN=${USE_DOMAIN:-true}
 
 STACK_DNS="$PROJECT-dns"
 STACK_CERT="$PROJECT-cert"
@@ -27,6 +34,7 @@ STACK_PLATFORM="$PROJECT-platform"
 STACK_DATA="$PROJECT-data"
 STACK_APP="$PROJECT-app"
 STACK_EDGE="$PROJECT-edge"
+STACK_WEB="$PROJECT-web"
 
 # aws with text output and without the Windows carriage returns
 awst() { aws --output text "$@" | tr -d '\r'; }
@@ -58,7 +66,17 @@ image_tag() {
   echo "$tag"
 }
 backend_tag() { image_tag backend; }
-mysql_tag() { image_tag database/Dockerfile database/init.sql; }
+mysql_tag() { image_tag database/Dockerfile database/init.sql database/privileges.sh; }
+frontend_tag() { image_tag frontend; }
+
+# The portal's address: CloudFront (edge stack) or the ALB itself (direct mode).
+portal_url() {
+  if [ "$ENTRY_MODE" = cloudfront ]; then stack_output "$STACK_EDGE" AppUrl; else stack_output "$STACK_APP" PublicUrl; fi
+}
+
+service_exists() {
+  [ "$(awst ecs describe-services --cluster "$PROJECT" --services "$1" --query "services[?status=='ACTIVE'] | length(@)" 2>/dev/null)" = 1 ]
+}
 
 require_image() {
   if ! aws ecr describe-images --repository-name "$1" --image-ids "imageTag=$2" >/dev/null 2>&1; then

@@ -1,7 +1,9 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Description: >-
-  Budget database (D31): MySQL 8.4 as one ECS Fargate task, data on EFS, reachable as
-  mysql.<namespace>. The first start on an empty EFS runs database/init.sql (baked into the image).
+  Budget database (D31): MySQL 8.4 as one ECS Fargate task, data on EFS, reachable inside the VPC
+  through an internal Network Load Balancer (a stable name for a task whose IP changes; Cloud Map
+  isn't allowed on Learner Lab). The first start on an empty EFS runs database/init.sql (baked
+  into the image).
   To move to RDS, deploy data-rds instead and point the app stack at it: both export DbHost,
   DbPort, DbName and DbSecretArn. Pause with DesiredCount 0; deleting this stack deletes the data
   and its passwords together.
@@ -67,10 +69,10 @@ Resources:
         PasswordLength: 32
         ExcludePunctuation: true
 
-  DbSecurityGroup:
+  DbLbSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupDescription: MySQL task (3306 only from the backend tasks)
+      GroupDescription: Internal MySQL load balancer (3306 only from the backend tasks)
       VpcId:
         Fn::ImportValue: !Sub '${NetworkStack}-VpcId'
       SecurityGroupIngress:
@@ -80,6 +82,21 @@ Resources:
           SourceSecurityGroupId:
             Fn::ImportValue: !Sub '${PlatformStack}-BackendSecurityGroupId'
           Description: Backend tasks
+      Tags:
+        - Key: Name
+          Value: !Sub '${Project}-mysql-lb'
+  DbSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: MySQL task (3306 only from its load balancer)
+      VpcId:
+        Fn::ImportValue: !Sub '${NetworkStack}-VpcId'
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 3306
+          ToPort: 3306
+          SourceSecurityGroupId: !Ref DbLbSecurityGroup
+          Description: Internal load balancer (traffic and health checks)
       SecurityGroupEgress:
         - IpProtocol: '-1'
           CidrIp: 0.0.0.0/0
@@ -145,19 +162,35 @@ Resources:
       LogGroupName: !Sub '/${Project}/mysql'
       RetentionInDays: !Ref LogRetentionDays
 
-  DiscoveryService:
-    Type: AWS::ServiceDiscovery::Service
+  DbLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
     Properties:
-      Name: mysql
-      NamespaceId:
-        Fn::ImportValue: !Sub '${PlatformStack}-NamespaceId'
-      DnsConfig:
-        RoutingPolicy: MULTIVALUE
-        DnsRecords:
-          - Type: A
-            TTL: 10
-      HealthCheckCustomConfig:
-        FailureThreshold: 1
+      Type: network
+      Scheme: internal
+      Subnets: !Split [',', {'Fn::ImportValue': !Sub '${NetworkStack}-PrivateSubnets'}]
+      SecurityGroups: [!Ref DbLbSecurityGroup]
+  DbTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      TargetType: ip
+      Protocol: TCP
+      Port: 3306
+      VpcId:
+        Fn::ImportValue: !Sub '${NetworkStack}-VpcId'
+      HealthCheckProtocol: TCP
+      HealthCheckIntervalSeconds: 30
+      TargetGroupAttributes:
+        - Key: deregistration_delay.timeout_seconds
+          Value: '10'
+  DbListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref DbLoadBalancer
+      Protocol: TCP
+      Port: 3306
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref DbTargetGroup
 
   TaskDefinition:
     Type: AWS::ECS::TaskDefinition
@@ -184,8 +217,9 @@ Resources:
             - Repo:
                 Fn::ImportValue: !Sub '${PlatformStack}-MysqlRepositoryUri'
           Essential: true
-          # Linux native AIO isn't available on NFS (EFS).
-          Command: ['--innodb-use-native-aio=0']
+          # Linux native AIO isn't available on NFS (EFS). The load balancer's TCP health checks
+          # never log in; without the host cache MySQL never blocks its address for that.
+          Command: ['--innodb-use-native-aio=0', '--skip-name-resolve', '--host-cache-size=0']
           PortMappings:
             - ContainerPort: 3306
               Protocol: tcp
@@ -217,7 +251,7 @@ Resources:
 
   Service:
     Type: AWS::ECS::Service
-    DependsOn: [MountTargetA, MountTargetB]
+    DependsOn: [MountTargetA, MountTargetB, DbListener]
     Properties:
       ServiceName: mysql
       Cluster:
@@ -225,6 +259,8 @@ Resources:
       TaskDefinition: !Ref TaskDefinition
       LaunchType: FARGATE
       DesiredCount: !Ref DesiredCount
+      # The first start runs init.sql on EFS before MySQL accepts connections.
+      HealthCheckGracePeriodSeconds: 300
       # Stop the old task before starting a new one: two MySQL servers must never share a data dir.
       DeploymentConfiguration:
         MinimumHealthyPercent: 0
@@ -235,15 +271,14 @@ Resources:
           AssignPublicIp: ENABLED
           Subnets: !Split [',', {'Fn::ImportValue': !Sub '${NetworkStack}-PublicSubnets'}]
           SecurityGroups: [!Ref DbSecurityGroup]
-      ServiceRegistries:
-        - RegistryArn: !GetAtt DiscoveryService.Arn
+      LoadBalancers:
+        - ContainerName: mysql
+          ContainerPort: 3306
+          TargetGroupArn: !Ref DbTargetGroup
 
 Outputs:
   DbHost:
-    Value: !Sub
-      - 'mysql.${Namespace}'
-      - Namespace:
-          Fn::ImportValue: !Sub '${PlatformStack}-NamespaceName'
+    Value: !GetAtt DbLoadBalancer.DNSName
     Export:
       Name: !Sub '${AWS::StackName}-DbHost'
   DbPort:

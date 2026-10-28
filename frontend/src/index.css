@@ -173,6 +173,9 @@ a { color: var(--brand); }
 .alert { padding: 0.7rem 0.9rem; border-radius: var(--radius-sm); font-size: 0.9rem; }
 .alert-error { background: var(--danger-soft); color: var(--danger); border: 1px solid #f7d4cf; }
 .alert-success { background: var(--success-soft); color: var(--success); border: 1px solid #c7ecd6; }
+.alert-warning { background: #fef6e7; color: #93500a; border: 1px solid #f6dfb3; display: flex; flex-direction: column; gap: 0.35rem; }
+.alert-warning.is-confirming { border-width: 2px; }
+.overlap-list { margin: 0; padding-left: 1.1rem; }
 .toast {
   position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%); z-index: 60;
   background: var(--text); color: #fff; padding: 0.7rem 1.1rem; border-radius: 999px; box-shadow: var(--shadow-lg); font-size: 0.9rem;
@@ -238,6 +241,16 @@ input[type='range']:disabled { cursor: default; opacity: 0.75; }
 .review-note { padding: 0.8rem 0.95rem; border-left: 3px solid var(--brand); background: var(--brand-soft); border-radius: 0 var(--radius-sm) var(--radius-sm) 0; display: flex; flex-direction: column; gap: 0.25rem; font-size: 0.9rem; }
 .review-note.is-rejected { border-left-color: var(--danger); background: var(--danger-soft); }
 .review-note small { color: var(--muted); }
+
+.history h3 { font-size: 0.95rem; margin: 0 0 8px; }
+.timeline { list-style: none; margin: 0; padding: 0 0 0 14px; border-left: 2px solid var(--border); display: flex; flex-direction: column; gap: 10px; }
+.timeline-item { position: relative; font-size: 0.88rem; }
+.timeline-item::before { content: ''; position: absolute; left: -20px; top: 0.35rem; width: 10px; height: 10px; border-radius: 50%; background: var(--surface); border: 2px solid var(--brand-line); }
+.timeline-item.is-approved::before, .timeline-item.is-activated::before { border-color: var(--success); }
+.timeline-item.is-rejected::before { border-color: var(--danger); }
+.timeline-head { display: flex; flex-wrap: wrap; gap: 0.2rem 0.5rem; align-items: baseline; }
+.timeline-head time { margin-left: auto; font-size: 0.8rem; }
+.timeline-note { margin: 2px 0 0; color: var(--text-2); overflow-wrap: anywhere; }
 
 .form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px 18px; }
 .form-actions { display: flex; justify-content: flex-end; gap: 0.6rem; margin-top: 18px; }

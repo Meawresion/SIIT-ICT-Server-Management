@@ -8,22 +8,62 @@ Browser ─HTTPS─▶ CloudFront  APP_HOST.ZONE_NAME
                   ├─ default ─▶ S3 (React build, private, OAC)
                   └─ /api/*  ─▶ ALB  ORIGIN_HOST.ZONE_NAME (only CloudFront: prefix list + secret header)
                                  └─▶ ECS Fargate backend (public subnets, public IP, no NAT)
-                                        └─▶ ECS Fargate mysql (EFS, mysql.siit.internal)
+                                        └─▶ internal NLB ─▶ ECS Fargate mysql (EFS)
+```
+
+Without CloudFront (`ENTRY_MODE=direct`, e.g. Learner Lab) the ALB is the public entry and the
+frontend is its own ECS service (nginx with the React build), built and deployed apart from the
+backend:
+
+```
+Browser ─▶ ALB  APP_HOST.ZONE_NAME (HTTPS), or its AWS name (HTTP, smoke tests)
+            ├─ /api/*, /health ─▶ ECS Fargate backend ─▶ internal NLB ─▶ ECS Fargate mysql (EFS)
+            └─ everything else ─▶ ECS Fargate frontend (web stack)
 ```
 
 ## Stacks (`cloudformation/`)
 
 | Stack | Template | Contents |
 |---|---|---|
-| `<project>-dns` | `dns.yaml` | Route 53 hosted zone for the delegated subdomain. Keep it: a new zone has new name servers. |
+| `<project>-dns` | `dns.yaml` | Route 53 hosted zone for the delegated subdomain. Keep it, also between test runs: a new zone has new name servers. |
 | `<project>-cert` | `cert.yaml` | ACM certificate for the zone and `*.zone`, validated through DNS (us-east-1, used by CloudFront and the ALB). |
 | `<project>-network` | `network.yaml` | VPC, 2 public subnets (ALB, tasks), 2 private subnets (EFS, RDS later). No NAT gateway. |
-| `<project>-platform` | `platform.yaml` | ECR repositories, ECS cluster, Cloud Map namespace, backend security group. |
-| `<project>-data` | `data-ecs.yaml` | MySQL 8.4 task + EFS + generated DB passwords. Later replaced by an RDS stack with the same outputs. |
+| `<project>-platform` | `platform.yaml` | ECR repositories for backend, mysql and frontend (emptied on delete), ECS cluster, backend security group. |
+| `<project>-data` | `data-ecs.yaml` | MySQL 8.4 task + EFS + internal NLB (stable DB name) + generated DB passwords. Later replaced by an RDS stack with the same outputs. |
 | `<project>-app` | `app.yaml` | ALB, backend service, generated `JWT_SECRET` and origin header. |
-| `<project>-edge` | `edge.yaml` | S3 bucket, CloudFront (SPA rewrite function), DNS records for the portal. |
+| `<project>-edge` | `edge.yaml` | CloudFront mode: S3 bucket, CloudFront (SPA rewrite function), DNS records for the portal. |
+| `<project>-web` | `web.yaml` | Direct mode: the frontend service (nginx, `frontend/Dockerfile` `prod` stage) and its ALB rule for every path the backend doesn't take. |
 
 On AWS Learner Lab, IAM roles can't be created, so every task uses `LabRole` (`ROLE_NAME`).
+
+## AWS Learner Lab limits (checked 2026-10-27)
+
+| Service | Learner Lab | What we do |
+|---|---|---|
+| CloudFront | Denied (list and create) | `ENTRY_MODE=direct`: the ALB is the public entry; the `web` stack serves the frontend instead of `edge`. |
+| Cloud Map (create namespace) | Denied | MySQL is reached through an internal Network Load Balancer. |
+| IAM (create roles) | Denied | Every role is `LabRole`. |
+| ECS, ECR, ELB, EFS, Secrets Manager, Route 53, ACM, SQS, Logs | Allowed | |
+
+With `USE_DOMAIN=false` there are no `dns`/`cert` stacks and the ALB answers over HTTP on its AWS
+name. That is enough for smoke tests, but not for signing in: the sign-in cookie needs HTTPS.
+
+## Smoke test (deploy, check, delete)
+
+`infra/scripts/smoke-test.sh` deploys network, platform, the images, a placeholder Google secret,
+data, app and web (direct mode, no domain), and checks:
+- the frontend answers through the ALB, also on client-side routes;
+- the backend answers through the ALB;
+- it reaches MySQL as the app user;
+- it refuses unsigned and cross-site requests;
+- Google sign-in uses this deploy's callback URL;
+- `check-db.js` passes in a one-off task.
+
+Then it deletes every stack it created, even after a failure, and lists anything left behind
+(stacks, ECR, ECS, VPC, load balancers, EFS, log groups, secrets). `--keep` leaves the stacks up.
+Test runs never leave live resources behind. The one exception is the `dns` stack: it may stay
+between runs (a hosted zone runs nothing; recreating it means new NS records at Cloudflare), and
+the smoke test neither deletes nor reports it.
 
 ## Settings and secrets
 
@@ -48,7 +88,7 @@ The scripts are bash (Git Bash on Windows, or Linux/WSL) and need the AWS CLI v2
 5. `infra/scripts/deploy.sh cert network platform`
 6. `infra/scripts/push-images.sh`
 7. `infra/scripts/set-google-secret.sh`
-8. `infra/scripts/deploy.sh data app edge`
+8. `infra/scripts/deploy.sh data app edge` (direct mode: `data app web`; skip step 9)
 9. `infra/scripts/publish-frontend.sh`
 10. Google Cloud Console → the OAuth client: add the redirect URI
     `https://APP_HOST.ZONE_NAME/api/auth/google/callback` and the JavaScript origin
@@ -61,14 +101,14 @@ The scripts are bash (Git Bash on Windows, or Linux/WSL) and need the AWS CLI v2
 | Task | Command |
 |---|---|
 | New backend version | commit, `push-images.sh backend`, `deploy.sh app` |
-| New frontend version | `publish-frontend.sh` |
+| New frontend version | `publish-frontend.sh` (direct mode: commit, `push-images.sh frontend`, `deploy.sh web`) |
 | Check the database from inside AWS | `run-task.sh node scripts/check-db.js` |
 | Stop the tasks between test sessions | `pause.sh` (the ALB still costs ~$0.6/day) |
 | Start them again | `resume.sh` |
-| Long break | `destroy.sh edge app` (keeps the zone, certificate, images and data) |
+| Long break | `destroy.sh edge web app` (keeps the zone, certificate, images and data) |
 
-Image tags follow the last commit that changed `backend/` (or `database/init.sql` and
-`database/Dockerfile` for MySQL), so a deploy only restarts what changed. Uncommitted changes
+Image tags follow the last commit that changed `backend/` (`frontend/` for the frontend,
+`database/init.sql` and `database/Dockerfile` for MySQL), so a deploy only restarts what changed. Uncommitted changes
 produce a `-dirty` tag.
 
-Logs: CloudWatch log groups `/<project>/backend` and `/<project>/mysql`.
+Logs: CloudWatch log groups `/<project>/backend`, `/<project>/frontend` and `/<project>/mysql`.

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import Modal from './Modal.jsx';
 import StatusBadge from './StatusBadge.jsx';
+import RequestHistory from './RequestHistory.jsx';
 import { useAuth } from '../auth/context.js';
 import { createRequest, getRequest, updateRequest } from '../api/requests.js';
 import {
@@ -11,8 +12,8 @@ import {
   rejectRequest,
 } from '../api/reviewer.js';
 import { saveDraft } from '../api/drafts.js';
-import { RESOURCE_TYPES, STATUS_HELP, degreeLabel } from '../constants.js';
-import { formatDateTime, formatId, toInputDate } from '../utils/format.js';
+import { RESOURCE_TYPES, STATUS_HELP, STATUS_LABEL, degreeLabel } from '../constants.js';
+import { formatDateTime, formatId, formatPeriod, toInputDate } from '../utils/format.js';
 import { notifyRequestsChanged } from '../utils/requestEvents.js';
 
 const EMPTY = {
@@ -84,9 +85,12 @@ export default function RequestFormModal({ mode, requestId, draft, onClose, onDo
   const [apiError, setApiError] = useState('');
   const [busy, setBusy] = useState('');
   const [comment, setComment] = useState('');
+  // D28: approving a request that overlaps the student's other requests takes a second click.
+  const [confirmingOverlap, setConfirmingOverlap] = useState(false);
   const [draftId, setDraftId] = useState(draft?.id ?? null);
   const [draftSavedAt, setDraftSavedAt] = useState(null);
   const commentRef = useRef(null);
+  const overlapRef = useRef(null);
 
   useEffect(() => {
     if (!requestId) return undefined;
@@ -104,6 +108,11 @@ export default function RequestFormModal({ mode, requestId, draft, onClose, onDo
       cancelled = true;
     };
   }, [requestId, mode]);
+
+  // The question sits above the form; the Approve button is at the bottom.
+  useEffect(() => {
+    if (confirmingOverlap) overlapRef.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  }, [confirmingOverlap]);
 
   const readOnly = mode === 'view' || mode === 'review';
   const set = (name) => (e) => {
@@ -151,15 +160,26 @@ export default function RequestFormModal({ mode, requestId, draft, onClose, onDo
       commentRef.current?.focus();
       return;
     }
+    if (action === 'approve' && overlaps.length && !confirmingOverlap) {
+      setConfirmingOverlap(true);
+      return;
+    }
     setBusy(action);
     setApiError('');
     try {
-      const fn = { approve: approveRequest, reject: rejectRequest, activate: activateRequest, complete: completeRequest }[action];
-      const res = await fn(requestId, comment.trim());
+      const res = action === 'approve'
+        ? await approveRequest(requestId, comment.trim(), confirmingOverlap)
+        : await { reject: rejectRequest, activate: activateRequest, complete: completeRequest }[action](requestId, comment.trim());
       notifyRequestsChanged();
       onDone({ type: 'reviewed', request: res });
     } catch (err) {
-      setApiError(err.message);
+      if (err.status === 409 && err.body?.overlaps) {
+        // Another request started overlapping after this one was opened: show it and ask again.
+        setDetail((d) => ({ ...d, overlaps: err.body.overlaps }));
+        setConfirmingOverlap(true);
+      } else {
+        setApiError(err.message);
+      }
     } finally {
       setBusy('');
     }
@@ -188,6 +208,7 @@ export default function RequestFormModal({ mode, requestId, draft, onClose, onDo
 
   const title = mode === 'new' ? 'Resource Request Form' : `Request ${formatId(requestId)}`;
   const status = detail?.status;
+  const overlaps = (mode === 'review' && status === 'PENDING' && detail?.overlaps) || [];
 
   let footer;
   if (mode === 'new') {
@@ -206,6 +227,15 @@ export default function RequestFormModal({ mode, requestId, draft, onClose, onDo
         <button type="button" className="btn btn-secondary" onClick={onClose}>Cancel</button>
         <button type="button" className="btn btn-primary" onClick={submit} disabled={Boolean(busy) || loading}>
           {busy === 'submit' ? 'Saving…' : 'Save Changes'}
+        </button>
+      </>
+    );
+  } else if (mode === 'review' && status === 'PENDING' && confirmingOverlap) {
+    footer = (
+      <>
+        <button type="button" className="btn btn-secondary" onClick={() => setConfirmingOverlap(false)} disabled={Boolean(busy)}>Back</button>
+        <button type="button" className="btn btn-primary" onClick={() => review('approve')} disabled={Boolean(busy)}>
+          {busy === 'approve' ? 'Approving…' : 'Approve anyway'}
         </button>
       </>
     );
@@ -248,6 +278,23 @@ export default function RequestFormModal({ mode, requestId, draft, onClose, onDo
             <div className="status-strip">
               <span>{STATUS_HELP[status]}</span>
               {detail.created_at && <span className="muted">Submitted {formatDateTime(detail.created_at)}</span>}
+            </div>
+          )}
+
+          {overlaps.length > 0 && (
+            <div ref={overlapRef} className={`alert alert-warning ${confirmingOverlap ? 'is-confirming' : ''}`} role={confirmingOverlap ? 'alert' : 'status'}>
+              <strong>
+                {confirmingOverlap
+                  ? 'Approve anyway? This student already has overlapping requests for this resource:'
+                  : 'This student has other requests for this resource in the same period:'}
+              </strong>
+              <ul className="overlap-list">
+                {overlaps.map((o) => (
+                  <li key={o.id}>
+                    <span className="mono">{formatId(o.id)}</span> · {STATUS_LABEL[o.status] ?? o.status} · {formatPeriod(o.start, o.end)}
+                  </li>
+                ))}
+              </ul>
             </div>
           )}
 
@@ -352,6 +399,8 @@ export default function RequestFormModal({ mode, requestId, draft, onClose, onDo
               {errors.supervisor_confirmation && <span className="field-error">{errors.supervisor_confirmation}</span>}
             </div>
           </fieldset>
+
+          <RequestHistory events={detail?.events} mine={mode !== 'review'} />
 
           {mode === 'review' && status === 'PENDING' && (
             <fieldset>

@@ -57,4 +57,6 @@ export const UpdateRequestSchema = RequestFields.partial().refine(
 
 export const ReviewRequestSchema = z.object({
   review_comment: z.string().min(1, 'Review comment is required'),
+  // D28: approving while the student has overlapping requests needs this, or the API answers 409.
+  confirm_overlap: z.boolean().optional(),
 });

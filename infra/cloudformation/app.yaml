@@ -1,8 +1,12 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Description: >-
-  Backend: an internet-facing ALB that only CloudFront can use (CloudFront prefix list + a secret
-  header), and the ECS Fargate backend service in the public subnets. Plain settings go in the
-  task definition environment; secret ones come from Secrets Manager (D13).
+  Backend: an internet-facing ALB and the ECS Fargate backend service in the public subnets.
+  EntryMode cloudfront (the target design): only CloudFront can use the ALB (prefix list + a secret
+  header). EntryMode direct (accounts without CloudFront, e.g. Learner Lab): the ALB is the public
+  entry, over HTTPS with a domain, or over HTTP on its AWS name for smoke tests (no sign-in: the
+  cookie needs HTTPS); it sends /api/* and /health to the backend, and the web stack adds the
+  frontend for everything else. Plain settings go in the task definition; secret ones come from Secrets
+  Manager (D13).
 
 Parameters:
   Project:
@@ -15,10 +19,18 @@ Parameters:
   DataStack:
     Type: String
     Description: data-ecs now, data-rds later (same exports)
+  EntryMode:
+    Type: String
+    Default: cloudfront
+    AllowedValues: [cloudfront, direct]
   DnsStack:
     Type: String
+    Default: ''
+    Description: Empty = no domain (direct mode only); the ALB's AWS name is used
   CertStack:
     Type: String
+    Default: ''
+    Description: Empty = HTTP listener (direct mode without a domain)
   ImageTag:
     Type: String
     Description: Tag of the siit-backend image in ECR
@@ -33,6 +45,7 @@ Parameters:
     Description: Secret with GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET, created once by hand (infra/README.md)
   CloudFrontPrefixListId:
     Type: String
+    Default: ''
     Description: Managed prefix list com.amazonaws.global.cloudfront.origin-facing in this region
   AppHost:
     Type: String
@@ -70,6 +83,27 @@ Parameters:
     Type: Number
     Default: 14
 
+Rules:
+  CloudFrontNeedsDomain:
+    RuleCondition: !Equals [!Ref EntryMode, cloudfront]
+    Assertions:
+      - Assert: !And
+          - !Not [!Equals [!Ref DnsStack, '']]
+          - !Not [!Equals [!Ref CertStack, '']]
+          - !Not [!Equals [!Ref CloudFrontPrefixListId, '']]
+        AssertDescription: cloudfront mode needs DnsStack, CertStack and CloudFrontPrefixListId
+  CertNeedsDomain:
+    RuleCondition: !Not [!Equals [!Ref CertStack, '']]
+    Assertions:
+      - Assert: !Not [!Equals [!Ref DnsStack, '']]
+        AssertDescription: a certificate needs the DnsStack
+
+Conditions:
+  ViaCloudFront: !Equals [!Ref EntryMode, cloudfront]
+  HasDomain: !Not [!Equals [!Ref DnsStack, '']]
+  HasCert: !Not [!Equals [!Ref CertStack, '']]
+  NoCert: !Equals [!Ref CertStack, '']
+
 Resources:
   AppSecret:
     Type: AWS::SecretsManager::Secret
@@ -83,6 +117,7 @@ Resources:
   # CloudFront adds this header to every /api request; the ALB forwards only requests that have it.
   OriginVerifySecret:
     Type: AWS::SecretsManager::Secret
+    Condition: ViaCloudFront
     Properties:
       Description: !Sub '${Project} header value proving a request came through CloudFront'
       GenerateSecretString:
@@ -94,15 +129,22 @@ Resources:
   AlbSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupDescription: ALB (HTTPS only from CloudFront)
+      GroupDescription: !If [ViaCloudFront, ALB (HTTPS only from CloudFront), ALB (public entry)]
       VpcId:
         Fn::ImportValue: !Sub '${NetworkStack}-VpcId'
       SecurityGroupIngress:
-        - IpProtocol: tcp
-          FromPort: 443
-          ToPort: 443
-          SourcePrefixListId: !Ref CloudFrontPrefixListId
-          Description: CloudFront origin-facing addresses
+        - !If
+          - ViaCloudFront
+          - IpProtocol: tcp
+            FromPort: 443
+            ToPort: 443
+            SourcePrefixListId: !Ref CloudFrontPrefixListId
+            Description: CloudFront origin-facing addresses
+          - IpProtocol: tcp
+            FromPort: !If [HasCert, 443, 80]
+            ToPort: !If [HasCert, 443, 80]
+            CidrIp: 0.0.0.0/0
+            Description: Public entry (direct mode)
       Tags:
         - Key: Name
           Value: !Sub '${Project}-alb'
@@ -147,6 +189,7 @@ Resources:
           Value: '30'
   HttpsListener:
     Type: AWS::ElasticLoadBalancingV2::Listener
+    Condition: HasCert
     Properties:
       LoadBalancerArn: !Ref LoadBalancer
       Protocol: HTTPS
@@ -161,29 +204,52 @@ Resources:
             StatusCode: '403'
             ContentType: text/plain
             MessageBody: Forbidden
-  FromCloudFrontRule:
+  HttpListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Condition: NoCert
+    Properties:
+      LoadBalancerArn: !Ref LoadBalancer
+      Protocol: HTTP
+      Port: 80
+      DefaultActions:
+        - Type: fixed-response
+          FixedResponseConfig:
+            StatusCode: '403'
+            ContentType: text/plain
+            MessageBody: Forbidden
+  # cloudfront: forward only requests with the secret header (CloudFront sends only /api/* here).
+  # direct: forward the API paths; the web stack's lower-priority rule takes the rest.
+  ForwardRule:
     Type: AWS::ElasticLoadBalancingV2::ListenerRule
     Properties:
-      ListenerArn: !Ref HttpsListener
+      ListenerArn: !If [HasCert, !Ref HttpsListener, !Ref HttpListener]
       Priority: 1
       Conditions:
-        - Field: http-header
-          HttpHeaderConfig:
-            HttpHeaderName: X-Origin-Verify
-            Values:
-              - !Sub '{{resolve:secretsmanager:${OriginVerifySecret}:SecretString:value}}'
+        - !If
+          - ViaCloudFront
+          - Field: http-header
+            HttpHeaderConfig:
+              HttpHeaderName: X-Origin-Verify
+              Values:
+                - !Sub '{{resolve:secretsmanager:${OriginVerifySecret}:SecretString:value}}'
+          - Field: path-pattern
+            PathPatternConfig:
+              Values: ['/api/*', '/health', '/health/*']
       Actions:
         - Type: forward
           TargetGroupArn: !Ref TargetGroup
 
-  OriginRecord:
+  # cloudfront: <OriginHost>.zone for CloudFront; direct: <AppHost>.zone is the ALB itself.
+  AlbRecord:
     Type: AWS::Route53::RecordSet
+    Condition: HasDomain
     Properties:
       HostedZoneId:
         Fn::ImportValue: !Sub '${DnsStack}-HostedZoneId'
       Name: !Sub
-        - '${OriginHost}.${Zone}'
-        - Zone:
+        - '${Host}.${Zone}'
+        - Host: !If [ViaCloudFront, !Ref OriginHost, !Ref AppHost]
+          Zone:
             Fn::ImportValue: !Sub '${DnsStack}-ZoneName'
       Type: A
       AliasTarget:
@@ -234,15 +300,21 @@ Resources:
               Value:
                 Fn::ImportValue: !Sub '${DataStack}-DbName'
             - Name: FRONTEND_URL
-              Value: !Sub
-                - 'https://${AppHost}.${Zone}'
-                - Zone:
-                    Fn::ImportValue: !Sub '${DnsStack}-ZoneName'
+              Value: !If
+                - HasDomain
+                - !Sub
+                  - 'https://${AppHost}.${Zone}'
+                  - Zone:
+                      Fn::ImportValue: !Sub '${DnsStack}-ZoneName'
+                - !Sub 'http://${LoadBalancer.DNSName}'
             - Name: GOOGLE_CALLBACK_URL
-              Value: !Sub
-                - 'https://${AppHost}.${Zone}/api/auth/google/callback'
-                - Zone:
-                    Fn::ImportValue: !Sub '${DnsStack}-ZoneName'
+              Value: !If
+                - HasDomain
+                - !Sub
+                  - 'https://${AppHost}.${Zone}/api/auth/google/callback'
+                  - Zone:
+                      Fn::ImportValue: !Sub '${DnsStack}-ZoneName'
+                - !Sub 'http://${LoadBalancer.DNSName}/api/auth/google/callback'
             - Name: STUDENT_EMAIL_DOMAIN
               Value: !Ref StudentEmailDomain
             - Name: STUDENT_ID_DIGITS
@@ -281,7 +353,7 @@ Resources:
 
   Service:
     Type: AWS::ECS::Service
-    DependsOn: FromCloudFrontRule
+    DependsOn: ForwardRule
     Properties:
       ServiceName: backend
       Cluster:
@@ -309,13 +381,24 @@ Resources:
 
 Outputs:
   OriginDomain:
-    Value: !Ref OriginRecord
+    Condition: ViaCloudFront
+    Value: !Ref AlbRecord
     Export:
       Name: !Sub '${AWS::StackName}-OriginDomain'
   OriginVerifySecretArn:
+    Condition: ViaCloudFront
     Value: !Ref OriginVerifySecret
     Export:
       Name: !Sub '${AWS::StackName}-OriginVerifySecretArn'
+  ListenerArn:
+    Description: The web stack adds its frontend rule here (direct mode)
+    Value: !If [HasCert, !Ref HttpsListener, !Ref HttpListener]
+    Export:
+      Name: !Sub '${AWS::StackName}-ListenerArn'
+  AlbSecurityGroupId:
+    Value: !Ref AlbSecurityGroup
+    Export:
+      Name: !Sub '${AWS::StackName}-AlbSecurityGroupId'
   ServiceName:
     Value: !GetAtt Service.Name
   TaskDefinitionArn:
@@ -323,3 +406,12 @@ Outputs:
     Value: !Ref TaskDefinition
   LoadBalancerDnsName:
     Value: !GetAtt LoadBalancer.DNSName
+  PublicUrl:
+    Description: The portal in direct mode (cloudfront mode - the edge stack's AppUrl)
+    Value: !If
+      - HasDomain
+      - !Sub
+        - 'https://${AppHost}.${Zone}'
+        - Zone:
+            Fn::ImportValue: !Sub '${DnsStack}-ZoneName'
+      - !Sub 'http://${LoadBalancer.DNSName}'

@@ -4,6 +4,9 @@ This directory contains the MySQL initialization script for the SIIT ICT Resourc
 Request System.
 
 - `init.sql` creates the application tables.
+- `privileges.sh` runs after it and limits the backend's database user (`MYSQL_USER`) to the
+  application tables, with only `SELECT` and `INSERT` on the `request_event` audit log (FR-9.1).
+  Root (the admin user) owns the schema.
 - `init.sql` also creates stored procedures for direct SQL access to student,
   approver, request, and draft workflows. The HTTP backend uses Prisma with the same tables and workflow rules.
 - `docker-compose.yml` mounts `database/init.sql` into the MySQL container at
@@ -101,6 +104,28 @@ student's draft. Deleting a user also deletes their draft (`ON DELETE CASCADE`).
 | `end_date` | Requested end datetime |
 | `extra_details` | JSON field for resource-specific details |
 | `updated_at` | Automatically updated timestamp |
+
+### Request Event
+
+The append-only audit log (FR-4.2, FR-5.5, FR-9.1): one row for every request creation, student
+edit and status change, in the same transaction as the change. It is never updated or deleted:
+the app user only has `SELECT` and `INSERT` on it, and triggers refuse `UPDATE` and `DELETE` for
+everyone, root included. A request or user with events can't be deleted (foreign keys without
+cascade), so the log stays complete.
+
+| Column | Notes |
+|--------|-------|
+| `eid` | Unsigned auto-increment primary key; orders the events of a request |
+| `rid` | The request, references `Request.rid` |
+| `action` | `CREATED`, `EDITED`, `APPROVED`, `REJECTED`, `ACTIVATED`, `COMPLETED` (provisioning events later) |
+| `from_status` | Status before the event; `NULL` when the request is created |
+| `to_status` | Status after the event (the same as `from_status` for an edit) |
+| `actor_uid` | Who acted, references `User.uid`; `NULL` for the system (provisioning results, scheduler) |
+| `comment` | The approver's comment on a decision |
+| `details` | JSON: `{"fields": [...]}` names (not values) of the fields an edit changed; `{"confirmed_overlaps": [...]}` when an approver approved despite overlapping requests (D28) |
+| `created_at` | When it happened |
+
+The request detail shows this history: students see who acted by role only, approvers also by name.
 
 ## Enum Values
 
@@ -207,7 +232,8 @@ CALL get_approver_by_uid(2);
 
 #### `add_request`
 
-Creates a request for a student and removes that student's saved draft.
+Creates a request for a student, logs its `CREATED` event and removes that student's saved
+draft.
 
 ```sql
 CALL add_request(
@@ -242,8 +268,10 @@ CALL get_request_by_status('Pending');
 
 #### `update_request_status`
 
-Updates a request status and records the reviewing approver. The procedure checks
-that the request exists and that the reviewer is an approver.
+Updates a request status, records the reviewing approver and logs the status change in
+`request_event`. The procedure checks that the request exists and that the reviewer is an
+approver. It doesn't check the transition; the backend does (Pending → Approved or Rejected,
+Approved → On Use → Completed).
 
 ```sql
 CALL update_request_status(10, 2, 'Approved');
@@ -305,7 +333,7 @@ docker-compose up mysql
 
 ## Backend compatibility
 
-The backend uses the current lowercase `user`, `request`, and `draft` tables.
+The backend uses the current lowercase `user`, `request`, `draft` and `request_event` tables.
 It preserves the frontend API field names and enum values through
 `backend/src/utils/db-mapping.js`. No database reset or data migration is needed
 when these tables already exist. Regenerate the Prisma client after schema edits:
@@ -318,8 +346,8 @@ npm run test:db
 ```
 
 `test:db` exercises the real services against the configured database (`DB_*` keys) inside
-one transaction, then rolls back all test records. It requires insert/update
-permissions as well as read access.
+one transaction, then rolls back all test records. Run it as the app user: it also checks that
+this user can't update or delete `request_event`.
 
 Google sign-in finds users by their verified email. New sign-ins create a
 `Student` row; completing the profile updates that same row. Reviewer access
@@ -358,6 +386,14 @@ docker compose exec -T mysql sh -c 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" "$MYSQ
 | Script | Change |
 |--------|--------|
 | `2026-10-25-user-advisor-name.sql` | Adds `user.advisor_name` |
+| `2026-10-28-request-event.sql` | Adds the `request_event` audit log, its triggers and the logging procedures; backfills each request's creation and latest review. Then run `privileges.sh` once (below). |
+
+After `2026-10-28-request-event.sql`, limit the app user (recreate the mysql container first, so
+`privileges.sh` is mounted: `docker compose up -d mysql`):
+
+```bash
+docker compose exec -T mysql sh /docker-entrypoint-initdb.d/privileges.sh
+```
 
 ## Assign reviewer access by email
 

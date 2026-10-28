@@ -1,0 +1,154 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  Frontend behind the app stack's ALB (EntryMode direct, for accounts without CloudFront, e.g.
+  Learner Lab): an ECS Fargate service running nginx with the React build, its own image and
+  deploys, separate from the backend. The ALB sends /api/* and /health to the backend (app stack)
+  and everything else here, so the portal and the API share one origin. With CloudFront, the edge
+  stack (S3) serves the frontend instead.
+
+Parameters:
+  Project:
+    Type: String
+    Default: siit
+  NetworkStack:
+    Type: String
+  PlatformStack:
+    Type: String
+  AppStack:
+    Type: String
+  ImageTag:
+    Type: String
+    Description: Tag of the siit-frontend image in ECR
+  ExecutionRoleArn:
+    Type: String
+    Description: Pulls the image and writes the logs (Learner Lab - LabRole, D30)
+  DesiredCount:
+    Type: Number
+    Default: 1
+  Cpu:
+    Type: String
+    Default: '256'
+  Memory:
+    Type: String
+    Default: '512'
+  LogRetentionDays:
+    Type: Number
+    Default: 7
+
+Resources:
+  FrontendSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Frontend tasks (8080 only from the ALB)
+      VpcId:
+        Fn::ImportValue: !Sub '${NetworkStack}-VpcId'
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 8080
+          ToPort: 8080
+          SourceSecurityGroupId:
+            Fn::ImportValue: !Sub '${AppStack}-AlbSecurityGroupId'
+          Description: ALB
+      SecurityGroupEgress:
+        - IpProtocol: '-1'
+          CidrIp: 0.0.0.0/0
+          Description: ECR image pull, CloudWatch Logs
+      Tags:
+        - Key: Name
+          Value: !Sub '${Project}-frontend'
+
+  TargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      TargetType: ip
+      Protocol: HTTP
+      Port: 8080
+      VpcId:
+        Fn::ImportValue: !Sub '${NetworkStack}-VpcId'
+      HealthCheckPath: /
+      HealthCheckIntervalSeconds: 15
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
+      Matcher:
+        HttpCode: '200'
+      TargetGroupAttributes:
+        - Key: deregistration_delay.timeout_seconds
+          Value: '10'
+  # After the app stack's API rule (priority 1): every other path is the frontend.
+  FrontendRule:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      ListenerArn:
+        Fn::ImportValue: !Sub '${AppStack}-ListenerArn'
+      Priority: 10
+      Conditions:
+        - Field: path-pattern
+          PathPatternConfig:
+            Values: ['/*']
+      Actions:
+        - Type: forward
+          TargetGroupArn: !Ref TargetGroup
+
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/${Project}/frontend'
+      RetentionInDays: !Ref LogRetentionDays
+
+  TaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub '${Project}-frontend'
+      RequiresCompatibilities: [FARGATE]
+      NetworkMode: awsvpc
+      Cpu: !Ref Cpu
+      Memory: !Ref Memory
+      ExecutionRoleArn: !Ref ExecutionRoleArn
+      ContainerDefinitions:
+        - Name: frontend
+          Image: !Sub
+            - '${Repo}:${ImageTag}'
+            - Repo:
+                Fn::ImportValue: !Sub '${PlatformStack}-FrontendRepositoryUri'
+          Essential: true
+          PortMappings:
+            - ContainerPort: 8080
+              Protocol: tcp
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref LogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: frontend
+
+  Service:
+    Type: AWS::ECS::Service
+    DependsOn: FrontendRule
+    Properties:
+      ServiceName: frontend
+      Cluster:
+        Fn::ImportValue: !Sub '${PlatformStack}-ClusterName'
+      TaskDefinition: !Ref TaskDefinition
+      LaunchType: FARGATE
+      DesiredCount: !Ref DesiredCount
+      HealthCheckGracePeriodSeconds: 30
+      DeploymentConfiguration:
+        MinimumHealthyPercent: 100
+        MaximumPercent: 200
+        DeploymentCircuitBreaker:
+          Enable: true
+          Rollback: true
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          # Public subnet + public IP: pulls the image from ECR without a NAT gateway.
+          AssignPublicIp: ENABLED
+          Subnets: !Split [',', {'Fn::ImportValue': !Sub '${NetworkStack}-PublicSubnets'}]
+          SecurityGroups: [!Ref FrontendSecurityGroup]
+      LoadBalancers:
+        - ContainerName: frontend
+          ContainerPort: 8080
+          TargetGroupArn: !Ref TargetGroup
+
+Outputs:
+  ServiceName:
+    Value: !GetAtt Service.Name

@@ -62,6 +62,8 @@ export async function getRequestDetail(req, res, next) {
       review_comment: request.review_comment,
       reviewed_at: request.reviewed_at,
       created_at: request.created_at,
+      overlaps: request.overlaps,
+      events: request.events,
       student: {
         id: request.user.id,
         name: request.user.account.full_name,
@@ -90,7 +92,8 @@ export async function approveRequestHandler(req, res, next) {
       });
     }
 
-    const request = await approveRequest(parseId(id), reviewer_account_id, validation.data.review_comment);
+    const { review_comment, confirm_overlap } = validation.data;
+    const request = await approveRequest(parseId(id), reviewer_account_id, review_comment, { confirm_overlap });
 
     res.json({
       id: request.id,
@@ -98,6 +101,9 @@ export async function approveRequestHandler(req, res, next) {
       reviewed_at: request.reviewed_at,
     });
   } catch (err) {
+    if (err.overlaps) {
+      return res.status(409).json({ message: err.message, overlaps: err.overlaps });
+    }
     if (err.message.includes('not found')) {
       return res.status(404).json({ message: err.message });
     }

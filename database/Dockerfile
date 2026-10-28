@@ -4,3 +4,5 @@
 FROM public.ecr.aws/docker/library/mysql:8.4
 
 COPY init.sql /docker-entrypoint-initdb.d/init.sql
+# Runs after init.sql: the app user may only SELECT and INSERT on the audit log (FR-9.1).
+COPY privileges.sh /docker-entrypoint-initdb.d/privileges.sh
