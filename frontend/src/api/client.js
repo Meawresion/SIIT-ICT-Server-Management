@@ -14,10 +14,12 @@ export function onSessionEnded(handler) {
 export const BACKGROUND = { headers: { 'X-Background': '1' } };
 
 export class ApiError extends Error {
-  constructor(message, status, details) {
+  constructor(message, status, details, body) {
     super(message);
     this.status = status;
     this.details = details;
+    // The whole JSON error body, e.g. the overlapping requests in a 409 from approve.
+    this.body = body;
   }
 }
 
@@ -41,6 +43,7 @@ export async function apiRequest(path, options = {}) {
       detail || data?.message || `API request failed: ${response.status}`,
       response.status,
       data?.errors,
+      data,
     );
   }
 
