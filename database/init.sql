@@ -66,6 +66,19 @@ CREATE TABLE `draft`(
     `updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     PRIMARY KEY(`student_uid`)
 );
+CREATE TABLE `request_event`(
+    `eid` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    `rid` INT UNSIGNED NOT NULL,
+    `action` VARCHAR(32) NOT NULL COMMENT 'CREATED, EDITED, APPROVED, REJECTED, ACTIVATED, COMPLETED; provisioning events later',
+    `from_status` ENUM('Pending', 'Approved', 'Rejected', 'On Use', 'Completed') NULL COMMENT 'NULL when the request is created',
+    `to_status` ENUM('Pending', 'Approved', 'Rejected', 'On Use', 'Completed') NOT NULL,
+    `actor_uid` INT UNSIGNED NULL COMMENT 'NULL: the system (provisioning results, scheduler)',
+    `comment` TEXT NULL,
+    `details` JSON NULL COMMENT 'e.g. {"fields":["purpose"]} for an edit, {"confirmed_overlaps":[12]} for an approval',
+    `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+) COMMENT 'Append-only audit log (FR-9.1): the app user may only SELECT and INSERT (database/privileges.sh)';
+ALTER TABLE
+    `request_event` ADD INDEX `request_event_rid_index`(`rid`, `eid`);
     
 ALTER TABLE
     `draft` ADD CONSTRAINT `draft_student_uid_foreign` FOREIGN KEY(`student_uid`) REFERENCES `user`(`uid`) ON DELETE CASCADE;
@@ -73,6 +86,17 @@ ALTER TABLE
     `request` ADD CONSTRAINT `request_student_uid_foreign` FOREIGN KEY(`student_uid`) REFERENCES `user`(`uid`);
 ALTER TABLE
     `request` ADD CONSTRAINT `request_approver_uid_foreign` FOREIGN KEY(`approver_uid`) REFERENCES `user`(`uid`);
+-- No cascade: a request or user that has events can't be deleted, so the log stays complete.
+ALTER TABLE
+    `request_event` ADD CONSTRAINT `request_event_rid_foreign` FOREIGN KEY(`rid`) REFERENCES `request`(`rid`);
+ALTER TABLE
+    `request_event` ADD CONSTRAINT `request_event_actor_uid_foreign` FOREIGN KEY(`actor_uid`) REFERENCES `user`(`uid`);
+
+-- The log is append-only for everyone, root included (the app user also lacks the privileges).
+CREATE TRIGGER `request_event_no_update` BEFORE UPDATE ON `request_event` FOR EACH ROW
+    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'request_event is append-only';
+CREATE TRIGGER `request_event_no_delete` BEFORE DELETE ON `request_event` FOR EACH ROW
+    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'request_event is append-only';
 
 -- ====================================================
 -- Student Procedures
@@ -276,6 +300,9 @@ BEGIN
 
         SET v_new_rid = LAST_INSERT_ID();
 
+        INSERT INTO `request_event` (`rid`, `action`, `from_status`, `to_status`, `actor_uid`)
+        VALUES (v_new_rid, 'CREATED', NULL, 'Pending', p_student_uid);
+
         -- เคลียร์แบบร่างของนักศึกษาคนนี้ออกทันทีเมื่อส่งคำร้องจริง
         DELETE FROM `draft` WHERE `student_uid` = p_student_uid;
 
@@ -367,8 +394,15 @@ CREATE PROCEDURE update_request_status (
 BEGIN
     DECLARE v_is_approver INT DEFAULT 0;
     DECLARE v_request_exists INT DEFAULT 0;
+    DECLARE v_from_status ENUM('Pending', 'Approved', 'Rejected', 'On Use', 'Completed');
 
-    SELECT COUNT(*) INTO v_request_exists
+    DECLARE EXIT HANDLER FOR SQLEXCEPTION
+    BEGIN
+        ROLLBACK;
+        RESIGNAL;
+    END;
+
+    SELECT COUNT(*), MAX(`status`) INTO v_request_exists, v_from_status
     FROM `request`
     WHERE `rid` = p_rid;
 
@@ -387,13 +421,26 @@ BEGIN
             SET MESSAGE_TEXT = 'Unauthorized: User is not an approver or does not exist.';
     END IF;
 
-    UPDATE `request`
-    SET 
-        `status` = p_new_status,
-        `approver_uid` = p_approver_uid,
-        `reviewed_at` = CURRENT_TIMESTAMP,
-        `updated_at` = CURRENT_TIMESTAMP
-    WHERE `rid` = p_rid;
+    START TRANSACTION;
+
+        UPDATE `request`
+        SET 
+            `status` = p_new_status,
+            `approver_uid` = p_approver_uid,
+            `reviewed_at` = CURRENT_TIMESTAMP,
+            `updated_at` = CURRENT_TIMESTAMP
+        WHERE `rid` = p_rid;
+
+        INSERT INTO `request_event` (`rid`, `action`, `from_status`, `to_status`, `actor_uid`)
+        VALUES (p_rid, CASE p_new_status
+            WHEN 'Pending' THEN 'REOPENED'
+            WHEN 'Approved' THEN 'APPROVED'
+            WHEN 'Rejected' THEN 'REJECTED'
+            WHEN 'On Use' THEN 'ACTIVATED'
+            ELSE 'COMPLETED'
+        END, v_from_status, p_new_status, p_approver_uid);
+
+    COMMIT;
 
     SELECT 'SUCCESS' AS status, 'Status updated successfully' AS message;
 END //

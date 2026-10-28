@@ -66,7 +66,7 @@ image_tag() {
   echo "$tag"
 }
 backend_tag() { image_tag backend; }
-mysql_tag() { image_tag database/Dockerfile database/init.sql; }
+mysql_tag() { image_tag database/Dockerfile database/init.sql database/privileges.sh; }
 frontend_tag() { image_tag frontend; }
 
 # The portal's address: CloudFront (edge stack) or the ALB itself (direct mode).

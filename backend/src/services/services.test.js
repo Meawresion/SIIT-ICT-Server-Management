@@ -68,11 +68,15 @@ test('all six frontend resources save in Request and clear the student draft ato
         assert.ok(args.data.start_date instanceof Date);
         return { rid: 10, ...args.data };
       } }, draft: { deleteMany: async args => { events.push('draft'); assert.deepEqual(args.where, { student_uid: 1 }); } },
+      request_event: { create: async args => {
+        events.push('event');
+        assert.deepEqual(args.data, { rid: 10, action: 'CREATED', from_status: null, to_status: 'Pending', actor_uid: 1 });
+      } },
     }));
     const result = await createRequest(1, { ...data, resource_type: apiType });
     assert.equal(result.resource_type, apiType);
     assert.equal(result.status, 'PENDING');
-    assert.deepEqual(events, ['create', 'draft']);
+    assert.deepEqual(events, ['create', 'event', 'draft']);
   }
 });
 
@@ -82,7 +86,8 @@ test('student detail lookup restricts ownership in the database query', async t 
 });
 
 test('partial edits retain dates, metadata and reviewer-owned fields', async t => {
-  mockMethod(t, prisma, '$transaction', async cb => cb({ request: {
+  const logged = [];
+  mockMethod(t, prisma, '$transaction', async cb => cb({ request_event: { create: async args => logged.push(args.data) }, request: {
     findFirst: async () => ({ ...row, extra_details: { ...row.extra_details, custom: 'keep', review_comment: 'private' } }),
     updateMany: async args => {
       assert.equal(args.data.por, 'Updated');
@@ -94,6 +99,8 @@ test('partial edits retain dates, metadata and reviewer-owned fields', async t =
     }, findUnique: async () => ({ ...row, por: 'Updated' }),
   } }));
   assert.equal((await updateRequest(10, 1, { purpose: 'Updated', extra_details: { review_comment: 'forged' } })).purpose, 'Updated');
+  // The edit is logged with the changed field names only; the forged reviewer field isn't one.
+  assert.deepEqual(logged, [{ rid: 10, action: 'EDITED', from_status: 'Pending', to_status: 'Pending', actor_uid: 1, details: { fields: ['purpose'] } }]);
 });
 
 test('partial date edits validate against the existing date range before writing', async t => {
@@ -103,12 +110,15 @@ test('partial date edits validate against the existing date range before writing
 
 test('review transitions map statuses and keep request metadata', async t => {
   const current = structuredClone(row);
+  const logged = [];
   mockMethod(t, prisma, '$transaction', async cb => cb({
     user: { findUnique: async () => ({ uid: 2, role: 'Approver' }) },
     request: {
       findUnique: async () => ({ ...current }),
+      findMany: async () => [],
       updateMany: async args => { assert.equal(args.where.status, current.status); Object.assign(current, args.data); return { count: 1 }; },
     },
+    request_event: { create: async args => logged.push(args.data) },
   }));
   assert.equal((await approveRequest(10, 2, 'Approved for research')).status, 'APPROVED');
   assert.equal(current.extra_details.impact_score, 7);
@@ -117,6 +127,11 @@ test('review transitions map statuses and keep request metadata', async t => {
   assert.equal((await completeRequest(10, 2)).status, 'COMPLETED');
   assert.equal(current.extra_details.review_comment, 'Approved for research');
   await assert.rejects(rejectRequest(10, 2, 'No'), /Invalid state transition/);
+  // FR-5.5: every decision records the approver, its status change and the comment.
+  assert.deepEqual(logged.map(e => [e.action, e.from_status, e.to_status, e.actor_uid, e.comment]), [
+    ['APPROVED', 'Pending', 'Approved', 2, 'Approved for research'],
+    ['ACTIVATED', 'Approved', 'On_Use', 2, null],
+    ['COMPLETED', 'On_Use', 'Completed', 2, null]]);
 });
 
 test('review service rejects students even if called without middleware', async t => {

@@ -45,6 +45,7 @@ model request {
   updated_at                      DateTime              @default(now()) @updatedAt @db.Timestamp(0)
   user_request_approver_uidTouser user?                 @relation("request_approver_uidTouser", fields: [approver_uid], references: [uid], onDelete: Restrict, onUpdate: Restrict, map: "request_approver_uid_foreign")
   user_request_student_uidTouser  user                  @relation("request_student_uidTouser", fields: [student_uid], references: [uid], onUpdate: Restrict, map: "request_student_uid_foreign")
+  request_event                   request_event[]
 
   @@index([approver_uid], map: "request_approver_uid_foreign")
   @@index([student_uid], map: "request_student_uid_foreign")
@@ -65,6 +66,26 @@ model user {
   draft                              draft?
   request_request_approver_uidTouser request[]          @relation("request_approver_uidTouser")
   request_request_student_uidTouser  request[]          @relation("request_student_uidTouser")
+  request_event                      request_event[]
+}
+
+/// Append-only audit log (FR-9.1): the app's database user may only SELECT and INSERT.
+/// actor_uid null = the system. Never update or delete rows (triggers refuse it).
+model request_event {
+  eid         BigInt                     @id @default(autoincrement()) @db.UnsignedBigInt
+  rid         Int                        @db.UnsignedInt
+  action      String                     @db.VarChar(32)
+  from_status request_event_from_status?
+  to_status   request_event_to_status
+  actor_uid   Int?                       @db.UnsignedInt
+  comment     String?                    @db.Text
+  details     Json?
+  created_at  DateTime                   @default(now()) @db.Timestamp(0)
+  request     request                    @relation(fields: [rid], references: [rid], onDelete: Restrict, onUpdate: Restrict, map: "request_event_rid_foreign")
+  user        user?                      @relation(fields: [actor_uid], references: [uid], onDelete: Restrict, onUpdate: Restrict, map: "request_event_actor_uid_foreign")
+
+  @@index([rid, eid], map: "request_event_rid_index")
+  @@index([actor_uid], map: "request_event_actor_uid_foreign")
 }
 
 enum draft_resource_type {
@@ -102,6 +123,22 @@ enum request_process_type {
 }
 
 enum request_status {
+  Pending
+  Approved
+  Rejected
+  On_Use    @map("On Use")
+  Completed
+}
+
+enum request_event_from_status {
+  Pending
+  Approved
+  Rejected
+  On_Use    @map("On Use")
+  Completed
+}
+
+enum request_event_to_status {
   Pending
   Approved
   Rejected
