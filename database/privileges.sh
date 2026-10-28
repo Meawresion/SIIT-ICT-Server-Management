@@ -11,5 +11,6 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON \`$MYSQL_DATABASE\`.\`user\` TO '$MYSQL_
 GRANT SELECT, INSERT, UPDATE, DELETE ON \`$MYSQL_DATABASE\`.\`request\` TO '$MYSQL_USER'@'%';
 GRANT SELECT, INSERT, UPDATE, DELETE ON \`$MYSQL_DATABASE\`.\`draft\` TO '$MYSQL_USER'@'%';
 GRANT SELECT, INSERT ON \`$MYSQL_DATABASE\`.\`request_event\` TO '$MYSQL_USER'@'%';
+GRANT SELECT, INSERT, UPDATE ON \`$MYSQL_DATABASE\`.\`provision_job\` TO '$MYSQL_USER'@'%';
 SQL
-echo "privileges.sh: $MYSQL_USER may only SELECT and INSERT on request_event"
+echo "privileges.sh: $MYSQL_USER may only SELECT and INSERT on request_event, and not DELETE on provision_job"

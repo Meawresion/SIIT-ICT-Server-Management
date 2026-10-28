@@ -69,7 +69,7 @@ CREATE TABLE `draft`(
 CREATE TABLE `request_event`(
     `eid` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
     `rid` INT UNSIGNED NOT NULL,
-    `action` VARCHAR(32) NOT NULL COMMENT 'CREATED, EDITED, APPROVED, REJECTED, ACTIVATED, COMPLETED; provisioning events later',
+    `action` VARCHAR(32) NOT NULL COMMENT 'CREATED, EDITED, APPROVED, REJECTED, ACTIVATED, COMPLETED; PROVISIONED, PROVISION_FAILED, REVOKED, REVOKE_FAILED, RETRIED',
     `from_status` ENUM('Pending', 'Approved', 'Rejected', 'On Use', 'Completed') NULL COMMENT 'NULL when the request is created',
     `to_status` ENUM('Pending', 'Approved', 'Rejected', 'On Use', 'Completed') NOT NULL,
     `actor_uid` INT UNSIGNED NULL COMMENT 'NULL: the system (provisioning results, scheduler)',
@@ -79,7 +79,30 @@ CREATE TABLE `request_event`(
 ) COMMENT 'Append-only audit log (FR-9.1): the app user may only SELECT and INSERT (database/privileges.sh)';
 ALTER TABLE
     `request_event` ADD INDEX `request_event_rid_index`(`rid`, `eid`);
-    
+-- Outbox for acc-prov-vm (plan §2.1): a job is written in the same transaction as the decision
+-- that causes it, and the backend's dispatcher publishes it later, so a broker outage loses
+-- nothing. A retry is a new job (new job_id), because acc-prov-vm answers a job_id it has seen
+-- with its stored result.
+CREATE TABLE `provision_job`(
+    `job_id` CHAR(36) NOT NULL PRIMARY KEY COMMENT 'UUID; also the message jti, so acc-prov-vm runs each job once',
+    `rid` INT UNSIGNED NOT NULL,
+    `action` ENUM('CREATE', 'REVOKE') NOT NULL,
+    `status` ENUM('Queued', 'Sent', 'Succeeded', 'Failed') NOT NULL DEFAULT 'Queued',
+    `payload` JSON NOT NULL COMMENT 'The job as sent, encrypted at send time; never a password',
+    `attempts` INT UNSIGNED NOT NULL DEFAULT 0 COMMENT 'Publish attempts',
+    `last_error` TEXT NULL COMMENT 'Last publish error, or the error acc-prov-vm reported',
+    `result` JSON NULL COMMENT 'acc-prov-vm result: non-secret details only (username, node, VPN state)',
+    `next_attempt_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    `sent_at` TIMESTAMP NULL,
+    `completed_at` TIMESTAMP NULL,
+    `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    `updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) COMMENT 'Provisioning jobs for acc-prov-vm (outbox); the app user may not delete them';
+ALTER TABLE
+    `provision_job` ADD INDEX `provision_job_status_index`(`status`, `next_attempt_at`);
+ALTER TABLE
+    `provision_job` ADD INDEX `provision_job_rid_index`(`rid`, `created_at`);
+
 ALTER TABLE
     `draft` ADD CONSTRAINT `draft_student_uid_foreign` FOREIGN KEY(`student_uid`) REFERENCES `user`(`uid`) ON DELETE CASCADE;
 ALTER TABLE
@@ -91,6 +114,8 @@ ALTER TABLE
     `request_event` ADD CONSTRAINT `request_event_rid_foreign` FOREIGN KEY(`rid`) REFERENCES `request`(`rid`);
 ALTER TABLE
     `request_event` ADD CONSTRAINT `request_event_actor_uid_foreign` FOREIGN KEY(`actor_uid`) REFERENCES `user`(`uid`);
+ALTER TABLE
+    `provision_job` ADD CONSTRAINT `provision_job_rid_foreign` FOREIGN KEY(`rid`) REFERENCES `request`(`rid`);
 
 -- The log is append-only for everyone, root included (the app user also lacks the privileges).
 CREATE TRIGGER `request_event_no_update` BEFORE UPDATE ON `request_event` FOR EACH ROW

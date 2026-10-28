@@ -7,6 +7,7 @@ import {
   rejectRequestHandler,
   activateRequestHandler,
   completeRequestHandler,
+  retryProvisioningHandler,
 } from '../controllers/reviewer.controller.js';
 
 const router = Router();
@@ -17,5 +18,6 @@ router.patch('/requests/:id/approve', requireReviewer, approveRequestHandler);
 router.patch('/requests/:id/reject', requireReviewer, rejectRequestHandler);
 router.patch('/requests/:id/activate', requireReviewer, activateRequestHandler);
 router.patch('/requests/:id/complete', requireReviewer, completeRequestHandler);
+router.post('/requests/:id/provision/retry', requireReviewer, retryProvisioningHandler);
 
 export default router;

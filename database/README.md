@@ -117,15 +117,40 @@ cascade), so the log stays complete.
 |--------|-------|
 | `eid` | Unsigned auto-increment primary key; orders the events of a request |
 | `rid` | The request, references `Request.rid` |
-| `action` | `CREATED`, `EDITED`, `APPROVED`, `REJECTED`, `ACTIVATED`, `COMPLETED` (provisioning events later) |
+| `action` | `CREATED`, `EDITED`, `APPROVED`, `REJECTED`, `ACTIVATED`, `COMPLETED`; from provisioning: `PROVISIONED`, `PROVISION_FAILED`, `REVOKED`, `REVOKE_FAILED` (system), `RETRIED` (approver) |
 | `from_status` | Status before the event; `NULL` when the request is created |
 | `to_status` | Status after the event (the same as `from_status` for an edit) |
 | `actor_uid` | Who acted, references `User.uid`; `NULL` for the system (provisioning results, scheduler) |
 | `comment` | The approver's comment on a decision |
-| `details` | JSON: `{"fields": [...]}` names (not values) of the fields an edit changed; `{"confirmed_overlaps": [...]}` when an approver approved despite overlapping requests (D28) |
+| `details` | JSON: `{"fields": [...]}` names (not values) of the fields an edit changed; `{"confirmed_overlaps": [...]}` when an approver approved despite overlapping requests (D28); `job_id`, `gpu_node` and the VPN state for provisioning |
 | `created_at` | When it happened |
 
 The request detail shows this history: students see who acted by role only, approvers also by name.
+
+### Provision Job
+
+The outbox for acc-prov-vm (plan §2.1). Approving a GPU request writes a `CREATE` job, and
+completing it a `REVOKE` job, in the same transaction as the decision. The backend's dispatcher
+publishes queued jobs (signed and encrypted, D22) and applies acc-prov-vm's results, so a broker
+or site outage loses nothing. A retry is a new row with a new `job_id`, because acc-prov-vm
+answers a `job_id` it has already handled with its stored result. The app user may select,
+insert and update jobs, but not delete them.
+
+| Column | Notes |
+|--------|-------|
+| `job_id` | UUID primary key; also the message `jti` |
+| `rid` | The request, references `Request.rid` (no cascade) |
+| `action` | `CREATE` or `REVOKE` |
+| `status` | `Queued` → `Sent` → `Succeeded` or `Failed`. A send that fails stays `Queued` and is retried with backoff |
+| `payload` | The job as sent (username, name, email, node, period, links); never a password |
+| `attempts` | Publish attempts |
+| `last_error` | The last publish error, or the error acc-prov-vm reported |
+| `result` | acc-prov-vm's result: non-secret details only (username, node, VPN state) |
+| `next_attempt_at` | When a queued job may be sent (backoff after a failed send) |
+| `sent_at`, `completed_at`, `created_at`, `updated_at` | Timestamps |
+
+The node a GPU request was given is also kept in `request.extra_details.gpu_node`, so the
+`REVOKE` goes to the same node.
 
 ## Enum Values
 
@@ -387,8 +412,9 @@ docker compose exec -T mysql sh -c 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" "$MYSQ
 |--------|--------|
 | `2026-10-25-user-advisor-name.sql` | Adds `user.advisor_name` |
 | `2026-10-28-request-event.sql` | Adds the `request_event` audit log, its triggers and the logging procedures; backfills each request's creation and latest review. Then run `privileges.sh` once (below). |
+| `2026-10-28-provision-job.sql` | Adds the `provision_job` outbox. Then run `privileges.sh` again (below). |
 
-After `2026-10-28-request-event.sql`, limit the app user (recreate the mysql container first, so
+After `2026-10-28-request-event.sql` and `2026-10-28-provision-job.sql`, set the app user's rights (recreate the mysql container first, so
 `privileges.sh` is mounted: `docker compose up -d mysql`):
 
 ```bash
