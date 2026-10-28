@@ -3,6 +3,7 @@
 # AWS name, with a placeholder Google client), checks it, then deletes what it deployed and checks
 # that nothing is left behind. The stacks are deleted even when a step fails or the run is stopped.
 # Provisioning is on, with a throwaway site key: fake-site.mjs plays acc-prov-vm on the real queues.
+# The scheduler runs every 30 s, so check-scheduler.js sees it act.
 #
 # Kept between runs: network and platform (the ECR images; they run nothing), created here only
 # when they are missing (first run, or after a Learner Lab reset); images already in ECR are not
@@ -18,7 +19,7 @@ read -r SITE_PRIVATE_KEY SITE_PUBLIC_KEYS < <(node --input-type=module -e "
   const k = generateKeyBundle('smoke-site'); console.log(k.privateBundle, k.publicBundle);" \
   "$(dirname "$0")/../../backend/src/messaging/envelope.js")
 export ENTRY_MODE=direct USE_DOMAIN=false PROVISIONING=true SITE_PUBLIC_KEYS GPU_NODES=smoke-node \
-  OVPN_PROFILE_URL=https://example.com/smoke-ovpn MANUAL_GPU_URL=https://example.com/smoke-manual
+  OVPN_PROFILE_URL=https://example.com/smoke-ovpn MANUAL_GPU_URL=https://example.com/smoke-manual SCHEDULER_INTERVAL_SEC=30
 . "$(dirname "$0")/lib.sh"
 SCRIPTS="$(dirname "$0")"
 STACK_TEST_GOOGLE="$PROJECT-test-google"
@@ -102,14 +103,20 @@ fi
 
 # Provisioning through the real queues: a one-off task approves a GPU request, the backend service
 # sends the CREATE job, fake-site.mjs answers it, the request becomes On Use; then the REVOKE.
+# Then the scheduler: another GPU request that ended gets its REVOKE from the service (2 more jobs).
 REQUEST_QUEUE_URL=$(stack_output "$STACK_QUEUES" RequestQueueUrl) RESULT_QUEUE_URL=$(stack_output "$STACK_QUEUES" ResultQueueUrl) \
   BACKEND_PUBLIC_KEY=$(stack_output "$STACK_QUEUES" BackendPublicKey) SITE_PRIVATE_KEY=$SITE_PRIVATE_KEY \
-  node "$SCRIPTS/fake-site.mjs" 2 900 &
+  node "$SCRIPTS/fake-site.mjs" 4 900 &
 site_pid=$!
 if "$SCRIPTS/run-task.sh" node scripts/check-provisioning.js; then
   pass "GPU request set up and revoked through SQS by the backend service (run-task.sh check-provisioning)"
 else
   fail "provisioning through SQS"
 fi
-if wait "$site_pid"; then pass "the fake site opened both signed and encrypted jobs and answered"; else fail "fake site"; fi
+if "$SCRIPTS/run-task.sh" node scripts/check-scheduler.js; then
+  pass "the service's scheduler: expiry REVOKE, reminder, notice by hand, dead letter (run-task.sh check-scheduler)"
+else
+  fail "scheduler"
+fi
+if wait "$site_pid"; then pass "the fake site opened all four signed and encrypted jobs and answered"; else fail "fake site"; fi
 site_pid=

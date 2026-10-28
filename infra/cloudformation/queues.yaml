@@ -224,10 +224,15 @@ Outputs:
     Value: !Ref ResultQueue
     Export:
       Name: !Sub '${AWS::StackName}-ResultQueueUrl'
+  # The backend's scheduler reads both dead-letter queues (FR-6.7).
   RequestDeadLetterQueueUrl:
     Value: !Ref RequestDeadLetterQueue
+    Export:
+      Name: !Sub '${AWS::StackName}-RequestDeadLetterQueueUrl'
   ResultDeadLetterQueueUrl:
     Value: !Ref ResultDeadLetterQueue
+    Export:
+      Name: !Sub '${AWS::StackName}-ResultDeadLetterQueueUrl'
   BackendKeysSecretArn:
     Value: !Ref BackendKeysSecret
     Export:
