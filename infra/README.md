@@ -21,6 +21,14 @@ Browser ─▶ ALB  APP_HOST.ZONE_NAME (HTTPS), or its AWS name (HTTP, smoke tes
             └─ everything else ─▶ ECS Fargate frontend (web stack)
 ```
 
+With `PROVISIONING=true` the backend also sets up GPU requests through acc-prov-vm at the SIIT
+site (plan §2): it sends signed and encrypted jobs to SQS and reads the results.
+
+```
+ECS backend ──job──▶ SQS provision-requests (+DLQ) ──▶ acc-prov-vm (SIIT site)
+            ◀─result─ SQS provision-results  (+DLQ) ◀──┘
+```
+
 ## Stacks (`cloudformation/`)
 
 | Stack | Template | Contents |
@@ -30,7 +38,8 @@ Browser ─▶ ALB  APP_HOST.ZONE_NAME (HTTPS), or its AWS name (HTTP, smoke tes
 | `<project>-network` | `network.yaml` | VPC, 2 public subnets (ALB, tasks), 2 private subnets (EFS, RDS later). No NAT gateway. |
 | `<project>-platform` | `platform.yaml` | ECR repositories for backend, mysql and frontend (emptied on delete), ECS cluster, backend security group. |
 | `<project>-data` | `data-ecs.yaml` | MySQL 8.4 task + EFS + internal NLB (stable DB name) + generated DB passwords. Later replaced by an RDS stack with the same outputs. |
-| `<project>-app` | `app.yaml` | ALB, backend service, generated `JWT_SECRET` and origin header. |
+| `<project>-queues` | `queues.yaml` | With `PROVISIONING=true`: the SQS request and result queues, each with a dead-letter queue (14 days, TLS only, encrypted at rest), and the backend's message keys. A small Lambda generates the key pair straight into Secrets Manager; the public half is the `BackendPublicKey` output. |
+| `<project>-app` | `app.yaml` | ALB, backend service, generated `JWT_SECRET` and origin header; the queues and keys when provisioning is on. |
 | `<project>-edge` | `edge.yaml` | CloudFront mode: S3 bucket, CloudFront (SPA rewrite function), DNS records for the portal. |
 | `<project>-web` | `web.yaml` | Direct mode: the frontend service (nginx, `frontend/Dockerfile` `prod` stage) and its ALB rule for every path the backend doesn't take. |
 
@@ -43,7 +52,7 @@ On AWS Learner Lab, IAM roles can't be created, so every task uses `LabRole` (`R
 | CloudFront | Denied (list and create) | `ENTRY_MODE=direct`: the ALB is the public entry; the `web` stack serves the frontend instead of `edge`. |
 | Cloud Map (create namespace) | Denied | MySQL is reached through an internal Network Load Balancer. |
 | IAM (create roles) | Denied | Every role is `LabRole`. |
-| ECS, ECR, ELB, EFS, Secrets Manager, Route 53, ACM, SQS, Logs | Allowed | |
+| ECS, ECR, ELB, EFS, Secrets Manager, Route 53, ACM, SQS, Lambda, Logs | Allowed | |
 
 With `USE_DOMAIN=false` there are no `dns`/`cert` stacks and the ALB answers over HTTP on its AWS
 name. That is enough for smoke tests, but not for signing in: the sign-in cookie needs HTTPS.
@@ -51,25 +60,44 @@ name. That is enough for smoke tests, but not for signing in: the sign-in cookie
 ## Smoke test (deploy, check, delete)
 
 `infra/scripts/smoke-test.sh` deploys network, platform, the images, a placeholder Google secret,
-data, app and web (direct mode, no domain), and checks:
+data, queues, app and web (direct mode, no domain, provisioning on with a throwaway site key), and
+checks:
 - the frontend answers through the ALB, also on client-side routes;
 - the backend answers through the ALB;
 - it reaches MySQL as the app user;
 - it refuses unsigned and cross-site requests;
 - Google sign-in uses this deploy's callback URL;
-- `check-db.js` passes in a one-off task.
+- `check-db.js` passes in a one-off task;
+- provisioning through the real queues: a one-off task (`check-provisioning.js`) approves a GPU
+  request, the backend service sends the job, `fake-site.mjs` plays acc-prov-vm and answers, the
+  request becomes On Use; then the same for the removal.
 
-Then it deletes every stack it created, even after a failure, and lists anything left behind
-(stacks, ECR, ECS, VPC, load balancers, EFS, log groups, secrets). `--keep` leaves the stacks up.
-Test runs never leave live resources behind. The one exception is the `dns` stack: it may stay
-between runs (a hosted zone runs nothing; recreating it means new NS records at Cloudflare), and
-the smoke test neither deletes nor reports it.
+Then it deletes the test stacks (`web`, `app`, `queues`, `data`, `test-google`), even after a
+failure or Ctrl+C, and lists anything left behind (stacks, ECS services and tasks, load
+balancers, EFS, SQS, Lambda, log groups, secrets). The teardown is fast: every ECS task is
+stopped at once, then the stacks go in dependency order, independent ones in parallel.
+
+**Kept between runs** (user's OK, 2026-10-28): `network` and `platform` (the ECR images) run
+nothing and cost cents a month (ECR storage, at most 5 images per repository), so the next run
+only uploads the images whose code changed. The smoke test creates them when they are missing
+(first run, or after a Learner Lab reset) and never deletes them. The `dns` stack stays too.
+
+| Command | What it does |
+|---|---|
+| `smoke-test.sh` | Deploy, check, delete the test stacks; keep network, platform, dns |
+| `smoke-test.sh --keep` | Leave the test stacks running |
+| `smoke-test.sh --teardown` | Only delete the test stacks and check (e.g. after a run was killed hard) |
+| `teardown-all.sh` | Delete everything, including network and platform (asks first); `--dns` also deletes the zone |
 
 ## Settings and secrets
 
 - `config.env` (copy `config.example.env`): profile, region, names, sign-in rules. No secrets.
 - Generated by CloudFormation (Secrets Manager): MySQL root and app passwords, `JWT_SECRET`, the
   CloudFront origin header.
+- Generated by the queues stack: the backend's message key pair (the private half only in Secrets
+  Manager). Give the `BackendPublicKey` output to acc-prov-vm (`MSG_PEER_PUBLIC_KEYS` in its
+  `.env`), and put acc-prov-vm's public bundle into `SITE_PUBLIC_KEYS` in `config.env`. Both are
+  public. A new key pair: raise `MESSAGE_KEY_GENERATION` and redeploy queues and app.
 - Set once by you: the Google OAuth client, with `scripts/set-google-secret.sh`.
 - The backend gets plain values from the task definition and secret ones from Secrets Manager;
   ECS reads them when a task starts.
@@ -88,7 +116,9 @@ The scripts are bash (Git Bash on Windows, or Linux/WSL) and need the AWS CLI v2
 5. `infra/scripts/deploy.sh cert network platform`
 6. `infra/scripts/push-images.sh`
 7. `infra/scripts/set-google-secret.sh`
-8. `infra/scripts/deploy.sh data app edge` (direct mode: `data app web`; skip step 9)
+8. `infra/scripts/deploy.sh data app edge` (direct mode: `data app web`; skip step 9). With
+   `PROVISIONING=true`: `data queues app ...`, after setting `SITE_PUBLIC_KEYS`, `GPU_NODES` and
+   the two links in `config.env`.
 9. `infra/scripts/publish-frontend.sh`
 10. Google Cloud Console → the OAuth client: add the redirect URI
     `https://APP_HOST.ZONE_NAME/api/auth/google/callback` and the JavaScript origin
@@ -106,6 +136,7 @@ The scripts are bash (Git Bash on Windows, or Linux/WSL) and need the AWS CLI v2
 | Stop the tasks between test sessions | `pause.sh` (the ALB still costs ~$0.6/day) |
 | Start them again | `resume.sh` |
 | Long break | `destroy.sh edge web app` (keeps the zone, certificate, images and data) |
+| Remove everything (end of the course) | `teardown-all.sh` (and `--dns` for the zone) |
 
 Image tags follow the last commit that changed `backend/` (`frontend/` for the frontend,
 `database/init.sql` and `database/Dockerfile` for MySQL), so a deploy only restarts what changed. Uncommitted changes
