@@ -2,7 +2,7 @@
 // Logs are JSON lines on stdout. They never contain passwords or message plaintext.
 
 import { AmqpConnection } from './amqp.js';
-import { loadAmqpConfig, loadGpuConfig, loadMailConfig, loadPfSenseConfig, loadWorkerConfig } from './config.js';
+import { loadAmqpConfig, loadGpuConfig, loadMailConfig, loadPfSenseConfig, loadSqsConfig, loadWorkerConfig } from './config.js';
 import { parsePrivateBundle, parsePublicBundles } from './envelope.js';
 import { connectGpuNode, findGpuNode, provisionGpuUser, revokeGpuUser } from './gpu.js';
 import { JobStore } from './jobstore.js';
@@ -11,12 +11,14 @@ import { createMailer, sendProvisionEmails } from './mail.js';
 import { generatePassword } from './password.js';
 import { renderPasswordImage } from './password-image.js';
 import { withPfSense } from './pfsense.js';
+import { SqsConnection } from './sqs.js';
 import { createWorker } from './worker.js';
 
 const log = (event, fields = {}) => console.log(JSON.stringify({ ts: new Date().toISOString(), event, ...fields }));
 
 const cfg = loadWorkerConfig();
-const amqp = loadAmqpConfig();
+// Local ActiveMQ (amqp) or AWS (sqs); both give { requestQueue, resultQueue } and the same transport contract.
+const queues = cfg.transport === 'sqs' ? loadSqsConfig() : loadAmqpConfig();
 const gpu = loadGpuConfig();
 const mailer = createMailer(loadMailConfig(), { log });
 const pfsense = cfg.pfsenseEnabled ? loadPfSenseConfig() : null;
@@ -44,11 +46,11 @@ const handlers = createJobHandlers({
   log,
 });
 
-const transport = await AmqpConnection.connect(amqp, { log });
+const transport = cfg.transport === 'sqs' ? SqsConnection.connect(queues, { log }) : await AmqpConnection.connect(queues, { log });
 const worker = createWorker({
   transport,
-  requestQueue: amqp.requestQueue,
-  resultQueue: amqp.resultQueue,
+  requestQueue: queues.requestQueue,
+  resultQueue: queues.resultQueue,
   me,
   peers,
   maxTtlSec: cfg.maxTtlSec,
@@ -59,7 +61,7 @@ const worker = createWorker({
   log,
 });
 worker.start();
-log('acc-prov-vm.ready', { kid: me.kid, pfsenseEnabled: cfg.pfsenseEnabled, gpuNodes: gpu.nodes.map((n) => n.name) });
+log('acc-prov-vm.ready', { transport: cfg.transport, kid: me.kid, pfsenseEnabled: cfg.pfsenseEnabled, gpuNodes: gpu.nodes.map((n) => n.name) });
 
 for (const sig of ['SIGINT', 'SIGTERM']) {
   process.on(sig, () => {

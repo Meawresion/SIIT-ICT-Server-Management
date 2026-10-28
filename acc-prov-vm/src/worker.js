@@ -1,5 +1,5 @@
 // The acc-prov-vm worker: takes one job at a time from the request queue and answers on the
-// result queue. Transport-agnostic (local ActiveMQ now, SQS later).
+// result queue. Transport-agnostic (local ActiveMQ or SQS).
 //
 // Per message:
 // 1. open the envelope; anything untrusted or malformed -> PoisonMessageError (dead-lettered, no reply);

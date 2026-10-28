@@ -62,7 +62,7 @@ export function loadWorkerConfig(env = process.env) {
     'MESSAGE_TRANSPORT', 'MSG_PRIVATE_KEY', 'MSG_PEER_PUBLIC_KEYS', 'MSG_MAX_TTL_SEC', 'MSG_RESULT_TTL_SEC',
     'WORKER_MAX_ATTEMPTS', 'JOB_STORE_FILE', 'PASSWORD_LENGTH', 'PFSENSE_ENABLED',
   ]);
-  if (env.MESSAGE_TRANSPORT !== 'amqp') throw new Error('MESSAGE_TRANSPORT must be amqp (sqs is not implemented yet)');
+  if (!['amqp', 'sqs'].includes(env.MESSAGE_TRANSPORT)) throw new Error('MESSAGE_TRANSPORT must be amqp or sqs');
   const int = (k, min) => {
     const n = Number(env[k]);
     if (!Number.isInteger(n) || n < min) throw new Error(`${k} must be an integer >= ${min}`);
@@ -96,6 +96,16 @@ export function loadAmqpConfig(env = process.env) {
     requestQueue: env.AMQP_REQUEST_QUEUE,
     resultQueue: env.AMQP_RESULT_QUEUE,
   };
+}
+
+// AWS (plan §10.1): the queue URLs from the queues stack. Credentials come from the usual AWS
+// variables (Learner Lab: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_SESSION_TOKEN) or a profile.
+export function loadSqsConfig(env = process.env) {
+  requireEnv(env, ['AWS_REGION', 'SQS_REQUEST_QUEUE_URL', 'SQS_RESULT_QUEUE_URL']);
+  for (const k of ['SQS_REQUEST_QUEUE_URL', 'SQS_RESULT_QUEUE_URL']) {
+    if (!/^https:\/\/sqs\.[a-z0-9-]+\.amazonaws\.com\/\d{12}\/[A-Za-z0-9_-]+$/.test(env[k])) throw new Error(`${k} must be an SQS queue URL`);
+  }
+  return { region: env.AWS_REGION, requestQueue: env.SQS_REQUEST_QUEUE_URL, resultQueue: env.SQS_RESULT_QUEUE_URL };
 }
 
 const NODE_NAME_RE = /^[a-z0-9][a-z0-9-]{0,31}$/;
