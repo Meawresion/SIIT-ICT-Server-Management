@@ -19,7 +19,7 @@ read -r SITE_PRIVATE_KEY SITE_PUBLIC_KEYS < <(node --input-type=module -e "
   const k = generateKeyBundle('smoke-site'); console.log(k.privateBundle, k.publicBundle);" \
   "$(dirname "$0")/../../backend/src/messaging/envelope.js")
 export ENTRY_MODE=direct USE_DOMAIN=false PROVISIONING=true SITE_PUBLIC_KEYS GPU_NODES=smoke-node \
-  OVPN_PROFILE_URL=https://example.com/smoke-ovpn MANUAL_GPU_URL=https://example.com/smoke-manual SCHEDULER_INTERVAL_SEC=30
+  OVPN_PROFILE_URL=https://example.com/smoke-ovpn MANUAL_GPU_URL=https://example.com/smoke-manual MANUAL_BIGDATA_URL=https://example.com/smoke-bigdata SCHEDULER_INTERVAL_SEC=30
 . "$(dirname "$0")/lib.sh"
 SCRIPTS="$(dirname "$0")"
 # What this run deletes at the end. Never the kept stacks.

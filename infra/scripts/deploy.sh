@@ -60,11 +60,12 @@ deploy_app() {
       --query 'PrefixLists[0].PrefixListId')
   fi
   if [ "$PROVISIONING" = true ]; then
-    for key in SITE_PUBLIC_KEYS GPU_NODES OVPN_PROFILE_URL MANUAL_GPU_URL; do
+    for key in SITE_PUBLIC_KEYS GPU_NODES OVPN_PROFILE_URL MANUAL_GPU_URL MANUAL_BIGDATA_URL; do
       if [ -z "${!key:-}" ]; then echo "PROVISIONING=true needs $key in $CONFIG" >&2; exit 1; fi
     done
     provisioning=("QueuesStack=$STACK_QUEUES" "SitePublicKeys=$SITE_PUBLIC_KEYS" "GpuNodes=$GPU_NODES"
-      "OvpnProfileUrl=$OVPN_PROFILE_URL" "ManualGpuUrl=$MANUAL_GPU_URL" "MessageJobTtlSeconds=${MSG_JOB_TTL_SEC:-259200}")
+      "OvpnProfileUrl=$OVPN_PROFILE_URL" "ManualGpuUrl=$MANUAL_GPU_URL"
+      "ManualBigDataUrl=$MANUAL_BIGDATA_URL" "MessageJobTtlSeconds=${MSG_JOB_TTL_SEC:-259200}")
   else
     provisioning=("QueuesStack=")
   fi

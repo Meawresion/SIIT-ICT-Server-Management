@@ -392,7 +392,7 @@ export default function RequestFormModal({ mode, requestId, draft, onClose, onDo
             </div>
           )}
 
-          {mode === 'review' && <ProvisioningPanel provisioning={detail?.provisioning} />}
+          {mode === 'review' && <ProvisioningPanel provisioning={detail?.provisioning} resourceType={form.resource_type} />}
 
           {overlaps.length > 0 && (
             <div ref={overlapRef} className={`alert alert-warning ${confirmingOverlap ? 'is-confirming' : ''}`} role={confirmingOverlap ? 'alert' : 'status'}>

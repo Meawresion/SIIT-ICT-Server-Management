@@ -119,6 +119,9 @@ Parameters:
   ManualGpuUrl:
     Type: String
     Default: ''
+  ManualBigDataUrl:
+    Type: String
+    Default: ''
   MessageJobTtlSeconds:
     Type: Number
     Default: 259200
@@ -141,7 +144,8 @@ Rules:
           - !Not [!Equals [!Ref GpuNodes, '']]
           - !Not [!Equals [!Ref OvpnProfileUrl, '']]
           - !Not [!Equals [!Ref ManualGpuUrl, '']]
-        AssertDescription: provisioning needs SitePublicKeys, GpuNodes, OvpnProfileUrl and ManualGpuUrl
+          - !Not [!Equals [!Ref ManualBigDataUrl, '']]
+        AssertDescription: provisioning needs SitePublicKeys, GpuNodes, OvpnProfileUrl, ManualGpuUrl and ManualBigDataUrl
   CertNeedsDomain:
     RuleCondition: !Not [!Equals [!Ref CertStack, '']]
     Assertions:
@@ -449,6 +453,11 @@ Resources:
               - HasQueues
               - Name: MANUAL_GPU_URL
                 Value: !Ref ManualGpuUrl
+              - !Ref AWS::NoValue
+            - !If
+              - HasQueues
+              - Name: MANUAL_BIGDATA_URL
+                Value: !Ref ManualBigDataUrl
               - !Ref AWS::NoValue
           Secrets:
             - Name: DB_USER

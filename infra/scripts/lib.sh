@@ -12,7 +12,7 @@ if [ ! -f "$CONFIG" ]; then
   exit 1
 fi
 # Values set in the environment (ENTRY_MODE=direct deploy.sh app) win over config.env.
-overrides=$(declare -p ENTRY_MODE USE_DOMAIN PROVISIONING SITE_PUBLIC_KEYS GPU_NODES OVPN_PROFILE_URL MANUAL_GPU_URL SCHEDULER_INTERVAL_SEC 2>/dev/null || true)
+overrides=$(declare -p ENTRY_MODE USE_DOMAIN PROVISIONING SITE_PUBLIC_KEYS GPU_NODES OVPN_PROFILE_URL MANUAL_GPU_URL MANUAL_BIGDATA_URL SCHEDULER_INTERVAL_SEC 2>/dev/null || true)
 set -a
 # shellcheck source=/dev/null
 . "$CONFIG"

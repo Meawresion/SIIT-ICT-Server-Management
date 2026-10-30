@@ -1,6 +1,6 @@
 // Settings for automatic provisioning through acc-prov-vm (plan §2, step 6). Every value comes
-// from config. Without MESSAGE_TRANSPORT, provisioning is off and GPU requests are activated by
-// hand like the other types.
+// from config. Without MESSAGE_TRANSPORT, provisioning is off and GPU and Big Data requests are
+// activated by hand like the other types.
 //   MESSAGE_TRANSPORT      amqp (local ActiveMQ, D23) | sqs (AWS) | empty = off
 //   AMQP_URL, AMQP_USER, AMQP_PASSWORD, AMQP_REQUEST_QUEUE, AMQP_RESULT_QUEUE      (amqp)
 //   SQS_REQUEST_QUEUE_URL, SQS_RESULT_QUEUE_URL, AWS_REGION                         (sqs)
@@ -13,7 +13,7 @@
 //   MSG_MAX_TTL_SEC        the longest lifetime accepted on a result
 //   GPU_NODES              comma-separated node names, as in acc-prov-vm's gpu-nodes.json; a tie
 //                          in load goes to the first (D12)
-//   OVPN_PROFILE_URL, MANUAL_GPU_URL   links put in the student's email (D14)
+//   OVPN_PROFILE_URL, MANUAL_GPU_URL, MANUAL_BIGDATA_URL   links put in the student's email (D14)
 
 import { EnvelopeError, parsePrivateBundle, parsePublicBundles } from '../messaging/envelope.js';
 
@@ -56,7 +56,7 @@ export function loadProvisioningConfig(source = process.env) {
     problems.push('MESSAGE_TRANSPORT must be amqp, sqs or empty');
   }
 
-  need(['MSG_PRIVATE_KEY', 'MSG_PEER_PUBLIC_KEYS', 'MSG_JOB_TTL_SEC', 'MSG_MAX_TTL_SEC', 'GPU_NODES', 'OVPN_PROFILE_URL', 'MANUAL_GPU_URL']);
+  need(['MSG_PRIVATE_KEY', 'MSG_PEER_PUBLIC_KEYS', 'MSG_JOB_TTL_SEC', 'MSG_MAX_TTL_SEC', 'GPU_NODES', 'OVPN_PROFILE_URL', 'MANUAL_GPU_URL', 'MANUAL_BIGDATA_URL']);
   let me, peers;
   try {
     if (source.MSG_PRIVATE_KEY) me = parsePrivateBundle(source.MSG_PRIVATE_KEY);
@@ -84,14 +84,14 @@ export function loadProvisioningConfig(source = process.env) {
   } else if (new Set(gpuNodes).size !== gpuNodes.length) {
     problems.push('GPU_NODES lists a node twice');
   }
-  for (const k of ['OVPN_PROFILE_URL', 'MANUAL_GPU_URL']) {
+  for (const k of ['OVPN_PROFILE_URL', 'MANUAL_GPU_URL', 'MANUAL_BIGDATA_URL']) {
     if (source[k] && !httpUrl(source[k])) problems.push(`${k} must be an http(s) URL`);
   }
 
   if (problems.length) throw new Error(`Provisioning settings: ${problems.join('; ')}`);
   return {
     transport, amqp, sqs, me, peers, jobTtlSec, maxTtlSec, gpuNodes,
-    links: { ovpnProfileUrl: source.OVPN_PROFILE_URL, manualGpuUrl: source.MANUAL_GPU_URL },
+    links: { ovpnProfileUrl: source.OVPN_PROFILE_URL, manualUrl: { GPU_SERVER: source.MANUAL_GPU_URL, BIG_DATA: source.MANUAL_BIGDATA_URL } },
   };
 }
 

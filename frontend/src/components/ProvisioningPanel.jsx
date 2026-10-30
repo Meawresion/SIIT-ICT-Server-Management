@@ -7,9 +7,11 @@ const JOB_LABEL = {
 };
 const VPN_LABEL = { created: 'new VPN account', reactivated: 'VPN account re-enabled', kept: 'existing VPN kept', disabled: 'VPN disabled', skipped: 'VPN step off',
   extended: 'VPN expiration moved', missing: 'no VPN account' };
+const HUE_LABEL = { created: 'new HUE account', reset: 'HUE account re-enabled', deactivated: 'HUE account off', skipped: 'HUE step off',
+  missing: 'no HUE account' };
 
 /** Automatic setup through acc-prov-vm, for approvers (plan §4.3): node, job state, error. */
-export default function ProvisioningPanel({ provisioning }) {
+export default function ProvisioningPanel({ provisioning, resourceType }) {
   const jobs = provisioning?.jobs ?? [];
   if (!provisioning?.automated && !jobs.length) return null;
   const last = jobs.at(-1);
@@ -17,13 +19,14 @@ export default function ProvisioningPanel({ provisioning }) {
     <section className="provisioning" aria-label="Automatic setup">
       <h3>Automatic setup</h3>
       {!last ? (
-        <p className="muted">Starts when the request is approved{provisioning.gpu_node ? '' : '; the GPU node is chosen then'}.</p>
+        <p className="muted">Starts when the request is approved{resourceType === 'HPC_GPU' && !provisioning.gpu_node ? '; the GPU node is chosen then' : ''}.</p>
       ) : (
         <>
           <p className={`provisioning-state is-${last.status.toLowerCase()}`} role="status">
             <strong>{JOB_LABEL[last.action][last.status]}</strong>
             {provisioning.gpu_node && <span className="muted"> · node <span className="mono">{provisioning.gpu_node}</span></span>}
             {last.vpn && <span className="muted"> · {VPN_LABEL[last.vpn] ?? last.vpn}</span>}
+            {last.hue && <span className="muted"> · {HUE_LABEL[last.hue] ?? last.hue}</span>}
           </p>
           {last.error && <p className="provisioning-error">{last.error}</p>}
           {jobs.length > 1 && (
