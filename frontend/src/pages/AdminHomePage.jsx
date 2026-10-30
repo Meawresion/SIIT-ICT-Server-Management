@@ -43,7 +43,7 @@ export default function AdminHomePage() {
     { key: 'student', label: 'Student', render: (r) => (<span className="stack"><span>{r.student_name}</span><small className="muted">{r.student_id}</small></span>) },
     { key: 'purpose', label: 'Project', className: 'col-wide' },
     { key: 'resource_type', label: 'Resource Type', render: (r) => resourceShort(r.resource_type) },
-    { key: 'status', label: 'Request Status', render: (r) => <StatusBadge status={r.status} /> },
+    { key: 'status', label: 'Request Status', render: (r) => <StatusBadge status={r.status} extensionAsked={r.extension_asked} /> },
     {
       key: 'action',
       label: '',

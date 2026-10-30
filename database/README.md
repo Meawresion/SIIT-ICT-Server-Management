@@ -117,7 +117,7 @@ cascade), so the log stays complete.
 |--------|-------|
 | `eid` | Unsigned auto-increment primary key; orders the events of a request |
 | `rid` | The request, references `Request.rid` |
-| `action` | `CREATED`, `EDITED`, `APPROVED`, `REJECTED`, `ACTIVATED`, `COMPLETED`; from provisioning: `PROVISIONED`, `PROVISION_FAILED`, `REVOKED`, `REVOKE_FAILED` (system), `RETRIED` (approver); from the scheduler: `REMINDED` (end-date reminder sent), `EXPIRED` (the end date passed) |
+| `action` | `CREATED`, `EDITED`, `APPROVED`, `REJECTED`, `ACTIVATED`, `COMPLETED`; from provisioning: `PROVISIONED`, `PROVISION_FAILED`, `REVOKED`, `REVOKE_FAILED` (system), `RETRIED` (approver); from the scheduler: `REMINDED` (end-date reminder sent), `EXPIRED` (the end date passed); extensions (FR-8.3): `EXTENSION_REQUESTED` (student), `EXTENSION_APPROVED`, `EXTENSION_REJECTED` (approver), `EXTENDED`, `EXTEND_FAILED` (system) |
 | `from_status` | Status before the event; `NULL` when the request is created |
 | `to_status` | Status after the event (the same as `from_status` for an edit) |
 | `actor_uid` | Who acted, references `User.uid`; `NULL` for the system (provisioning results, scheduler) |
@@ -140,7 +140,7 @@ insert and update jobs, but not delete them.
 |--------|-------|
 | `job_id` | UUID primary key; also the message `jti` |
 | `rid` | The request, references `Request.rid` (no cascade) |
-| `action` | `CREATE` or `REVOKE` |
+| `action` | `CREATE`, `REVOKE` or `EXTEND` (a later end date, FR-8.3) |
 | `status` | `Queued` → `Sent` → `Succeeded` or `Failed`. A send that fails stays `Queued` and is retried with backoff. The scheduler fails a `Sent` job that was dead-lettered or got no answer before it expired |
 | `payload` | The job as sent (username, name, email, node, period, links); never a password |
 | `attempts` | Publish attempts |
@@ -410,29 +410,20 @@ therefore saves an empty string.
 The profile's primary advisor is stored in `user.advisor_name`. The supervisor of
 an individual request is stored separately in `request.spv_name`.
 
-## Schema changes on an existing database
+## Schema changes
 
-`init.sql` runs only when the `mysql_data` volume is created. When it changes, a
-matching script in `migrations/` brings an existing database up to date. Run each
-script once, in date order, then regenerate the Prisma client:
-
-```bash
-docker compose exec -T mysql sh -c 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" "$MYSQL_DATABASE"' < database/migrations/2026-10-25-user-advisor-name.sql
-```
-
-| Script | Change |
-|--------|--------|
-| `2026-10-25-user-advisor-name.sql` | Adds `user.advisor_name` |
-| `2026-10-28-request-event.sql` | Adds the `request_event` audit log, its triggers and the logging procedures; backfills each request's creation and latest review. Then run `privileges.sh` once (below). |
-| `2026-10-28-provision-job.sql` | Adds the `provision_job` outbox. Then run `privileges.sh` again (below). |
-| `2026-10-28-scheduler-lease.sql` | Adds the `scheduler_lease` table. Then run `privileges.sh` again (below). |
-
-After `2026-10-28-request-event.sql`, `2026-10-28-provision-job.sql` and `2026-10-28-scheduler-lease.sql`, set the app user's rights (recreate the mysql container first, so
-`privileges.sh` is mounted: `docker compose up -d mysql`):
+`init.sql` and `privileges.sh` run only when the `mysql_data` volume is created, and there are
+no migration scripts: after a schema change, delete the volume and let MySQL create a new one.
+This deletes all local data.
 
 ```bash
-docker compose exec -T mysql sh /docker-entrypoint-initdb.d/privileges.sh
+docker compose rm -sf mysql backend
+docker volume rm siit-ict-server-management_mysql_data
+docker compose up -d --build
 ```
+
+The volume name is `<compose project>_mysql_data` (`docker volume ls`). On AWS, a new data stack
+starts from the same `init.sql`.
 
 ## Assign reviewer access by email
 

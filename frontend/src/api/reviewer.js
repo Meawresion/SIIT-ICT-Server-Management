@@ -1,4 +1,4 @@
-import { apiRequest } from './client.js';
+import { apiDownload, apiRequest } from './client.js';
 
 export async function getRequests(filters = {}, options) {
   const params = new URLSearchParams();
@@ -49,4 +49,19 @@ export async function completeRequest(id) {
 // D4: after a failed setup or removal, queue a new job.
 export async function retryProvisioning(id) {
   return apiRequest(`/api/reviewer/requests/${id}/provision/retry`, { method: 'POST', body: JSON.stringify({}) });
+}
+
+// FR-9.3: type requests | events, from/to YYYY-MM-DD (both included), optional status.
+export async function exportCsv({ type, from, to, status }) {
+  const params = new URLSearchParams({ type, from, to, ...(status && { status }) });
+  return apiDownload(`/api/reviewer/export?${params}`);
+}
+
+// FR-8.3: the approver's answer to a student's ask for a later end date.
+export async function approveExtension(id, review_comment) {
+  return apiRequest(`/api/reviewer/requests/${id}/extension/approve`, { method: 'PATCH', body: JSON.stringify({ review_comment }) });
+}
+
+export async function rejectExtension(id, review_comment) {
+  return apiRequest(`/api/reviewer/requests/${id}/extension/reject`, { method: 'PATCH', body: JSON.stringify({ review_comment }) });
 }

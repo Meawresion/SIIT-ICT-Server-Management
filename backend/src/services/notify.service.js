@@ -1,6 +1,7 @@
 // Status emails from the backend (S2, FR-4.3): the student hears about every status change and
 // before the end date (FR-8.2), and approvers hear about a failed setup (FR-6.7) and about an ended
-// request they must turn off by hand. acc-prov-vm still sends the login details itself (S1), so
+// request they must turn off by hand; extensions (FR-8.3) are asked of the approvers and answered
+// to the student. acc-prov-vm still sends the login details itself (S1), so
 // these emails never carry credentials.
 //
 // Sent after the change is committed, best effort: a mail failure is logged and never undoes or
@@ -19,6 +20,7 @@ const RESOURCE_LABEL = {
   GPU_SERVER: 'GPU server', BIG_DATA: 'Big Data cluster', VM: 'virtual machine', LAB_EQUIPMENT: 'lab equipment',
   AWS_LAB: 'AWS Learner Lab', AWS_SKILL: 'AWS Skill Builder',
 };
+const FAILURE_KIND = { PROVISION_FAILED: 'Setup', REVOKE_FAILED: 'Removing access', EXTEND_FAILED: 'Extending access' };
 const STATUS_ACTIONS = new Set(['APPROVED', 'REJECTED', 'ACTIVATED', 'COMPLETED', 'PROVISIONED', 'REVOKED']);
 
 const formatId = (id) => `#${String(id).padStart(7, '0')}`;
@@ -31,7 +33,7 @@ export function assertRecipient(to, allowedDomains) {
 }
 
 // -> { subject, lines } for the student, or null when this event needs no student email.
-export function studentEmail({ action, from, to, comment, request, firstFailure }) {
+export function studentEmail({ action, from, to, comment, details, request, firstFailure }) {
   const what = `your ${RESOURCE_LABEL[request.resource_type] ?? 'resource'} request ${formatId(request.rid)} (${day(request.start_date)} to ${day(request.end_date)})`;
   const automated = AUTOMATED_RESOURCES.includes(request.resource_type);
   const note = comment ? [`Approver's comment: ${comment}`] : [];
@@ -63,7 +65,15 @@ export function studentEmail({ action, from, to, comment, request, firstFailure 
         automated
           ? 'After that day your login is turned off. Your files are kept, but copy anything you need before then.'
           : 'SIIT ICT will turn off the access after that day.',
-        'If you need more time, contact SIIT ICT before then.',
+        'If you need more time, ask for it on the request in the portal before then.',
+      ] };
+    case 'EXTENSION_APPROVED':
+      return { subject: `Request ${formatId(request.rid)}: extended until ${day(request.end_date)}`, lines: [
+        `Your ${RESOURCE_LABEL[request.resource_type] ?? 'resource'} request ${formatId(request.rid)} now ends on ${day(request.end_date)}.`, ...note,
+      ] };
+    case 'EXTENSION_REJECTED':
+      return { subject: `Request ${formatId(request.rid)}: extension not approved`, lines: [
+        `Your request to keep ${what} until ${details?.end_date} was not approved. It still ends on ${day(request.end_date)}.`, ...note,
       ] };
     case 'PROVISION_FAILED':
       // Once per request; retries don't send it again.
@@ -104,17 +114,27 @@ export function createNotifier(config, { transport, log = () => {}, portalUrl = 
     const student = request.user_request_student_uidTouser;
     const firstFailure = action === 'PROVISION_FAILED'
       && (await prisma.request_event.count({ where: { rid, action: 'PROVISION_FAILED' } })) === 1;
-    const mail = studentEmail({ action, from, to, comment: action === 'PROVISION_FAILED' ? null : comment, request, firstFailure });
+    const mail = studentEmail({ action, from, to, comment: action === 'PROVISION_FAILED' ? null : comment, details, request, firstFailure });
     if (mail) await send({ to: student.siitemail, fullName: student.fullname, ...mail, path: '/history' });
-    if (action === 'PROVISION_FAILED' || action === 'REVOKE_FAILED') {
+    if (FAILURE_KIND[action]) {
       // FR-6.7: tell the approvers, with the site's error.
       const approvers = await prisma.user.findMany({ where: { role: 'Approver' } });
-      const kind = action === 'PROVISION_FAILED' ? 'Setup' : 'Removing access';
+      const kind = FAILURE_KIND[action];
       for (const a of approvers) {
         await send({ to: a.siitemail, fullName: a.fullname, subject: `${kind} failed for request ${formatId(rid)}`, path: '/history', lines: [
           `${kind} failed for ${student.fullname}'s request ${formatId(rid)} (${RESOURCE_LABEL[request.resource_type]}).`,
           `Error: ${comment ?? 'not given'}`,
           'Open the request to retry, or set it up by hand.',
+        ] });
+      }
+    }
+    if (action === 'EXTENSION_REQUESTED') {
+      const approvers = await prisma.user.findMany({ where: { role: 'Approver' } });
+      for (const a of approvers) {
+        await send({ to: a.siitemail, fullName: a.fullname, subject: `Request ${formatId(rid)}: more time asked`, path: '/history', lines: [
+          `${student.fullname} asks to keep request ${formatId(rid)} (${RESOURCE_LABEL[request.resource_type]}) until ${details?.end_date} instead of ${day(request.end_date)}.`,
+          `Reason: ${comment}`,
+          'Open the request to approve or reject it.',
         ] });
       }
     }

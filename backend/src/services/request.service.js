@@ -2,15 +2,20 @@ import prisma from '../lib/prisma.js';
 import { resourceToDb, requestInclude, requestView, eventInclude, eventView } from '../utils/db-mapping.js';
 import { UpdateRequestSchema } from '../utils/validation.js';
 
+// Keys in extra_details that only approvers and the system write: a student's extra_details never
+// sets or changes them.
+const PROTECTED_EXTRAS = ['review_comment', 'gpu_node', 'extension'];
+
 function requestData(data, existing = null) {
   const resource_type = resourceToDb[data.resource_type];
   const extra_details = { ...(existing?.extra_details ?? {}), ...(data.extra_details ?? {}) };
-  for (const key of ['project_description', 'impact_score', 'supervisor_confirmation']) {
+  for (const key of ['project_description', 'impact_score', 'supervisor_confirmation', 'technical_requirements']) {
     if (data[key] !== undefined) extra_details[key] = data[key];
   }
-  // Student-provided JSON must never overwrite reviewer-owned metadata.
-  if (existing?.extra_details?.review_comment !== undefined) extra_details.review_comment = existing.extra_details.review_comment;
-  else delete extra_details.review_comment;
+  for (const key of PROTECTED_EXTRAS) {
+    if (existing?.extra_details?.[key] !== undefined) extra_details[key] = existing.extra_details[key];
+    else delete extra_details[key];
+  }
   return { por: data.purpose, proj_name: data.project_name || data.project_description.slice(0, 255),
     spv_name: data.project_supervisor_name, spv_email: data.project_supervisor_email ?? existing?.spv_email ?? '',
     justify: data.justification, resource_type, start_date: new Date(data.estimated_start_date), end_date: new Date(data.estimated_end_date),
@@ -19,8 +24,8 @@ function requestData(data, existing = null) {
 // Fields a student edit can change, compared as the API shows them (old rows keep the
 // description in proj_name only), for the EDITED event. Only the names are logged.
 const editableFields = ['purpose', 'project_name', 'project_description', 'project_supervisor_name', 'project_supervisor_email',
-  'justification', 'estimated_start_date', 'estimated_end_date', 'impact_score', 'supervisor_confirmation'];
-const viewedExtras = new Set(['project_description', 'impact_score', 'supervisor_confirmation', 'review_comment']);
+  'justification', 'estimated_start_date', 'estimated_end_date', 'impact_score', 'supervisor_confirmation', 'technical_requirements'];
+const viewedExtras = new Set(['project_description', 'impact_score', 'supervisor_confirmation', 'review_comment', 'technical_requirements']);
 function changedFields(row, next) {
   const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
   const before = requestView(row), after = requestView({ ...row, ...next });

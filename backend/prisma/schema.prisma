@@ -119,6 +119,7 @@ model scheduler_lease {
 enum provision_job_action {
   CREATE
   REVOKE
+  EXTEND
 }
 
 enum provision_job_status {

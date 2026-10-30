@@ -21,3 +21,8 @@ export async function updateRequest(id, data) {
     body: JSON.stringify(data),
   });
 }
+
+// FR-8.3: ask for a later end date on a request in use. -> the request.
+export async function requestExtension(id, { end_date, reason }) {
+  return apiRequest(`/api/requests/${id}/extension`, { method: 'POST', body: JSON.stringify({ end_date, reason }) });
+}

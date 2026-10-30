@@ -7,6 +7,8 @@
 //   CREATE { action, resource, student: { username, fullName, email }, gpuNode, period: { start, end },
 //            links: { ovpnProfileUrl, manualUrl } }
 //   REVOKE { action, resource, student: { username, fullName }, gpuNode, revokeVpn }
+//   EXTEND { action, resource, student: { username, fullName }, gpuNode, period: { start, end } } (FR-8.3)
+// gpuNode only for GPU_SERVER. For BIG_DATA, acc-prov-vm's own settings name the Hadoop nodes.
 
 import { randomUUID } from 'node:crypto';
 import prisma from '../lib/prisma.js';
@@ -14,15 +16,15 @@ import { provisioningConfig } from '../config/provisioning.js';
 import { EnvelopeError, open, seal } from '../messaging/envelope.js';
 import { PoisonMessageError } from '../messaging/errors.js';
 
-// Resource types acc-prov-vm can set up today. BIG_DATA waits for the Hadoop flows, so it is
-// still activated by hand.
-export const AUTOMATED_RESOURCES = ['GPU_SERVER'];
+// Resource types acc-prov-vm sets up (FR-3.1); the other types are activated by hand (S8).
+export const AUTOMATED_RESOURCES = ['GPU_SERVER', 'BIG_DATA'];
 // D20: the same username on pfSense, Linux and JupyterHub.
 const USERNAME_PREFIX = { Undergraduate: 'st', Master: 'stm', PhD: 'std' };
 const ACTIVE_JOB = ['Queued', 'Sent'];
-const RESULT_EVENT = { CREATE: ['PROVISIONED', 'PROVISION_FAILED'], REVOKE: ['REVOKED', 'REVOKE_FAILED'] };
+const RESULT_EVENT = { CREATE: ['PROVISIONED', 'PROVISION_FAILED'], REVOKE: ['REVOKED', 'REVOKE_FAILED'], EXTEND: ['EXTENDED', 'EXTEND_FAILED'] };
 // The only result fields kept: all non-secret (acc-prov-vm never sends a password).
-const RESULT_FIELDS = ['ok', 'action', 'resource', 'username', 'gpuNode', 'vpn', 'linuxCreated', 'emailed', 'gpu', 'error', 'permanent'];
+const RESULT_FIELDS = ['ok', 'action', 'resource', 'username', 'gpuNode', 'vpn', 'linuxCreated', 'emailed', 'gpu',
+  'hadoop', 'hdfsHome', 'hue', 'error', 'permanent'];
 const MAX_ERROR_LENGTH = 2000;
 const DISPATCH_BATCH = 5;
 
@@ -58,19 +60,32 @@ export async function pickGpuNode(tx, row, nodes) {
   return nodes.reduce((best, n) => (load.get(n) < load.get(best) ? n : best), nodes[0]);
 }
 
-// Called inside the approve transaction. -> { gpu_node, job } (the job row data).
+const linksFor = (resource, config) => ({ ovpnProfileUrl: config.links.ovpnProfileUrl, manualUrl: config.links.manualUrl[resource] });
+
+// Called inside the approve transaction. -> { gpu_node (GPU only), job } (the job row data).
 export async function buildCreateJob(tx, row, config) {
   const student = await tx.user.findUnique({ where: { uid: row.student_uid } });
   const username = usernameFor(student);
-  const gpu_node = await pickGpuNode(tx, row, config.gpuNodes);
+  const gpu_node = row.resource_type === 'GPU_SERVER' ? await pickGpuNode(tx, row, config.gpuNodes) : undefined;
   const payload = {
     action: 'CREATE', resource: row.resource_type,
     student: { username, fullName: student.fullname, email: student.siitemail },
-    gpuNode: gpu_node,
+    ...(gpu_node && { gpuNode: gpu_node }),
     period: { start: day(row.start_date), end: day(row.end_date) },
-    links: { ovpnProfileUrl: config.links.ovpnProfileUrl, manualUrl: config.links.manualGpuUrl },
+    links: linksFor(row.resource_type, config),
   };
   return { gpu_node, job: { job_id: randomUUID(), rid: row.rid, action: 'CREATE', payload } };
+}
+
+// Whether acc-prov-vm set this request up (a CREATE was queued for it), so it also has to remove
+// or extend the access. A GPU request also needs its node. -> the node fields for a payload, or null.
+async function setUpAutomatically(tx, row) {
+  if (!AUTOMATED_RESOURCES.includes(row.resource_type)) return null;
+  if (row.resource_type === 'GPU_SERVER') {
+    const gpu_node = row.extra_details?.gpu_node;
+    return gpu_node ? { gpuNode: gpu_node } : null;
+  }
+  return (await tx.provision_job.count({ where: { rid: row.rid, action: 'CREATE' } })) ? {} : null;
 }
 
 // The VPN account is shared by all of a student's requests: disable it only when no other request
@@ -85,17 +100,30 @@ async function keepsVpn(tx, row) {
 // Called inside the complete transaction (and by the scheduler later, D7). At most one REVOKE per
 // request unless the last one failed. -> the job row data, or null.
 export async function buildRevokeJob(tx, row) {
-  const gpu_node = row.extra_details?.gpu_node;
-  if (!gpu_node) return null;
+  const node = await setUpAutomatically(tx, row);
+  if (!node) return null;
   const pending = await tx.provision_job.count({ where: { rid: row.rid, action: 'REVOKE', status: { not: 'Failed' } } });
   if (pending) return null;
   const student = await tx.user.findUnique({ where: { uid: row.student_uid } });
   const payload = {
     action: 'REVOKE', resource: row.resource_type,
     student: { username: usernameFor(student), fullName: student.fullname },
-    gpuNode: gpu_node, revokeVpn: !(await keepsVpn(tx, row)),
+    ...node, revokeVpn: !(await keepsVpn(tx, row)),
   };
   return { job_id: randomUUID(), rid: row.rid, action: 'REVOKE', payload };
+}
+
+// FR-8.3: called inside the transaction that approves a later end date (row has the new one).
+// -> the job row data, or null when the request was not set up automatically.
+export async function buildExtendJob(tx, row, config) {
+  const node = isAutomated(row, config) ? await setUpAutomatically(tx, row) : null;
+  if (!node) return null;
+  const student = await tx.user.findUnique({ where: { uid: row.student_uid } });
+  const payload = {
+    action: 'EXTEND', resource: row.resource_type, student: { username: usernameFor(student), fullName: student.fullname },
+    ...node, period: { start: day(row.start_date), end: day(row.end_date) },
+  };
+  return { job_id: randomUUID(), rid: row.rid, action: 'EXTEND', payload };
 }
 
 // Manual Activate stays for automated requests only as a fallback after a failed setup.
@@ -121,7 +149,10 @@ export async function retryProvisioning(request_id, reviewer_account_id) {
     let payload = last.payload;
     if (last.action === 'CREATE') {
       if (row.status !== 'Approved') throw httpError('Invalid state transition', 400);
-      payload = { ...payload, links: { ovpnProfileUrl: config.links.ovpnProfileUrl, manualUrl: config.links.manualGpuUrl } };
+      payload = { ...payload, links: linksFor(row.resource_type, config) };
+    } else if (last.action === 'EXTEND') {
+      if (row.status !== 'On_Use') throw httpError('Invalid state transition', 400);
+      payload = { ...payload, period: { start: day(row.start_date), end: day(row.end_date) } };
     } else {
       payload = { ...payload, revokeVpn: !(await keepsVpn(tx, row)) };
     }
@@ -138,7 +169,7 @@ export async function retryProvisioning(request_id, reviewer_account_id) {
 export function jobView(job) {
   return job && {
     id: job.job_id, action: job.action, status: job.status, attempts: job.attempts, error: job.last_error ?? null,
-    gpu_node: job.payload?.gpuNode ?? null, vpn: job.result?.vpn ?? null,
+    gpu_node: job.payload?.gpuNode ?? null, vpn: job.result?.vpn ?? null, hue: job.result?.hue ?? null,
     created_at: job.created_at, sent_at: job.sent_at, completed_at: job.completed_at,
   };
 }

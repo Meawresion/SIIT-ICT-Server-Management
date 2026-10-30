@@ -1,6 +1,7 @@
 import { parseId, requestResponse } from '../utils/db-mapping.js';
 import { createRequest, getRequestById, getUserRequests, updateRequest } from '../services/request.service.js';
-import { CreateRequestSchema, UpdateRequestSchema } from '../utils/validation.js';
+import { requestExtension } from '../services/extension.service.js';
+import { CreateRequestSchema, ExtensionRequestSchema, UpdateRequestSchema } from '../utils/validation.js';
 
 export async function createNewRequest(req, res, next) {
   try {
@@ -54,6 +55,7 @@ export async function getMyRequests(req, res, next) {
       impact_score: r.impact_score,
       estimated_start_date: r.estimated_start_date,
       estimated_end_date: r.estimated_end_date,
+      extension_asked: Boolean(r.extension),
       created_at: r.created_at,
       reviewed_at: r.reviewed_at,
     })));
@@ -104,6 +106,18 @@ export async function updateRequestHandler(req, res, next) {
     if (err.message.includes('Can only update')) {
       return res.status(400).json({ message: err.message });
     }
+    next(err);
+  }
+}
+// FR-8.3: POST /api/requests/:id/extension { end_date, reason }
+export async function requestExtensionHandler(req, res, next) {
+  try {
+    const user_id = req.auth.user_id;
+    if (!user_id) return res.status(400).json({ message: 'User profile required' });
+    const validation = ExtensionRequestSchema.safeParse(req.body);
+    if (!validation.success) return res.status(400).json({ message: 'Validation error', errors: validation.error.errors });
+    res.status(201).json(requestResponse(await requestExtension(parseId(req.params.id), user_id, validation.data)));
+  } catch (err) {
     next(err);
   }
 }

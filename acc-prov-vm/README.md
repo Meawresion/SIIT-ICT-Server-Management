@@ -4,11 +4,11 @@ Runs at the SIIT resource site, behind pfSense. When a GPU or Big Data request i
 
 - **pfSense** VPN user, via the webGUI with Playwright (`src/pfsense.js`)
 - **GPU node** Linux user + conda Jupyter kernel, over SSH (`src/ssh.js`, `src/linux.js`, `src/gpu.js`)
-- Hadoop Linux / HDFS accounts over SSH (planned)
-- HUE user (planned)
+- **Hadoop nodes** Linux user in the Hadoop groups on every node, plus the HDFS home, over SSH (`src/hadoop.js`)
+- **HUE** user, via the webGUI with Playwright (`src/hue.js`; off until verified on the live UI)
 - **Messaging:** signed + encrypted envelopes (`src/envelope.js`) over local ActiveMQ (`src/amqp.js`) or AWS SQS (`src/sqs.js`)
 - **Student email** with credentials and links, via SMTP (`src/mail.js`)
-- **Worker** (`npm start`): runs CREATE / REVOKE jobs from the queue (`src/worker.js`, `src/jobs.js`)
+- **Worker** (`npm start`): runs CREATE / REVOKE / EXTEND jobs from the queue (`src/worker.js`, `src/jobs.js`)
 
 ## Setup
 
@@ -18,7 +18,8 @@ npm install
 npx playwright install chromium
 cp .env.example .env                       # fill in; git-ignored
 cp gpu-nodes.example.json gpu-nodes.json   # edit for this site; git-ignored
-npm run check:config                       # validates both, prints the GPU nodes
+cp bigdata.example.json bigdata.json       # the Hadoop nodes; git-ignored (optional)
+npm run check:config                       # validates them, prints the GPU and Hadoop nodes
 ```
 
 Nothing site-specific is hard-coded. Every URL, IP, port, host-key fingerprint, CA name, certificate setting and conda path comes from configuration:
@@ -94,6 +95,32 @@ try {
 
 - Commands are built from argv arrays and quoted, never from interpolated strings.
 - Passwords go to `sudo -S` and `chpasswd` on stdin only. sudo always runs with `-k`, so a cached sudo session can't make the password line reach the command.
+
+## Big Data (Hadoop) module
+
+The Hadoop nodes are listed in `bigdata.json` (`BIGDATA_FILE`). Without it, Big Data jobs are refused with a failed result.
+- Each node has a `name`, an IPv4 `host`, a `port` and pinned `hostKeys`. The SIIT nodes `h99` and `h0` are clones that share one host key, so the IP check in every SSH session is what tells them apart.
+- **Exactly one node has `"hdfsHome": true`.** HDFS is one file system for the whole cluster, so the HDFS home is made once, from that node.
+- `groups`: the groups the student joins on every node (the manual: `hadoop`, `hdfs`).
+- `hdfs`: the `command`, the HDFS `superuser` that runs it, the `homeDir` parent, the home's `group` and `mode`, and `studentOwnsHome`.
+- `jupyterUrl` and `hueUrl` go into the student's email.
+- **SSH login:** `HADOOP_SSH_USER`, `HADOOP_SSH_PASSWORD`, `HADOOP_SSH_KEY_PATH` and `HADOOP_SUDO_PASSWORD`, with per-node overrides like the GPU ones. Any of them that is not set falls back to the `GPU_*` value (D18: one admin account).
+
+| Function | Notes |
+|----------|-------|
+| `provisionHadoopUser(ssh, node, settings, { username, fullName, password })` | Creates the user if missing, sets the password (only if the full name matches), unlocks, adds the missing groups. On the `hdfsHome` node it also makes `<homeDir>/<user>` as the HDFS superuser and applies the owner, group and mode. Safe to re-run. |
+| `revokeHadoopUser(ssh, username)` | `usermod -L` + `chage -E 0`. The home and the HDFS home are kept (D16). |
+
+- **HDFS home owner:** `studentOwnsHome: true` runs `-chown <user>:<group>`, SIIT's real command step, so the student owns their home. The manual prints `-chown :hadoop` (a typo): that changes only the group, the owner stays `hdfs`, and with mode 755 the student can't write there.
+- **⚠ On the SIIT cluster, `hdfs` is HDFS's superuser group** (`dfs.permissions.superusergroup=hdfs`). A student added to it, as the manual does, can read and delete everyone's HDFS data. Remove `hdfs` from `groups` once the lab agrees.
+- JupyterHub on the edge node signs in through PAM, so the Linux password is the JupyterHub password, and a locked account can't sign in.
+
+## HUE module
+
+`src/hue.js` adds, resets and deactivates HUE users through Administer Users (HUE 4.11), when `HUE_ENABLED=true` (`HUE_URL`, `HUE_USER`, `HUE_PASSWORD`).
+- **Not verified yet.** HUE was down while this was written, so the paths and form fields follow HUE 4.11's standard user forms. Record flows H0–H10 (`docs/codegen-checklist.md`) and test against the live UI before turning it on.
+- While it is off, Big Data students get a note in the email that their HUE login comes later, and the result says `hue: 'skipped'`.
+- Create unticks "Create home directory", because acc-prov-vm makes the HDFS home itself. A returning student's HUE user gets the new password and is made active again. Revoke unticks "Active" (D16).
 
 ## Mail module
 
@@ -198,6 +225,9 @@ Setup, from the stack outputs:
 |-----|--------------|
 | `CREATE` (GPU) | 1. Generate a password (`PASSWORD_LENGTH`; letters and digits, no look-alikes). 2. **VPN (D15)**, if `PFSENSE_ENABLED=true`: create the account if it's missing; keep an active one, extending its expiration only if it was set; re-activate a disabled or expired one with the new password. 3. GPU account and conda kernel on the named node. 4. Both emails, **last**. |
 | `REVOKE` (GPU) | Lock the Linux account. Disable the VPN account only when `revokeVpn` is true (the student has no other active request). |
+| `CREATE` (Big Data) | The same password and VPN steps, then the Linux account on every Hadoop node, the HDFS home, the HUE user (if `HUE_ENABLED`), and both emails (JupyterHub, plus HUE when it was set up), **last**. |
+| `REVOKE` (Big Data) | Lock the Linux account on every Hadoop node, deactivate the HUE user (if `HUE_ENABLED`); the VPN as for GPU. |
+| `EXTEND` (GPU, Big Data) | A later end date (FR-8.3): move the VPN account's expiration to `period.end`, never earlier, after checking its full name. A missing or disabled VPN account is reported (`vpn`), not created or enabled. Nothing changes on the GPU or Hadoop nodes or in HUE: those accounts have no expiration, `REVOKE` locks them at the end. |
 
 - **Retries and failures:**
   - A transient failure is retried through redelivery, up to `WORKER_MAX_ATTEMPTS`.
@@ -213,4 +243,5 @@ npm run keygen -- backend-local   # its private value -> TEST_BACKEND_PRIVATE_KE
 npm start                                                  # terminal 1
 npm run send-test-job -- create gpu-01 you@example.com     # terminal 2, prints the result
 npm run send-test-job -- revoke gpu-01
+npm run send-test-job -- create bigdata you@example.com   # the Hadoop nodes of bigdata.json
 ```

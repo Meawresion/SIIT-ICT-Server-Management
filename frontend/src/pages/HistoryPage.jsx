@@ -8,6 +8,7 @@ import AppLayout from '../components/AppLayout.jsx';
 import DataTable from '../components/DataTable.jsx';
 import StatusBadge from '../components/StatusBadge.jsx';
 import RequestFormModal from '../components/RequestFormModal.jsx';
+import ExportPanel from '../components/ExportPanel.jsx';
 
 export default function HistoryPage() {
   const auth = useAuth();
@@ -60,7 +61,7 @@ export default function HistoryPage() {
     ...(isReviewer
       ? [{ key: 'reviewed_at', label: 'Decided', render: (r) => formatLocalDate(r.reviewed_at) }]
       : [{ key: 'period', label: 'Requested Period', render: (r) => formatPeriod(r.estimated_start_date, r.estimated_end_date) }]),
-    { key: 'status', label: 'Status', render: (r) => <StatusBadge status={r.status} /> },
+    { key: 'status', label: 'Status', render: (r) => <StatusBadge status={r.status} extensionAsked={r.extension_asked} /> },
     {
       key: 'action',
       label: '',
@@ -98,6 +99,7 @@ export default function HistoryPage() {
           </div>
         </div>
 
+        {isReviewer && <ExportPanel status={status} />}
         {error && <div className="alert alert-error" role="alert">{error}</div>}
         <DataTable columns={columns} rows={visible} loading={loading} empty="No requests match these filters." />
       </section>

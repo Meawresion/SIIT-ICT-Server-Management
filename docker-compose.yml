@@ -63,6 +63,7 @@ services:
       GPU_NODES: ${GPU_NODES:-}
       OVPN_PROFILE_URL: ${OVPN_PROFILE_URL:-}
       MANUAL_GPU_URL: ${MANUAL_GPU_URL:-}
+      MANUAL_BIGDATA_URL: ${MANUAL_BIGDATA_URL:-}
       # Status emails; only logged while SMTP_HOST is empty.
       SMTP_HOST: ${SMTP_HOST:-}
       SMTP_PORT: ${SMTP_PORT:-}
