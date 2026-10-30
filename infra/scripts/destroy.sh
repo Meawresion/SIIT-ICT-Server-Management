@@ -5,7 +5,7 @@
 # The dns stack may stay between test runs (user's OK, 2026-10-28): it runs nothing.
 . "$(dirname "$0")/lib.sh"
 
-order=(edge web app secrets queues data platform network cert dns)
+order=(edge web app secrets queues data logs platform network cert dns)
 [ $# -gt 0 ] || { echo "Usage: $0 <stack>...   (${order[*]})" >&2; exit 1; }
 for stack in "$@"; do
   [[ " ${order[*]} " == *" $stack "* ]] || { echo "Unknown stack: $stack" >&2; exit 1; }
@@ -23,6 +23,10 @@ for stack in "${order[@]}"; do
     data) confirm "This deletes the database and its passwords." "delete data" ;;
     secrets) confirm "This deletes the Google client and SMTP secrets (set-secrets.sh puts them back)." "delete secrets" ;;
     queues) confirm "This deletes queued jobs and the backend message keys (acc-prov-vm then needs the new public key)." "delete queues" ;;
+    logs)
+      confirm "This deletes the whole log archive in S3 (audit trail, incidents, ALB logs)." "delete logs"
+      empty_bucket "$(stack_output "$name" BucketName 2>/dev/null || true)"
+      ;;
     dns) confirm "New name servers will need new NS records at the parent domain." "delete dns" ;;
     edge)
       bucket=$(stack_output "$name" BucketName 2>/dev/null || true)

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Deploys stacks in order. Usage: deploy.sh all | <stack>...   (dns cert network platform data secrets queues app edge web)
+# Deploys stacks in order. Usage: deploy.sh all | <stack>...   (dns cert network platform logs data secrets queues app edge web)
 # First time: dns, then the NS records at the parent domain, then the rest (see infra/README.md).
 # The frontend comes from edge (CloudFront + S3) or web (ECS behind the ALB, direct mode).
 . "$(dirname "$0")/lib.sh"
@@ -19,6 +19,12 @@ deploy_network() { deploy "$STACK_NETWORK" network.yaml "Project=$PROJECT"; }
 
 deploy_platform() { deploy "$STACK_PLATFORM" platform.yaml "Project=$PROJECT" "NetworkStack=$STACK_NETWORK"; }
 
+deploy_logs() {
+  deploy "$STACK_LOGS" logs.yaml "Project=$PROJECT" "FirehoseRoleArn=$(role_arn)" "SubscriptionRoleArn=$(role_arn)" \
+    "RetentionDays=${LOG_ARCHIVE_DAYS:-400}"
+  echo "Log archive: s3://$(stack_output "$STACK_LOGS" BucketName) (search it with find-in-logs.sh)"
+}
+
 deploy_data() {
   local tag role
   tag=$(mysql_tag)
@@ -26,7 +32,7 @@ deploy_data() {
   require_image "$PROJECT-mysql" "$tag"
   deploy "$STACK_DATA" data-ecs.yaml "Project=$PROJECT" "NetworkStack=$STACK_NETWORK" \
     "PlatformStack=$STACK_PLATFORM" "ImageTag=$tag" "ExecutionRoleArn=$role" "TaskRoleArn=$role" \
-    "DesiredCount=${DB_DESIRED_COUNT:-1}"
+    "DesiredCount=${DB_DESIRED_COUNT:-1}" "$(logs_stack_param)"
 }
 
 deploy_queues() {
@@ -79,7 +85,7 @@ deploy_app() {
     "DegreeEmailPrefixes=$DEGREE_EMAIL_PREFIXES" "StaffEmailDomains=$STAFF_EMAIL_DOMAINS" \
     "SessionIdleMinutes=${SESSION_IDLE_MINUTES:-30}" "SessionMaxHours=${SESSION_MAX_HOURS:-12}" \
     "SchedulerIntervalSeconds=${SCHEDULER_INTERVAL_SEC:-300}" "ExpiryReminderDays=${EXPIRY_REMINDER_DAYS:-3}" \
-    "SiteTimeZone=${SITE_TIME_ZONE:-Asia/Bangkok}" "${provisioning[@]}"
+    "SiteTimeZone=${SITE_TIME_ZONE:-Asia/Bangkok}" "$(logs_stack_param)" "${provisioning[@]}"
   echo "Backend: $(stack_output "$STACK_APP" PublicUrl)"
 }
 
@@ -93,7 +99,7 @@ deploy_web() {
   require_image "$PROJECT-frontend" "$tag"
   deploy "$STACK_WEB" web.yaml "Project=$PROJECT" "NetworkStack=$STACK_NETWORK" \
     "PlatformStack=$STACK_PLATFORM" "AppStack=$STACK_APP" "ImageTag=$tag" \
-    "ExecutionRoleArn=$(role_arn)" "DesiredCount=${FRONTEND_DESIRED_COUNT:-1}"
+    "ExecutionRoleArn=$(role_arn)" "DesiredCount=${FRONTEND_DESIRED_COUNT:-1}" "$(logs_stack_param)"
   echo "Portal: $(stack_output "$STACK_APP" PublicUrl)"
 }
 
@@ -107,9 +113,9 @@ deploy_edge() {
   echo "Portal: $(stack_output "$STACK_EDGE" AppUrl) (publish the frontend with publish-frontend.sh)"
 }
 
-[ $# -gt 0 ] || { echo "Usage: $0 all | dns cert network platform data secrets queues app edge web" >&2; exit 1; }
+[ $# -gt 0 ] || { echo "Usage: $0 all | dns cert network platform logs data secrets queues app edge web" >&2; exit 1; }
 if [ "$1" = all ]; then
-  set -- network platform data secrets
+  set -- network platform logs data secrets
   if [ "$PROVISIONING" = true ]; then set -- "$@" queues; fi
   set -- "$@" app
   if [ "$USE_DOMAIN" = true ]; then set -- dns cert "$@"; fi
@@ -117,7 +123,7 @@ if [ "$1" = all ]; then
 fi
 for stack in "$@"; do
   case $stack in
-    dns|cert|network|platform|data|secrets|queues|app|edge|web) "deploy_$stack" ;;
+    dns|cert|network|platform|logs|data|secrets|queues|app|edge|web) "deploy_$stack" ;;
     *) echo "Unknown stack: $stack" >&2; exit 1 ;;
   esac
 done

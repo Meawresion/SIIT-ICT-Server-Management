@@ -48,6 +48,7 @@ STACK_EDGE="$PROJECT-edge"
 STACK_WEB="$PROJECT-web"
 STACK_QUEUES="$PROJECT-queues"
 STACK_SECRETS="$PROJECT-secrets"
+STACK_LOGS="$PROJECT-logs"
 
 # aws with text output and without the Windows carriage returns
 awst() { aws --output text "$@" | tr -d '\r'; }
@@ -111,16 +112,27 @@ docker_path() {
 }
 docker_() { MSYS_NO_PATHCONV=1 $DOCKER "$@"; }
 
-# Kept between test runs (they run nothing; platform holds the ECR images, so a run only uploads
-# what changed). Only teardown-all.sh deletes them.
-KEPT_STACKS=("$STACK_NETWORK" "$STACK_PLATFORM")
+# Kept between test runs: they run nothing and cost little or nothing while idle. platform holds the
+# ECR images (a run only uploads what changed); queues keeps the backend key and queue URLs that
+# acc-prov-vm is set up with (D33); logs is the log archive. Only teardown-all.sh deletes them.
+KEPT_STACKS=("$STACK_NETWORK" "$STACK_PLATFORM" "$STACK_QUEUES" "$STACK_LOGS")
+
+# "LogsStack=<name>" when the logs stack exists (log lines and ALB logs then go to S3), else empty.
+logs_stack_param() {
+  if aws cloudformation describe-stacks --stack-name "$STACK_LOGS" >/dev/null 2>&1; then echo "LogsStack=$STACK_LOGS"; else echo "LogsStack="; fi
+}
+
+# Deletes every object of a bucket (the logs bucket has no versioning).
+empty_bucket() {
+  [ -n "$1" ] && [ "$1" != None ] && aws s3 rm "s3://$1" --recursive --quiet
+}
 
 delete_one() {
   local stack=$1 bucket
   aws cloudformation describe-stacks --stack-name "$stack" >/dev/null 2>&1 || return 0
-  if [ "$stack" = "$STACK_EDGE" ]; then
+  if [ "$stack" = "$STACK_EDGE" ] || [ "$stack" = "$STACK_LOGS" ]; then
     bucket=$(stack_output "$stack" BucketName 2>/dev/null || true)
-    [ -n "$bucket" ] && aws s3 rm "s3://$bucket" --recursive --quiet
+    empty_bucket "$bucket"
   fi
   echo "== deleting $stack"
   aws cloudformation delete-stack --stack-name "$stack"
@@ -142,7 +154,7 @@ delete_stacks() {
     fi
   done
   for wave in "$STACK_EDGE $STACK_WEB" "$STACK_APP" "$STACK_QUEUES $STACK_DATA $STACK_SECRETS" \
-    "$STACK_PLATFORM $STACK_CERT" "$STACK_NETWORK $STACK_DNS"; do
+    "$STACK_PLATFORM $STACK_CERT $STACK_LOGS" "$STACK_NETWORK $STACK_DNS"; do
     pids=()
     for stack in $wave; do
       [[ $wanted == *" $stack "* ]] || continue
@@ -185,11 +197,21 @@ leftovers() {
   fi
   check "load balancers" elbv2 describe-load-balancers --query 'LoadBalancers[].LoadBalancerName'
   check "EFS file systems" efs describe-file-systems --query "FileSystems[?Name=='$PROJECT-mysql-data'].FileSystemId"
-  check "log groups" logs describe-log-groups --log-group-name-prefix "/$PROJECT/" --query 'logGroups[].logGroupName'
-  check "SQS queues" sqs list-queues --queue-name-prefix "$PROJECT-" --query 'QueueUrls'
-  check "Lambda functions" lambda list-functions --query "Functions[?starts_with(FunctionName,'$PROJECT-')].FunctionName"
+  local kept_groups=()
+  [[ $allowed == *" $STACK_QUEUES "* ]] && kept_groups+=("/$PROJECT/message-keys")
+  check "log groups" logs describe-log-groups --log-group-name-prefix "/$PROJECT/" \
+    --query "logGroups[?!contains([$(printf "'%s'," "${kept_groups[@]}" | sed 's/,$//')], logGroupName)].logGroupName"
+  if [[ $allowed != *" $STACK_QUEUES "* ]]; then
+    check "SQS queues" sqs list-queues --queue-name-prefix "$PROJECT-" --query 'QueueUrls'
+    check "Lambda functions" lambda list-functions --query "Functions[?starts_with(FunctionName,'$PROJECT-')].FunctionName"
+  fi
+  if [[ $allowed != *" $STACK_LOGS "* ]]; then
+    check "S3 log buckets" s3api list-buckets --query "Buckets[?starts_with(Name,'$PROJECT-logs-')].Name"
+    check "Firehose streams" firehose list-delivery-streams --query "DeliveryStreamNames[?starts_with(@,'$PROJECT-')]"
+  fi
+  # Secrets of the kept stacks (the queues stack holds the backend message key) are allowed.
   check "secrets (incl. pending deletion)" secretsmanager list-secrets --include-planned-deletion \
-    --query "SecretList[?starts_with(Description,'$PROJECT ')].[Name,DeletedDate]"
+    --query "SecretList[?starts_with(Description,'$PROJECT ') && !contains([${skip%,}], Tags[?Key=='aws:cloudformation:stack-name'] | [0].Value || '')].[Name,DeletedDate]"
   if [ "$found" = 0 ]; then echo "Nothing left behind${1:+ (kept: $*)}."; else echo "Something is left behind (above)."; return 1; fi
 }
 

@@ -1,15 +1,19 @@
 #!/usr/bin/env bash
-# Deploys a throwaway copy of the portal (data, secrets, queues, app and web in direct mode on the
+# Deploys a throwaway copy of the portal (data, secrets, app and web in direct mode on the
 # ALB's AWS name; the secrets stack keeps its placeholders: no real Google client, emails off), checks it, then deletes what it deployed and checks
 # that nothing is left behind. The stacks are deleted even when a step fails or the run is stopped.
 # Provisioning is on, with a throwaway site key: fake-site.mjs plays acc-prov-vm on the real queues.
 # The scheduler runs every 30 s, so check-scheduler.js sees it act.
 #
-# Kept between runs: network and platform (the ECR images; they run nothing), created here only
-# when they are missing (first run, or after a Learner Lab reset); images already in ECR are not
-# uploaded again. The dns stack is left alone too. Only teardown-all.sh deletes them.
+# Kept between runs: network, platform (the ECR images), queues (the backend key acc-prov-vm is set
+# up with) and logs (the S3 log archive), created here only when they are missing; images already
+# in ECR are not uploaded again. The dns and cert stacks are left alone too. Only teardown-all.sh
+# deletes them. Don't run this while the real acc-prov-vm is connected to the queues: it would take
+# the test jobs, which are sealed for the throwaway site key, and dead-letter them.
 #
-# Usage: smoke-test.sh [--keep | --teardown]
+# Usage: smoke-test.sh [--domain] [--keep | --teardown]
+#   --domain: deploy on APP_HOST.ZONE_NAME with the certificate (the dns and cert stacks must exist),
+#             so HTTPS and the HTTP -> HTTPS redirect are checked too
 #   --keep: leave the test stacks running (delete them later with --teardown)
 #   --teardown: only delete the test stacks and check (after a run that was killed hard)
 # The private half of the throwaway site key stays in this shell; it is never printed or stored.
@@ -18,15 +22,23 @@ read -r SITE_PRIVATE_KEY SITE_PUBLIC_KEYS < <(node --input-type=module -e "
   const { generateKeyBundle } = await import(pathToFileURL(resolve(process.argv[1])));
   const k = generateKeyBundle('smoke-site'); console.log(k.privateBundle, k.publicBundle);" \
   "$(dirname "$0")/../../backend/src/messaging/envelope.js")
-export ENTRY_MODE=direct USE_DOMAIN=false PROVISIONING=true SITE_PUBLIC_KEYS GPU_NODES=smoke-node \
+USE_DOMAIN=false keep=false teardown_only=false
+for arg in "$@"; do
+  case $arg in
+    --domain) USE_DOMAIN=true ;;
+    --keep) keep=true ;;
+    --teardown) teardown_only=true ;;
+    *) echo "Usage: $0 [--domain] [--keep | --teardown]" >&2; exit 1 ;;
+  esac
+done
+export ENTRY_MODE=direct USE_DOMAIN PROVISIONING=true SITE_PUBLIC_KEYS GPU_NODES=smoke-node \
   OVPN_PROFILE_URL=https://example.com/smoke-ovpn MANUAL_GPU_URL=https://example.com/smoke-manual MANUAL_BIGDATA_URL=https://example.com/smoke-bigdata SCHEDULER_INTERVAL_SEC=30
 . "$(dirname "$0")/lib.sh"
 SCRIPTS="$(dirname "$0")"
 # What this run deletes at the end. Never the kept stacks.
-TEST_STACKS=("$STACK_WEB" "$STACK_APP" "$STACK_QUEUES" "$STACK_DATA" "$STACK_SECRETS")
-keep=false
-[ "${1:-}" = --keep ] && keep=true
+TEST_STACKS=("$STACK_WEB" "$STACK_APP" "$STACK_DATA" "$STACK_SECRETS")
 started=$(date +%s)
+started_iso=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 elapsed() { echo "$(( ($(date +%s) - started) / 60 )) min"; }
 
 failures=0
@@ -49,7 +61,7 @@ teardown() {
   delete_stacks "${TEST_STACKS[@]}" || status=1
   # A late Lambda log line (queues stack) could recreate its log group just after the delete.
   sleep 60
-  leftovers "$STACK_DNS" "${KEPT_STACKS[@]}" || status=1
+  leftovers "$STACK_DNS" "$STACK_CERT" "${KEPT_STACKS[@]}" || status=1
   echo "Kept for the next run:"
   show_kept
   [ "$failures" = 0 ] || status=1
@@ -60,15 +72,15 @@ teardown() {
 trap teardown EXIT
 # Ctrl+C or a kill also tears down (only the test stacks).
 trap 'exit 130' INT TERM
-if [ "${1:-}" = --teardown ]; then echo "== teardown only"; exit 0; fi
+if [ "$teardown_only" = true ]; then echo "== teardown only"; exit 0; fi
 
 echo "== deploy (ENTRY_MODE=$ENTRY_MODE, USE_DOMAIN=$USE_DOMAIN)"
 for stack in "${KEPT_STACKS[@]}"; do
   state=$(awst cloudformation describe-stacks --stack-name "$stack" --query 'Stacks[0].StackStatus' 2>/dev/null || echo missing)
   echo "   $stack: $state"
 done
-# Creates network and platform when they are missing; otherwise a quick no-op (or an update).
-"$SCRIPTS/deploy.sh" network platform
+# Creates the kept stacks when they are missing; otherwise a quick no-op (or an update).
+"$SCRIPTS/deploy.sh" network platform logs
 "$SCRIPTS/push-images.sh"
 "$SCRIPTS/deploy.sh" data secrets queues app web
 
@@ -88,6 +100,18 @@ expect "frontend answers through the ALB (/)" 1 "$(has_root "$url/")"
 expect "a client-side route gets index.html (/requests)" 1 "$(has_root "$url/requests")"
 expect "an unknown asset is 404, not index.html" 404 "$(status "$url/assets/missing.js")"
 expect "no sign-in token gives 401 (/api/auth/me)" 401 "$(status "$url/api/auth/me")"
+if [[ $url == https://* ]]; then
+  host=${url#https://}
+  location=$(curl -s -o /dev/null -w '%{http_code} %{redirect_url}' "http://$host/history?tab=1")
+  expect "HTTP redirects to HTTPS with the same host, path and query" "301 https://$host/history?tab=1" "${location/:443/}"
+fi
+# An unknown API path: a JSON 404 whose reference is the X-Request-Id; the path is a marker to find
+# this request's access log line in S3 later.
+marker="smoke-$(date +%s)-$RANDOM"
+not_found=$(curl -s -D - "$url/api/$marker" | tr -d '\r')
+ref=$(sed -n 's/^x-request-id: //Ip' <<<"$not_found")
+expect "an unknown API path is a JSON 404 with its reference and no framework header" "404 1 0" \
+  "$(head -1 <<<"$not_found" | cut -d' ' -f2) $(grep -c "\"reference\":\"$ref\"" <<<"$not_found") $(grep -ci '^x-powered-by' <<<"$not_found")"
 expect "a state change from another origin gives 403" 403 "$(status -X POST -H 'Origin: https://evil.example' "$url/api/auth/logout")"
 redirect=$(curl -s "$url/api/auth/google" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{console.log(new URL(JSON.parse(s).auth_url).searchParams.get("redirect_uri"))}catch{console.log("none")}})')
 expect "Google sign-in starts with this deploy's callback URL" "$url/api/auth/google/callback" "$redirect"
@@ -122,3 +146,14 @@ else
 fi
 if wait "$site_pid"; then pass "the fake site opened all four signed and encrypted jobs and answered"; else fail "fake site"; fi
 site_pid=
+
+# The log archive: CloudWatch -> Firehose (about a minute) -> S3. The audit shipper copies events
+# older than 2 minutes every 30 s, so give both up to 6 minutes.
+in_s3() { # in_s3 <text> [--alb]: polls the archive for a line written during this run
+  for _ in $(seq 1 24); do "$SCRIPTS/find-in-logs.sh" "$1" --since "$started_iso" "${@:2}" >/dev/null 2>&1 && return 0; sleep 15; done
+  return 1
+}
+if in_s3 "$marker"; then pass "a request's access log line reached the S3 log archive (find-in-logs.sh)"; else fail "access log line in S3"; fi
+if in_s3 '"action":"PROVISIONED"'; then pass "the audit trail reached S3 (audit.event lines from request_event)"; else fail "audit events in S3"; fi
+# The ALB writes its access logs every 5 minutes.
+if in_s3 "$marker" --alb; then pass "the ALB access logs reached S3"; else fail "ALB access logs in S3"; fi

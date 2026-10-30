@@ -16,7 +16,7 @@ frontend is its own ECS service (nginx with the React build), built and deployed
 backend:
 
 ```
-Browser ─▶ ALB  APP_HOST.ZONE_NAME (HTTPS), or its AWS name (HTTP, smoke tests)
+Browser ─▶ ALB  APP_HOST.ZONE_NAME (HTTPS; HTTP only redirects), or its AWS name (HTTP, smoke tests)
             ├─ /api/*, /health ─▶ ECS Fargate backend ─▶ internal NLB ─▶ ECS Fargate mysql (EFS)
             └─ everything else ─▶ ECS Fargate frontend (web stack)
 ```
@@ -29,6 +29,20 @@ ECS backend ──job──▶ SQS provision-requests (+DLQ) ──▶ acc-prov-
             ◀─result─ SQS provision-results  (+DLQ) ◀──┘
 ```
 
+**Logs** (`logs` stack): every container writes one JSON line per event to stdout. ECS sends it
+to CloudWatch Logs, and a subscription filter on each log group forwards it to Kinesis Data
+Firehose, which unpacks the batches and writes gzipped files to S3 under `app/YYYY/MM/DD/`
+about once a minute. The ALB writes its access logs to the same bucket (`alb/`, every 5
+minutes), including the 502/503 pages it makes itself. The backend also copies the audit
+trail (`request_event`) into its log as `audit.event` lines, so the trail outlives the database.
+Objects expire after `LOG_ARCHIVE_DAYS` (400). Error pages show only a reference (the request
+ID); `find-in-logs.sh <reference>` finds the full error.
+
+```
+ECS tasks ─stdout─▶ CloudWatch Logs ─subscription─▶ Firehose ─▶ S3 app/YYYY/MM/DD/*.gz
+ALB ───────────────────────────────────────────────────────────▶ S3 alb/AWSLogs/…
+```
+
 The backend's scheduler (every `SCHEDULER_INTERVAL_SEC`, in one task at a time) reads both
 dead-letter queues and fails the jobs it finds there, so the approvers are told (FR-6.7). It also
 sends the end-date reminders and removes access when a request ends (FR-8.2, FR-8.4).
@@ -39,12 +53,13 @@ sends the end-date reminders and removes access when a request ends (FR-8.2, FR-
 |---|---|---|
 | `<project>-dns` | `dns.yaml` | Route 53 hosted zone for the delegated subdomain. Keep it, also between test runs: a new zone has new name servers. |
 | `<project>-cert` | `cert.yaml` | ACM certificate for the zone and `*.zone`, validated through DNS (us-east-1, used by CloudFront and the ALB). |
+| `<project>-logs` | `logs.yaml` | The log archive: S3 bucket (SSE-S3, TLS only, no public access, objects expire after `LOG_ARCHIVE_DAYS`, default 400) and the Firehose stream that the app, web and data stacks' log groups feed. Kept between runs; deleting it deletes the logs. |
 | `<project>-network` | `network.yaml` | VPC, 2 public subnets (ALB, tasks), 2 private subnets (EFS, RDS later). No NAT gateway. |
 | `<project>-platform` | `platform.yaml` | ECR repositories for backend, mysql and frontend (emptied on delete), ECS cluster, backend security group. |
 | `<project>-data` | `data-ecs.yaml` | MySQL 8.4 task + EFS + internal NLB (stable DB name) + generated DB passwords. Later replaced by an RDS stack with the same outputs. |
 | `<project>-secrets` | `secrets.yaml` | The secrets you provide: the Google OAuth client and the SMTP settings, created with placeholders (no sign-in, emails off); `set-secrets.sh` puts your values. |
 | `<project>-queues` | `queues.yaml` | With `PROVISIONING=true`: the SQS request and result queues, each with a dead-letter queue (14 days, TLS only, encrypted at rest), and the backend's message keys. A small Lambda generates the key pair straight into Secrets Manager; the public half is the `BackendPublicKey` output. |
-| `<project>-app` | `app.yaml` | ALB, backend service, generated `JWT_SECRET` and origin header; the queues and keys when provisioning is on. |
+| `<project>-app` | `app.yaml` | ALB (with a certificate in direct mode: HTTPS on 443, and 80 only redirects to HTTPS), backend service, generated `JWT_SECRET` and origin header; the queues and keys when provisioning is on; ALB access logs and the log subscription when the logs stack exists. |
 | `<project>-edge` | `edge.yaml` | CloudFront mode: S3 bucket, CloudFront (SPA rewrite function), DNS records for the portal. |
 | `<project>-web` | `web.yaml` | Direct mode: the frontend service (nginx, `frontend/Dockerfile` `prod` stage) and its ALB rule for every path the backend doesn't take. |
 
@@ -57,7 +72,7 @@ On AWS Learner Lab, IAM roles can't be created, so every task uses `LabRole` (`R
 | CloudFront | Denied (list and create) | `ENTRY_MODE=direct`: the ALB is the public entry; the `web` stack serves the frontend instead of `edge`. |
 | Cloud Map (create namespace) | Denied | MySQL is reached through an internal Network Load Balancer. |
 | IAM (create roles) | Denied | Every role is `LabRole`. |
-| ECS, ECR, ELB, EFS, Secrets Manager, Route 53, ACM, SQS, Lambda, Logs | Allowed | |
+| ECS, ECR, ELB, EFS, Secrets Manager, Route 53, ACM, SQS, Lambda, Logs, S3, Kinesis Data Firehose | Allowed | `LabRole` is trusted by Firehose and CloudWatch Logs, so it serves both roles of the logs stack. |
 
 With `USE_DOMAIN=false` there are no `dns`/`cert` stacks and the ALB answers over HTTP on its AWS
 name. That is enough for smoke tests, but not for signing in: the sign-in cookie needs HTTPS.
@@ -65,13 +80,14 @@ name. That is enough for smoke tests, but not for signing in: the sign-in cookie
 ## Smoke test (deploy, check, delete)
 
 `infra/scripts/smoke-test.sh` deploys network, platform, the images, data, secrets (left
-with its placeholders: your real secrets are never used), queues, app and web (direct mode, no
+with its placeholders: your real secrets are never used), queues, logs, app and web (direct mode, no
 domain, provisioning on with a throwaway site key), and checks:
 - the frontend answers through the ALB, also on client-side routes;
 - the backend answers through the ALB;
 - it reaches MySQL as the app user;
 - every SMTP setting reaches the backend from the secrets stack;
 - it refuses unsigned and cross-site requests;
+- an unknown API path is a JSON 404 with its reference (the `X-Request-Id`) and no framework header;
 - Google sign-in uses this deploy's callback URL;
 - `check-db.js` passes in a one-off task;
 - provisioning through the real queues: a one-off task (`check-provisioning.js`) approves a GPU
@@ -79,24 +95,30 @@ domain, provisioning on with a throwaway site key), and checks:
   request becomes On Use; then the same for the removal;
 - the service's scheduler (every 30 s here, `check-scheduler.js`): a GPU request that ended gets
   its removal and is completed, a VM request gets its reminder and then the approvers' notice, and
-  a job put into the request dead-letter queue is failed.
+  a job put into the request dead-letter queue is failed;
+- the log archive: that 404's access log line, the audit events (`audit.event`) and the ALB access
+  logs all reach S3 (`find-in-logs.sh`).
 
-Then it deletes the test stacks (`web`, `app`, `queues`, `data`, `secrets`), even after a
+Then it deletes the test stacks (`web`, `app`, `data`, `secrets`), even after a
 failure or Ctrl+C, and lists anything left behind (stacks, ECS services and tasks, load
 balancers, EFS, SQS, Lambda, log groups, secrets). The teardown is fast: every ECS task is
 stopped at once, then the stacks go in dependency order, independent ones in parallel.
 
-**Kept between runs** (user's OK, 2026-10-28): `network` and `platform` (the ECR images) run
-nothing and cost cents a month (ECR storage, at most 5 images per repository), so the next run
-only uploads the images whose code changed. The smoke test creates them when they are missing
-(first run, or after a Learner Lab reset) and never deletes them. The `dns` stack stays too.
+**Kept between runs:**
+- `network` and `platform` (the ECR images; user's OK, 2026-10-28): they run nothing and cost cents a month (ECR storage, at most 5 images per repository), so the next run only uploads the images whose code changed.
+- `queues` (2026-10-30): idle queues cost nothing, since SQS bills per request; the backend key secret costs $0.40/month. Keeping it keeps the backend public key and queue URLs that acc-prov-vm is set up with.
+- `logs` (2026-10-30): the log archive. An idle Firehose stream costs nothing; S3 storage costs cents.
+
+The smoke test creates them when they are missing (first run, or after a Learner Lab reset) and never deletes them. The `dns` and `cert` stacks stay too.
+
+**Don't run the smoke test while the real acc-prov-vm is connected to the queues.** It would take the test jobs, which are sealed for the throwaway site key, and dead-letter them.
 
 | Command | What it does |
 |---|---|
-| `smoke-test.sh` | Deploy, check, delete the test stacks; keep network, platform, dns |
+| `smoke-test.sh` | Deploy, check, delete the test stacks; keep network, platform, queues, logs, dns, cert |
 | `smoke-test.sh --keep` | Leave the test stacks running |
 | `smoke-test.sh --teardown` | Only delete the test stacks and check (e.g. after a run was killed hard) |
-| `teardown-all.sh` | Delete everything, including network and platform (asks first); `--dns` also deletes the zone |
+| `teardown-all.sh` | Delete everything, including network, platform, queues and logs with its S3 archive (asks first); `--dns` also deletes the zone |
 
 ## Settings and secrets
 
@@ -148,6 +170,8 @@ The scripts are bash (Git Bash on Windows, or Linux/WSL) and need the AWS CLI v2
 | New backend version | commit, `push-images.sh backend`, `deploy.sh app` |
 | New frontend version | `publish-frontend.sh` (direct mode: commit, `push-images.sh frontend`, `deploy.sh web`) |
 | Check the database from inside AWS | `run-task.sh node scripts/check-db.js` |
+| Find an incident from its reference | `find-in-logs.sh <reference>` (add `--date YYYY-MM-DD` for older days) |
+| Search the ALB access logs | `find-in-logs.sh <text> --alb` |
 | Stop the tasks between test sessions | `pause.sh` (the ALB still costs ~$0.6/day) |
 | Start them again | `resume.sh` |
 | Long break | `destroy.sh edge web app` (keeps the zone, certificate, images and data) |

@@ -10,6 +10,10 @@ Parameters:
   Project:
     Type: String
     Default: siit
+  LogsStack:
+    Type: String
+    Default: ''
+    Description: Empty = the logs stay in CloudWatch only; else they also go to its S3 bucket
   NetworkStack:
     Type: String
   PlatformStack:
@@ -34,6 +38,9 @@ Parameters:
   LogRetentionDays:
     Type: Number
     Default: 7
+
+Conditions:
+  HasLogs: !Not [!Equals [!Ref LogsStack, '']]
 
 Resources:
   FrontendSecurityGroup:
@@ -94,6 +101,17 @@ Resources:
     Properties:
       LogGroupName: !Sub '/${Project}/frontend'
       RetentionInDays: !Ref LogRetentionDays
+  # Every log line also goes to the S3 log archive (logs stack), so it outlives this stack.
+  LogsToArchive:
+    Type: AWS::Logs::SubscriptionFilter
+    Condition: HasLogs
+    Properties:
+      LogGroupName: !Ref LogGroup
+      FilterPattern: ''
+      DestinationArn:
+        Fn::ImportValue: !Sub '${LogsStack}-DeliveryStreamArn'
+      RoleArn:
+        Fn::ImportValue: !Sub '${LogsStack}-SubscriptionRoleArn'
 
   TaskDefinition:
     Type: AWS::ECS::TaskDefinition
