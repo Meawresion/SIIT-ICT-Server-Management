@@ -1,0 +1,30 @@
+{
+  "_comment": "Placeholders only (RFC 5737 documentation IPs, fake fingerprints). Copy to bigdata.json (git-ignored) and replace every value. Fingerprints: ssh-keyscan <ip> | ssh-keygen -lf - -E sha256. Exactly one node has hdfsHome: true (HDFS is one file system for the cluster). studentOwnsHome false = the manual's 'chown :hadoop' (the owner stays the HDFS superuser, so the student can't write to the home); true = the student owns it.",
+  "nodes": [
+    {
+      "name": "h99",
+      "host": "192.0.2.65",
+      "port": 22,
+      "hostKeys": ["SHA256:REPLACEwithNODEfingerprintFROMsshKEYSCAN065"]
+    },
+    {
+      "name": "h0",
+      "host": "192.0.2.58",
+      "port": 22,
+      "hostKeys": ["SHA256:REPLACEwithNODEfingerprintFROMsshKEYSCAN058"],
+      "hdfsHome": true
+    }
+  ],
+  "groups": ["hadoop", "hdfs"],
+  "hdfs": {
+    "command": "hdfs",
+    "superuser": "hdfs",
+    "homeDir": "/user",
+    "group": "hadoop",
+    "mode": "755",
+    "studentOwnsHome": false,
+    "timeoutMs": 120000
+  },
+  "jupyterUrl": "http://192.0.2.65:8000/",
+  "hueUrl": "http://192.0.2.65:8888/"
+}

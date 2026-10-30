@@ -37,7 +37,8 @@ function passwordNote(vpnIsNew, serviceName) {
 //   to, fullName, username,
 //   vpnIsNew: true  -> the new password covers the VPN and the service (D15)
 //             false -> the student keeps the existing VPN password; the new one is for the service only
-//   service: { name, links: [{ label, url }], manualUrl },   e.g. name 'GPU server gpu-01'
+//   service: { name, links: [{ label, url }], manualUrl, notes? },   e.g. name 'GPU server gpu-01';
+//            notes: optional plain-text lines shown under the links
 //   ovpnProfileUrl, period: { start: 'YYYY-MM-DD', end: 'YYYY-MM-DD' },
 // }
 function assertMessage(msg) {
@@ -53,6 +54,9 @@ function assertMessage(msg) {
     assertUrl(`link ${l.label}`, l.url);
   }
   assertUrl('service.manualUrl', service.manualUrl);
+  if (service.notes !== undefined && (!Array.isArray(service.notes) || !service.notes.every((n) => typeof n === 'string' && n.trim()))) {
+    throw new Error('service.notes must be a list of non-empty strings');
+  }
   assertUrl('ovpnProfileUrl', ovpnProfileUrl);
   assertIsoDate(period?.start);
   assertIsoDate(period?.end);
@@ -79,6 +83,7 @@ export function buildInstructionsEmail(msg) {
     `2. Connect to the VPN with ${vpnLogin}.`,
     `3. Open the ${service.name}:`,
     ...service.links.map((l) => `   ${l.label}: ${l.url}`),
+    ...(service.notes ?? []).map((n) => `   ${n}`),
     '4. Follow the student manual:',
     `   ${service.manualUrl}`,
     '',
@@ -99,7 +104,7 @@ export function buildInstructionsEmail(msg) {
 <ol>
 <li>Download the VPN profile (ICT_SIIT.ovpn) and import it into OpenVPN Connect: ${a(ovpnProfileUrl)}</li>
 <li>Connect to the VPN with ${e(vpnLogin)}.</li>
-<li>Open the ${e(service.name)}:<ul>${service.links.map((l) => `<li>${e(l.label)}: ${a(l.url)}</li>`).join('')}</ul></li>
+<li>Open the ${e(service.name)}:<ul>${service.links.map((l) => `<li>${e(l.label)}: ${a(l.url)}</li>`).join('')}</ul>${(service.notes ?? []).map((n) => `<p>${e(n)}</p>`).join('')}</li>
 <li>Follow the student manual: ${a(service.manualUrl)}</li>
 </ol>
 <p>Access ends automatically at the end of the period.</p>

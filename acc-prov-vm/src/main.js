@@ -2,9 +2,13 @@
 // Logs are JSON lines on stdout. They never contain passwords or message plaintext.
 
 import { AmqpConnection } from './amqp.js';
-import { loadAmqpConfig, loadGpuConfig, loadMailConfig, loadPfSenseConfig, loadSqsConfig, loadWorkerConfig } from './config.js';
+import {
+  loadAmqpConfig, loadBigDataConfig, loadGpuConfig, loadHueConfig, loadMailConfig, loadPfSenseConfig, loadSqsConfig, loadWorkerConfig,
+} from './config.js';
 import { parsePrivateBundle, parsePublicBundles } from './envelope.js';
 import { connectGpuNode, findGpuNode, provisionGpuUser, revokeGpuUser } from './gpu.js';
+import { connectHadoopNode, provisionHadoopUser, revokeHadoopUser } from './hadoop.js';
+import { withHue } from './hue.js';
 import { JobStore } from './jobstore.js';
 import { createJobHandlers } from './jobs.js';
 import { createMailer, sendProvisionEmails } from './mail.js';
@@ -22,23 +26,36 @@ const queues = cfg.transport === 'sqs' ? loadSqsConfig() : loadAmqpConfig();
 const gpu = loadGpuConfig();
 const mailer = createMailer(loadMailConfig(), { log });
 const pfsense = cfg.pfsenseEnabled ? loadPfSenseConfig() : null;
+// Optional: without BIGDATA_FILE, Big Data jobs are refused (a failed result, not retried).
+const bigData = loadBigDataConfig();
+const hue = cfg.hueEnabled ? loadHueConfig() : null;
+
+async function withSsh(connect, fn) {
+  const ssh = await connect();
+  try {
+    return await fn(ssh);
+  } finally {
+    ssh.close();
+  }
+}
 const me = parsePrivateBundle(cfg.privateKey);
 const peers = parsePublicBundles(cfg.peerPublicKeys);
 
 const handlers = createJobHandlers({
   pfsenseEnabled: cfg.pfsenseEnabled,
   withPfSense: (fn) => withPfSense(pfsense, fn, { log }),
-  async withGpuNode(name, fn) {
+  withGpuNode(name, fn) {
     const node = findGpuNode(gpu, name);
-    const ssh = await connectGpuNode(node, { log });
-    try {
-      return await fn(ssh, node);
-    } finally {
-      ssh.close();
-    }
+    return withSsh(() => connectGpuNode(node, { log }), (ssh) => fn(ssh, node));
   },
   provisionGpuUser,
   revokeGpuUser,
+  bigData,
+  withHadoopNode: (node, fn) => withSsh(() => connectHadoopNode(node, { log }), fn),
+  provisionHadoopUser,
+  revokeHadoopUser,
+  hueEnabled: cfg.hueEnabled,
+  withHue: (fn) => withHue(hue, fn, { log }),
   sendEmails: (msg, password) => sendProvisionEmails(mailer, msg, password, { renderImage: renderPasswordImage }),
   generatePassword: () => generatePassword(cfg.passwordLength),
   gpuTimeoutMs: gpu.condaTimeoutMs,
@@ -61,7 +78,10 @@ const worker = createWorker({
   log,
 });
 worker.start();
-log('acc-prov-vm.ready', { transport: cfg.transport, kid: me.kid, pfsenseEnabled: cfg.pfsenseEnabled, gpuNodes: gpu.nodes.map((n) => n.name) });
+log('acc-prov-vm.ready', {
+  transport: cfg.transport, kid: me.kid, pfsenseEnabled: cfg.pfsenseEnabled, hueEnabled: cfg.hueEnabled,
+  gpuNodes: gpu.nodes.map((n) => n.name), hadoopNodes: bigData?.nodes.map((n) => n.name) ?? [],
+});
 
 for (const sig of ['SIGINT', 'SIGTERM']) {
   process.on(sig, () => {

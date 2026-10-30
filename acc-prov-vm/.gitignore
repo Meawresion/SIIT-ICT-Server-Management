@@ -1,4 +1,5 @@
-# Site settings: copy from gpu-nodes.example.json on each acc-prov-vm host
+# Site settings: copy from gpu-nodes.example.json / bigdata.example.json on each acc-prov-vm host
 gpu-nodes.json
+bigdata.json
 # Job store (JOB_STORE_FILE) and other runtime state
 data/

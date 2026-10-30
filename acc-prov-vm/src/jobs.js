@@ -1,12 +1,17 @@
-// Job handlers: what CREATE, REVOKE and EXTEND do for a GPU request (runbooks in plan.md §6b).
+// Job handlers: what CREATE, REVOKE and EXTEND do for a GPU or Big Data request (runbooks in
+// plan.md §6b).
 //
 // Job payload (from the backend, inside the envelope; never contains passwords):
-//   { action: 'CREATE' | 'REVOKE' | 'EXTEND', resource: 'GPU_SERVER',
+//   { action: 'CREATE' | 'REVOKE' | 'EXTEND', resource: 'GPU_SERVER' | 'BIG_DATA',
 //     student: { username, fullName, email },
-//     gpuNode: '<node name from gpu-nodes.json>',
+//     gpuNode: '<node name from gpu-nodes.json>',      GPU_SERVER only
 //     period: { start, end },                          CREATE and EXTEND (the new end date)
 //     links: { ovpnProfileUrl, manualUrl },            CREATE only
 //     revokeVpn: boolean }                             REVOKE only (no other active request)
+//
+// GPU_SERVER: a Linux account and conda kernel on the named node. BIG_DATA: a Linux account on
+// every Hadoop node of BIGDATA_FILE, the HDFS home, and (HUE_ENABLED) a HUE account. The site,
+// not the job, decides which hosts are touched.
 //
 // CREATE is safe to retry: every attempt generates a fresh password, sets it on every account it
 // manages in this job, and emails it last. Whether this job made the VPN account new is kept in
@@ -18,7 +23,7 @@ import { PfSenseIdentityError } from './pfsense.js';
 import { LinuxIdentityError, LinuxUserNotFoundError } from './linux.js';
 import { assertIsoDate, assertNonEmpty, assertUsername } from './validate.js';
 
-const RESOURCES = ['GPU_SERVER'];
+const RESOURCES = ['GPU_SERVER', 'BIG_DATA'];
 
 function reject(msg) {
   throw new JobRejectedError(msg);
@@ -39,7 +44,7 @@ export function parseJobPayload(p) {
   const s = p.student ?? {};
   check(() => assertUsername(s.username));
   check(() => assertNonEmpty('student.fullName', s.fullName));
-  check(() => assertNonEmpty('gpuNode', p.gpuNode));
+  if (p.resource === 'GPU_SERVER') check(() => assertNonEmpty('gpuNode', p.gpuNode));
   if (p.action === 'CREATE') {
     check(() => assertRecipient(s.email));
     check(() => assertIsoDate(p.period?.start));
@@ -81,16 +86,87 @@ async function ensureVpn(pf, { username, fullName, password, end, now, forceNew 
   return { vpn: 'reactivated', vpnIsNew: true };
 }
 
+// A Linux account that belongs to someone else is never changed, and retrying won't help.
+async function linuxStep(username, node, fn) {
+  try {
+    return await fn();
+  } catch (err) {
+    if (err instanceof LinuxIdentityError) reject(`Linux account ${username} on ${node} belongs to a different full name`);
+    throw err;
+  }
+}
+
 // deps: {
-//   pfsenseEnabled, withPfSense(fn), withGpuNode(name, fn(ssh, node)), provisionGpuUser, revokeGpuUser,
-//   sendEmails(msg, password), generatePassword(), gpuTimeoutMs, now(), log
+//   pfsenseEnabled, withPfSense(fn),
+//   withGpuNode(name, fn(ssh, node)), provisionGpuUser, revokeGpuUser, gpuTimeoutMs,
+//   bigData (loadBigDataConfig() result, or null), withHadoopNode(node, fn(ssh)), provisionHadoopUser,
+//   revokeHadoopUser, hueEnabled, withHue(fn),
+//   sendEmails(msg, password), generatePassword(), now(), log
 // }
 export function createJobHandlers(deps) {
   const { log = () => {} } = deps;
 
+  function bigData() {
+    if (!deps.bigData) reject('Big Data is not configured on this site (BIGDATA_FILE)');
+    return deps.bigData;
+  }
+
+  // -> { mail: service for the email, result: fields for the result message }
+  async function setUpGpu(p, user) {
+    const gpu = await deps.withGpuNode(p.gpuNode, async (ssh, node) => {
+      if (!node.jupyterUrl) reject(`GPU node ${node.name} has no jupyterUrl configured`);
+      const r = await linuxStep(user.username, node.name,
+        () => deps.provisionGpuUser(ssh, node, user, { timeoutMs: deps.gpuTimeoutMs }));
+      return { created: r.created, node };
+    });
+    log('job.gpu', { user: user.username, node: gpu.node.name, created: gpu.created });
+    return {
+      mail: { name: `GPU server ${gpu.node.name}`, links: [{ label: 'JupyterHub', url: gpu.node.jupyterUrl }] },
+      result: { gpuNode: gpu.node.name, linuxCreated: gpu.created },
+    };
+  }
+
+  async function setUpBigData(p, user) {
+    const bd = bigData();
+    const hadoop = {};
+    let hdfsHome;
+    for (const node of bd.nodes) {
+      const r = await linuxStep(user.username, node.name,
+        () => deps.withHadoopNode(node, (ssh) => deps.provisionHadoopUser(ssh, node, bd, user)));
+      hadoop[node.name] = r.created ? 'created' : 'updated';
+      if (r.hdfsHome) hdfsHome = r.hdfsHome;
+    }
+    log('job.hadoop', { user: user.username, hadoop, hdfsHome });
+
+    let hue = 'skipped';
+    if (deps.hueEnabled) {
+      hue = await deps.withHue(async (h) => {
+        if (!(await h.getUserState(user.username)).exists) {
+          await h.createUser(user);
+          return 'created';
+        }
+        await h.resetUser(user);
+        return 'reset';
+      });
+    }
+    log('job.hue', { user: user.username, hue });
+
+    const links = [{ label: 'JupyterHub', url: bd.jupyterUrl }];
+    if (hue !== 'skipped') links.push({ label: 'HUE', url: bd.hueUrl });
+    return {
+      mail: {
+        name: 'Big Data platform',
+        links,
+        notes: hue === 'skipped' ? ['Your HUE login is not ready yet. SIIT ICT will tell you when it is.'] : [],
+      },
+      result: { hadoop, hdfsHome, hue },
+    };
+  }
+
   async function create(p, { progress, saveProgress }) {
     const { username, fullName, email } = p.student;
     const password = deps.generatePassword();
+    if (p.resource === 'BIG_DATA') bigData(); // refuse before touching anything
 
     let vpn = { vpn: 'skipped', vpnIsNew: false };
     if (deps.pfsenseEnabled) {
@@ -106,50 +182,54 @@ export function createJobHandlers(deps) {
     }
     log('job.vpn', { user: username, vpn: vpn.vpn });
 
-    const gpu = await deps.withGpuNode(p.gpuNode, async (ssh, node) => {
-      if (!node.jupyterUrl) reject(`GPU node ${node.name} has no jupyterUrl configured`);
-      try {
-        const r = await deps.provisionGpuUser(ssh, node, { username, fullName, password }, { timeoutMs: deps.gpuTimeoutMs });
-        return { created: r.created, node };
-      } catch (err) {
-        if (err instanceof LinuxIdentityError) reject(`Linux account ${username} on ${node.name} belongs to a different full name`);
-        throw err;
-      }
-    });
-    log('job.gpu', { user: username, node: gpu.node.name, created: gpu.created });
+    const user = { username, fullName, password };
+    const service = p.resource === 'GPU_SERVER' ? await setUpGpu(p, user) : await setUpBigData(p, user);
 
     await deps.sendEmails({
       to: email,
       fullName,
       username,
       vpnIsNew: vpn.vpnIsNew,
-      service: {
-        name: `GPU server ${gpu.node.name}`,
-        links: [{ label: 'JupyterHub', url: gpu.node.jupyterUrl }],
-        manualUrl: p.links.manualUrl,
-      },
+      service: { ...service.mail, manualUrl: p.links.manualUrl },
       ovpnProfileUrl: p.links.ovpnProfileUrl,
       period: p.period,
     }, password);
     log('job.emailed', { user: username });
 
-    return {
-      ok: true, action: 'CREATE', resource: p.resource, username, gpuNode: gpu.node.name,
-      vpn: vpn.vpn, linuxCreated: gpu.created, emailed: true,
-    };
+    return { ok: true, action: 'CREATE', resource: p.resource, username, ...service.result, vpn: vpn.vpn, emailed: true };
+  }
+
+  // 'locked' | 'already-locked' | 'missing'
+  async function lockLinux(lock) {
+    try {
+      return (await lock()).changed ? 'locked' : 'already-locked';
+    } catch (err) {
+      if (err instanceof LinuxUserNotFoundError) return 'missing';
+      throw err;
+    }
   }
 
   async function revoke(p) {
     const { username } = p.student;
-    const gpu = await deps.withGpuNode(p.gpuNode, async (ssh) => {
-      try {
-        const r = await deps.revokeGpuUser(ssh, username);
-        return r.changed ? 'locked' : 'already-locked';
-      } catch (err) {
-        if (err instanceof LinuxUserNotFoundError) return 'missing';
-        throw err;
+    let service;
+    if (p.resource === 'GPU_SERVER') {
+      const gpu = await deps.withGpuNode(p.gpuNode, (ssh) => lockLinux(() => deps.revokeGpuUser(ssh, username)));
+      service = { gpuNode: p.gpuNode, gpu };
+    } else {
+      const bd = bigData();
+      const hadoop = {};
+      for (const node of bd.nodes) {
+        hadoop[node.name] = await deps.withHadoopNode(node, (ssh) => lockLinux(() => deps.revokeHadoopUser(ssh, username)));
       }
-    });
+      let hue = 'skipped';
+      if (deps.hueEnabled) {
+        hue = await deps.withHue(async (h) => {
+          if (!(await h.getUserState(username)).exists) return 'missing';
+          return (await h.deactivateUser(username)).changed ? 'deactivated' : 'already-inactive';
+        });
+      }
+      service = { hadoop, hue };
+    }
 
     let vpn = 'kept';
     if (p.revokeVpn) {
@@ -160,14 +240,14 @@ export function createJobHandlers(deps) {
         })
         : 'skipped';
     }
-    log('job.revoked', { user: username, gpu, vpn });
-    return { ok: true, action: 'REVOKE', resource: p.resource, username, gpuNode: p.gpuNode, gpu, vpn };
+    log('job.revoked', { user: username, ...service, vpn });
+    return { ok: true, action: 'REVOKE', resource: p.resource, username, ...service, vpn };
   }
 
   // FR-8.3: a later end date. The VPN account's expiration moves to it, never earlier (the account
-  // is shared by the student's requests). Linux accounts carry no expiration (REVOKE locks them
-  // at the end), so nothing changes on the GPU node. A missing or disabled VPN account is reported,
-  // not created or enabled: that is CREATE's job.
+  // is shared by the student's requests). Linux and HUE accounts carry no expiration (REVOKE
+  // locks them at the end), so nothing changes on the GPU or Hadoop nodes. A missing or disabled
+  // VPN account is reported, not created or enabled: that is CREATE's job.
   async function extend(p) {
     const { username, fullName } = p.student;
     let vpn = 'skipped';
@@ -187,7 +267,10 @@ export function createJobHandlers(deps) {
       }
     }
     log('job.extended', { user: username, vpn, end: p.period.end });
-    return { ok: true, action: 'EXTEND', resource: p.resource, username, gpuNode: p.gpuNode, vpn };
+    return {
+      ok: true, action: 'EXTEND', resource: p.resource, username,
+      ...(p.resource === 'GPU_SERVER' && { gpuNode: p.gpuNode }), vpn,
+    };
   }
 
   return {
