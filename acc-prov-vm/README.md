@@ -111,7 +111,7 @@ The Hadoop nodes are listed in `bigdata.json` (`BIGDATA_FILE`). Without it, Big 
 | `provisionHadoopUser(ssh, node, settings, { username, fullName, password })` | Creates the user if missing, sets the password (only if the full name matches), unlocks, adds the missing groups. On the `hdfsHome` node it also makes `<homeDir>/<user>` as the HDFS superuser and applies the owner, group and mode. Safe to re-run. |
 | `revokeHadoopUser(ssh, username)` | `usermod -L` + `chage -E 0`. The home and the HDFS home are kept (D16). |
 
-- **⚠ The manual's HDFS home is not writable by the student.** `-chown :hadoop` changes only the group, so the owner stays `hdfs`, and with mode 755 the student can't write there. `studentOwnsHome: true` makes the student the owner (`-chown <user>:<group>`).
+- **HDFS home owner:** `studentOwnsHome: true` runs `-chown <user>:<group>`, SIIT's real command step, so the student owns their home. The manual prints `-chown :hadoop` (a typo): that changes only the group, the owner stays `hdfs`, and with mode 755 the student can't write there.
 - **⚠ On the SIIT cluster, `hdfs` is HDFS's superuser group** (`dfs.permissions.superusergroup=hdfs`). A student added to it, as the manual does, can read and delete everyone's HDFS data. Remove `hdfs` from `groups` once the lab agrees.
 - JupyterHub on the edge node signs in through PAM, so the Linux password is the JupyterHub password, and a locked account can't sign in.
 

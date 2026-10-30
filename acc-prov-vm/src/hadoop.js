@@ -41,9 +41,9 @@ export async function hdfsDirState(ssh, hdfs, dir) {
 // The student's HDFS home. Owner and group are applied every time, so a retry finishes a
 // half-done setup. -> { created, owner, group, mode }
 //
-// ⚠ plan.md §6b: the manual runs `-chown :hadoop`, which changes only the group, so the owner stays
-// the HDFS superuser and, with mode 755, the student can't write to their own home.
-// studentOwnsHome: true makes the student the owner instead (`-chown <user>:<group>`).
+// studentOwnsHome: true runs `-chown <user>:<group>`, SIIT's real command step. false runs
+// `-chown :<group>` as the manual prints it (a typo, plan.md §6b): only the group changes, the owner
+// stays the HDFS superuser and, with mode 755, the student can't write to their own home.
 export async function ensureHdfsHome(ssh, hdfs, username) {
   assertUsername(username);
   const dir = `${hdfs.homeDir}/${username}`;
