@@ -2,6 +2,7 @@ import { parseId, requestResponse } from '../utils/db-mapping.js';
 import { createRequest, getRequestById, getUserRequests, updateRequest } from '../services/request.service.js';
 import { requestExtension } from '../services/extension.service.js';
 import { CreateRequestSchema, ExtensionRequestSchema, UpdateRequestSchema } from '../utils/validation.js';
+import { parsePage } from '../utils/paging.js';
 
 export async function createNewRequest(req, res, next) {
   try {
@@ -45,9 +46,10 @@ export async function getMyRequests(req, res, next) {
       });
     }
 
-    const requests = await getUserRequests(user_id);
+    const { rows, total } = await getUserRequests(user_id, parsePage(req.query));
 
-    res.json(requests.map(r => ({
+    res.set('X-Total-Count', String(total));
+    res.json(rows.map(r => ({
       id: r.id.toString(),  // ← Convert BigInt
       purpose: r.purpose,
       resource_type: r.resource_type,

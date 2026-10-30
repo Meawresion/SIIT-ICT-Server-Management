@@ -371,6 +371,12 @@ docker-compose up mysql
 ## Backend compatibility
 
 The backend uses the current lowercase `user`, `request`, `draft` and `request_event` tables.
+Its own bookkeeping tables are:
+- `provision_job`: the acc-prov-vm outbox;
+- `scheduler_lease`: which backend task runs the scheduler;
+- `log_cursor`: the last `request_event` copied into the logs as an `audit.event` line. On AWS those lines reach the S3 logs bucket.
+
+The app user may read and update these tables but not delete from them.
 It preserves the frontend API field names and enum values through
 `backend/src/utils/db-mapping.js`. No database reset or data migration is needed
 when these tables already exist. Regenerate the Prisma client after schema edits:

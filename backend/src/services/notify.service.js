@@ -12,6 +12,7 @@ import prisma from '../lib/prisma.js';
 import env from '../config/env.js';
 import { loadMailConfig } from '../config/mail.js';
 import { AUTOMATED_RESOURCES } from './provisioning.service.js';
+import { log } from '../lib/log.js';
 
 // Plain addresses only: quotes, ; < > ( ) and spaces are rejected, so a recipient can never be
 // re-parsed into extra recipients (nodemailer addressparser advisories, fixed in 10.1.4).
@@ -160,7 +161,6 @@ export function createNotifier(config, { transport, log = () => {}, portalUrl = 
 }
 
 let notifier;
-const log = (event, fields = {}) => console.log(JSON.stringify({ ts: new Date().toISOString(), event, ...fields }));
 // The running server's notifier (settings read on first use; server.js checks them at start).
 export function notifyRequestEvent(event) {
   notifier ??= createNotifier(loadMailConfig(), { log });

@@ -5,6 +5,7 @@ import env from '../config/env.js';
 import { classifyEmail, loadIdentityRules } from '../config/identity.js';
 import { STATE_COOKIE, clearSession, cookieOptions, issueSession, readCookie, seconds } from '../auth/session.js';
 import crypto from 'crypto';
+import { errorFields, logError } from '../lib/log.js';
 
 // The OAuth state lives in its own short cookie, only for the sign-in round trip.
 const STATE_MAX_AGE_MS = 10 * 60 * 1000;
@@ -55,8 +56,9 @@ export async function handleGoogleCallback(req, res, next) {
   } catch (err) {
     // Back to the landing page with a message instead of a raw JSON error.
     if (err.code === 'SIGNIN_NOT_ALLOWED') return res.redirect(`${env.frontend_url}/?signin=not-allowed`);
-    console.error('Google callback error:', err);
-    next(err);
+    // Anything else: logged with the request's reference, and the landing page says sign-in failed.
+    logError('auth.callback_failed', { request_id: req.id, error: errorFields(err) });
+    res.redirect(`${env.frontend_url}/?signin=failed&reference=${encodeURIComponent(req.id)}`);
   }
 }
 
