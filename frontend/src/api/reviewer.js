@@ -1,4 +1,4 @@
-import { apiDownload, apiRequest } from './client.js';
+import { apiDownload, apiRequest, apiRequestWithTotal } from './client.js';
 
 export async function getRequests(filters = {}, options) {
   const params = new URLSearchParams();
@@ -10,6 +10,11 @@ export async function getRequests(filters = {}, options) {
   const url = query ? `/api/reviewer/requests?${query}` : '/api/reviewer/requests';
   
   return apiRequest(url, options);
+}
+
+// One page of every request, newest first: { data, total }.
+export async function getRequestsPage({ limit, offset = 0 }) {
+  return apiRequestWithTotal(`/api/reviewer/requests?limit=${limit}&offset=${offset}`);
 }
 
 export async function getRequest(id) {

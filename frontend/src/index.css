@@ -393,3 +393,21 @@ input[type='range']:disabled { cursor: default; opacity: 0.75; }
 .provisioning-state.is-succeeded strong { color: var(--success); }
 .provisioning-jobs { margin: 4px 0 0; padding-left: 1.1rem; font-size: 0.85rem; }
 .provisioning details summary { cursor: pointer; font-size: 0.85rem; color: var(--muted); }
+
+/* Paging (History page) */
+.load-more { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; }
+
+/* 404 and crash pages: no technical details */
+.error-page { display: grid; place-items: center; min-height: 100vh; padding: 24px 16px; background: var(--bg, #f6f5f8); }
+.error-card { max-width: 480px; width: 100%; display: flex; flex-direction: column; gap: 12px; align-items: flex-start;
+  padding: 28px; border: 1px solid var(--border); border-radius: 14px; background: var(--surface); }
+.error-code { margin: 0; font-size: 0.85rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--brand); }
+.error-card h1 { margin: 0; font-size: 1.4rem; }
+
+/* Privacy notice */
+.privacy { display: flex; justify-content: center; padding: 32px 16px; background: var(--bg, #f6f5f8); min-height: 100vh; }
+.privacy-card { max-width: 760px; width: 100%; padding: 28px; border: 1px solid var(--border); border-radius: 14px; background: var(--surface); line-height: 1.6; }
+.privacy-card h1 { margin: 0.2rem 0; }
+.privacy-card h2 { font-size: 1.05rem; margin: 1.4rem 0 0.4rem; }
+.privacy-card ul { padding-left: 1.2rem; margin: 0.3rem 0; }
+.privacy-link { margin-top: 1rem; }
