@@ -1,6 +1,7 @@
 import prisma from '../lib/prisma.js';
 import { resourceToDb, requestInclude, requestView, eventInclude, eventView } from '../utils/db-mapping.js';
 import { UpdateRequestSchema } from '../utils/validation.js';
+import { DEFAULT_LIMIT } from '../utils/paging.js';
 
 // Keys in extra_details that only approvers and the system write: a student's extra_details never
 // sets or changes them.
@@ -51,8 +52,13 @@ export async function getRequestById(request_id, user_id = null) {
   const events = await prisma.request_event.findMany({ where: { rid: request_id }, include: eventInclude, orderBy: { eid: 'asc' } });
   return { ...requestView(row), events: events.map(e => eventView(e)) };
 }
-export async function getUserRequests(user_id) {
-  return (await prisma.request.findMany({ where: { student_uid: user_id }, include: requestInclude, orderBy: { created_at: 'desc' } })).map(requestView);
+export async function getUserRequests(user_id, page = { take: DEFAULT_LIMIT, skip: 0 }) {
+  const where = { student_uid: user_id };
+  const [rows, total] = await Promise.all([
+    prisma.request.findMany({ where, include: requestInclude, orderBy: [{ created_at: 'desc' }, { rid: 'desc' }], ...page }),
+    prisma.request.count({ where }),
+  ]);
+  return { rows: rows.map(requestView), total };
 }
 export async function updateRequest(request_id, user_id, data) {
   return prisma.$transaction(async tx => {

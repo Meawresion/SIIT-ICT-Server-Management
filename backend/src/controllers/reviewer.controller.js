@@ -11,6 +11,7 @@ import { retryProvisioning } from '../services/provisioning.service.js';
 import { exportCsv } from '../services/export.service.js';
 import { decideExtension } from '../services/extension.service.js';
 import { ReviewRequestSchema } from '../utils/validation.js';
+import { parsePage } from '../utils/paging.js';
 
 export async function listRequests(req, res, next) {
   try {
@@ -21,9 +22,10 @@ export async function listRequests(req, res, next) {
     if (resource_type) filters.resource_type = resource_type;
     if (student_id) filters.student_id = student_id;
 
-    const requests = await getAllRequests(filters);
+    const { rows, total } = await getAllRequests(filters, parsePage(req.query));
 
-    res.json(requests.map(r => ({
+    res.set('X-Total-Count', String(total));
+    res.json(rows.map(r => ({
       id: r.id,
       purpose: r.purpose,
       resource_type: r.resource_type,
@@ -31,6 +33,10 @@ export async function listRequests(req, res, next) {
       student_name: r.user.account.full_name,
       student_id: r.user.student_id,
       extension_asked: Boolean(r.extension),
+      // FR-9.2: the Active Requests view shows the period and the GPU node.
+      estimated_start_date: r.estimated_start_date,
+      estimated_end_date: r.estimated_end_date,
+      gpu_node: r.extra_details?.gpu_node ?? null,
       created_at: r.created_at,
       reviewed_at: r.reviewed_at,
     })));

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useAuth } from '../auth/context.js';
-import { getMyRequests } from '../api/requests.js';
-import { getRequests } from '../api/reviewer.js';
+import { getMyRequestsPage } from '../api/requests.js';
+import { getRequestsPage } from '../api/reviewer.js';
 import { RESOURCE_TYPES, STATUSES, STATUS_LABEL, resourceShort } from '../constants.js';
 import { formatId, formatLocalDate, formatPeriod } from '../utils/format.js';
 import AppLayout from '../components/AppLayout.jsx';
@@ -10,10 +10,15 @@ import StatusBadge from '../components/StatusBadge.jsx';
 import RequestFormModal from '../components/RequestFormModal.jsx';
 import ExportPanel from '../components/ExportPanel.jsx';
 
+// Requests per page (NFR-2.1); older ones load on demand.
+const PAGE = 200;
+
 export default function HistoryPage() {
   const auth = useAuth();
   const isReviewer = auth.role === 'reviewer';
   const [rows, setRows] = useState([]);
+  const [total, setTotal] = useState(null);
+  const [more, setMore] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [status, setStatus] = useState('');
@@ -24,11 +29,12 @@ export default function HistoryPage() {
 
   useEffect(() => {
     let cancelled = false;
-    const fetcher = isReviewer ? getRequests() : getMyRequests();
-    fetcher
-      .then((data) => {
+    const fetchPage = isReviewer ? getRequestsPage : getMyRequestsPage;
+    fetchPage({ limit: PAGE })
+      .then(({ data, total: count }) => {
         if (cancelled) return;
         setRows(data);
+        setTotal(count);
         setError('');
       })
       .catch((err) => !cancelled && setError(err.message))
@@ -37,6 +43,17 @@ export default function HistoryPage() {
       cancelled = true;
     };
   }, [isReviewer, reloadKey]);
+
+  const loadOlder = () => {
+    setMore(true);
+    (isReviewer ? getRequestsPage : getMyRequestsPage)({ limit: PAGE, offset: rows.length })
+      .then(({ data, total: count }) => {
+        setRows((r) => [...r, ...data.filter((x) => !r.some((y) => y.id === x.id))]);
+        setTotal(count);
+      })
+      .catch((err) => setError(err.message))
+      .finally(() => setMore(false));
+  };
 
   const counts = useMemo(() => {
     const c = { '': rows.length };
@@ -58,9 +75,13 @@ export default function HistoryPage() {
       : []),
     { key: 'purpose', label: 'Project', className: 'col-wide' },
     { key: 'resource_type', label: 'Resource Type', render: (r) => resourceShort(r.resource_type) },
-    ...(isReviewer
-      ? [{ key: 'reviewed_at', label: 'Decided', render: (r) => formatLocalDate(r.reviewed_at) }]
-      : [{ key: 'period', label: 'Requested Period', render: (r) => formatPeriod(r.estimated_start_date, r.estimated_end_date) }]),
+    ...(isReviewer && status === 'ACTIVE'
+      // FR-9.2: who has what, on which node, until when.
+      ? [{ key: 'period', label: 'Period', render: (r) => formatPeriod(r.estimated_start_date, r.estimated_end_date) },
+        { key: 'gpu_node', label: 'Node', render: (r) => (r.gpu_node ? <span className="mono">{r.gpu_node}</span> : '—') }]
+      : isReviewer
+        ? [{ key: 'reviewed_at', label: 'Decided', render: (r) => formatLocalDate(r.reviewed_at) }]
+        : [{ key: 'period', label: 'Requested Period', render: (r) => formatPeriod(r.estimated_start_date, r.estimated_end_date) }]),
     { key: 'status', label: 'Status', render: (r) => <StatusBadge status={r.status} extensionAsked={r.extension_asked} /> },
     {
       key: 'action',
@@ -102,6 +123,12 @@ export default function HistoryPage() {
         {isReviewer && <ExportPanel status={status} />}
         {error && <div className="alert alert-error" role="alert">{error}</div>}
         <DataTable columns={columns} rows={visible} loading={loading} empty="No requests match these filters." />
+        {total !== null && total > rows.length && (
+          <div className="load-more">
+            <span className="muted small">Showing the newest {rows.length} of {total} requests; the tab counts cover those.</span>
+            <button type="button" className="btn btn-secondary" onClick={loadOlder} disabled={more}>{more ? 'Loading…' : 'Load older requests'}</button>
+          </div>
+        )}
       </section>
 
       {open && (

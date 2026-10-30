@@ -1,4 +1,4 @@
-import { apiRequest } from './client.js';
+import { apiRequest, apiRequestWithTotal } from './client.js';
 
 export async function createRequest(data) {
   return apiRequest('/api/requests', {
@@ -9,6 +9,11 @@ export async function createRequest(data) {
 
 export async function getMyRequests(options) {
   return apiRequest('/api/requests/me', options);
+}
+
+// One page, newest first: { data, total }.
+export async function getMyRequestsPage({ limit, offset = 0 }) {
+  return apiRequestWithTotal(`/api/requests/me?limit=${limit}&offset=${offset}`);
 }
 
 export async function getRequest(id) {

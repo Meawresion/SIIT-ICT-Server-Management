@@ -96,12 +96,34 @@ try {
 - Commands are built from argv arrays and quoted, never from interpolated strings.
 - Passwords go to `sudo -S` and `chpasswd` on stdin only. sudo always runs with `-k`, so a cached sudo session can't make the password line reach the command.
 
+## Deleting a student's accounts (admin only)
+
+The worker never deletes anything (D16: revoke = disable). To delete one student's accounts everywhere, for example the throwaway test user `st9990000001`, the admin runs:
+
+```bash
+npm run cleanup-user -- st9990000001 --fullname "Test User For acc-prov-vm"         # check only
+npm run cleanup-user -- st9990000001 --fullname "Test User For acc-prov-vm" --yes   # check, confirm, delete
+```
+
+- **Covers:**
+  - the pfSense VPN user;
+  - the Linux user and its home on **every** GPU node (`gpu-nodes.json`) and every Hadoop node (`bigdata.json`);
+  - the HDFS home (`hdfs dfs -rm -r`, so it goes to the HDFS trash if trash is on).
+
+  Systems not configured in `.env` are skipped. HUE users are not automated yet; the report reminds you to delete them by hand.
+- **Check first.** Every system is checked and reported: exists or not, full name, lock state, groups, running processes, HDFS owner and size. A missing account is reported as "not found, nothing to do", not as an error, so a second run is harmless.
+- **Never deletes another person's account.** An account whose full name differs from `--fullname` is skipped. Only `st`/`stm`/`std` + digits usernames are accepted.
+- With `--yes` it asks you to type the username, checks everything again, then deletes. It stops the user's processes, runs `deluser --remove-home`, and verifies each deletion. Every line is time-stamped on stdout for you to read.
+- The pfSense user's certificate stays in System > Cert Manager > Certificates; the report says so.
+- The pfSense delete step (trash link, confirm dialog, success alert) comes from the recorded flow and had not run live yet. Watch the first run.
+- Exit code 0 only when nothing was skipped and nothing failed.
+
 ## Big Data (Hadoop) module
 
 The Hadoop nodes are listed in `bigdata.json` (`BIGDATA_FILE`). Without it, Big Data jobs are refused with a failed result.
 - Each node has a `name`, an IPv4 `host`, a `port` and pinned `hostKeys`. The SIIT nodes `h99` and `h0` are clones that share one host key, so the IP check in every SSH session is what tells them apart.
 - **Exactly one node has `"hdfsHome": true`.** HDFS is one file system for the whole cluster, so the HDFS home is made once, from that node.
-- `groups`: the groups the student joins on every node (the manual: `hadoop`, `hdfs`).
+- `groups`: the groups the student joins on every node. SIIT uses `hadoop` only (decided 2026-10-30, see below).
 - `hdfs`: the `command`, the HDFS `superuser` that runs it, the `homeDir` parent, the home's `group` and `mode`, and `studentOwnsHome`.
 - `jupyterUrl` and `hueUrl` go into the student's email.
 - **SSH login:** `HADOOP_SSH_USER`, `HADOOP_SSH_PASSWORD`, `HADOOP_SSH_KEY_PATH` and `HADOOP_SUDO_PASSWORD`, with per-node overrides like the GPU ones. Any of them that is not set falls back to the `GPU_*` value (D18: one admin account).
@@ -112,7 +134,7 @@ The Hadoop nodes are listed in `bigdata.json` (`BIGDATA_FILE`). Without it, Big 
 | `revokeHadoopUser(ssh, username)` | `usermod -L` + `chage -E 0`. The home and the HDFS home are kept (D16). |
 
 - **HDFS home owner:** `studentOwnsHome: true` runs `-chown <user>:<group>`, SIIT's real command step, so the student owns their home. The manual prints `-chown :hadoop` (a typo): that changes only the group, the owner stays `hdfs`, and with mode 755 the student can't write there.
-- **⚠ On the SIIT cluster, `hdfs` is HDFS's superuser group** (`dfs.permissions.superusergroup=hdfs`). A student added to it, as the manual does, can read and delete everyone's HDFS data. Remove `hdfs` from `groups` once the lab agrees.
+- **Never add students to `hdfs`.** On the SIIT cluster `hdfs` is HDFS's superuser group (`dfs.permissions.superusergroup=hdfs`), so a member can read and delete everyone's HDFS data. The technician manual adds students to `hadoop,hdfs`; acc-prov-vm uses `hadoop` only (decided 2026-10-30). Accounts made by hand before that may still be in `hdfs`.
 - JupyterHub on the edge node signs in through PAM, so the Linux password is the JupyterHub password, and a locked account can't sign in.
 
 ## HUE module

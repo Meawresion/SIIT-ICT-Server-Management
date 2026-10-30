@@ -3,8 +3,9 @@ import { resourceToDb, statusToDb, requestInclude, requestView, eventInclude, ev
 import { provisioningConfig } from '../config/provisioning.js';
 import { assertManualActivationAllowed, buildCreateJob, buildRevokeJob, isAutomated, jobsFor } from './provisioning.service.js';
 import { notifyRequestEvent } from './notify.service.js';
+import { DEFAULT_LIMIT } from '../utils/paging.js';
 
-export async function getAllRequests(filters = {}) {
+export async function getAllRequests(filters = {}, page = { take: DEFAULT_LIMIT, skip: 0 }) {
   const where = {};
   if (filters.status) {
     if (!statusToDb[filters.status]) throw Object.assign(new Error('Invalid status filter'), { statusCode: 400 });
@@ -15,7 +16,11 @@ export async function getAllRequests(filters = {}) {
     where.resource_type = resourceToDb[filters.resource_type];
   }
   if (filters.student_id) where.user_request_student_uidTouser = { s_id: filters.student_id };
-  return (await prisma.request.findMany({ where, include: requestInclude, orderBy: { created_at: 'desc' } })).map(requestView);
+  const [rows, total] = await Promise.all([
+    prisma.request.findMany({ where, include: requestInclude, orderBy: [{ created_at: 'desc' }, { rid: 'desc' }], ...page }),
+    prisma.request.count({ where }),
+  ]);
+  return { rows: rows.map(requestView), total };
 }
 
 // D28: the same student's other live requests for the same resource type whose dates intersect.

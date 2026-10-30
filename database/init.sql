@@ -111,6 +111,22 @@ CREATE TABLE `scheduler_lease`(
     `lease_until` DATETIME(3) NOT NULL
 ) COMMENT 'One row per scheduled job; the app user may only read and update it';
 INSERT INTO `scheduler_lease` (`name`, `lease_until`) VALUES ('scheduler', '1970-01-01 00:00:00');
+-- Log shipping (NFR-7.1): the last request_event copied into the logs as an audit.event line
+-- (backend/src/services/audit-log.service.js). On AWS the logs go to S3 and outlive the database.
+CREATE TABLE `log_cursor`(
+    `name` VARCHAR(32) NOT NULL PRIMARY KEY,
+    `last_id` BIGINT UNSIGNED NOT NULL DEFAULT 0,
+    `updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) COMMENT 'One row per log stream copied out of the database; the app user may only read and update it';
+INSERT INTO `log_cursor` (`name`) VALUES ('audit');
+-- The request lists (NFR-2.1): newest first, by status for the approver tabs, by student for
+-- their own list (this one also serves the student foreign key).
+ALTER TABLE
+    `request` ADD INDEX `request_created_index`(`created_at`);
+ALTER TABLE
+    `request` ADD INDEX `request_status_created_index`(`status`, `created_at`);
+ALTER TABLE
+    `request` ADD INDEX `request_student_created_index`(`student_uid`, `created_at`);
 
 ALTER TABLE
     `draft` ADD CONSTRAINT `draft_student_uid_foreign` FOREIGN KEY(`student_uid`) REFERENCES `user`(`uid`) ON DELETE CASCADE;

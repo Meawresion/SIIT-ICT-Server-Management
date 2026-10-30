@@ -139,12 +139,16 @@ test('review service rejects students even if called without middleware', async 
   await assert.rejects(approveRequest(10, 1, 'Forged'), { statusCode: 403 });
 });
 
-test('review filters use new enums and student relation', async t => {
+test('review filters use new enums and student relation; the list is paged', async t => {
+  const where = { status: 'On_Use', resource_type: 'AWS_LAB', user_request_student_uidTouser: { s_id: '123' } };
   mockMethod(t, prisma.request, 'findMany', async args => {
-    assert.deepEqual(args.where, { status: 'On_Use', resource_type: 'AWS_LAB', user_request_student_uidTouser: { s_id: '123' } });
+    assert.deepEqual(args.where, where);
+    assert.equal(args.take, 50);
+    assert.equal(args.skip, 100);
     return [];
   });
-  await getAllRequests({ status: 'ACTIVE', resource_type: 'AWS_LEARNER_LAB', student_id: '123' });
+  mockMethod(t, prisma.request, 'count', async args => { assert.deepEqual(args.where, where); return 7; });
+  assert.deepEqual(await getAllRequests({ status: 'ACTIVE', resource_type: 'AWS_LEARNER_LAB', student_id: '123' }, { take: 50, skip: 100 }), { rows: [], total: 7 });
   await assert.rejects(getAllRequests({ status: 'bad' }), { statusCode: 400 });
 });
 

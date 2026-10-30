@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Navigate } from 'react-router-dom';
+import { Link, Navigate } from 'react-router-dom';
 import { useAuth } from '../auth/context.js';
 import { getGoogleAuthUrl } from '../api/auth.js';
 import { GoogleIcon } from '../components/Icons.jsx';
@@ -12,11 +12,17 @@ const STEPS = [
 
 const RESOURCES = ['HPC / GPU cluster', 'Big data platform', 'Virtual machines', 'Lab equipment', 'AWS Learner Lab', 'AWS Skill Builder'];
 
-// The backend sends a refused sign-in back here with ?signin=not-allowed.
-const signinError = () =>
-  new URLSearchParams(window.location.search).get('signin') === 'not-allowed'
-    ? 'This Google account can’t sign in. Use your SIIT student or staff Google account.'
-    : '';
+// The backend sends a refused sign-in back here with ?signin=not-allowed, and a failed one with
+// ?signin=failed&reference=<id> (the reference finds the error in the server logs).
+const signinError = () => {
+  const q = new URLSearchParams(window.location.search);
+  if (q.get('signin') === 'not-allowed') return 'This Google account can’t sign in. Use your SIIT student or staff Google account.';
+  if (q.get('signin') === 'failed') {
+    const ref = /^[0-9a-f-]{36}$/.test(q.get('reference') ?? '') ? ` If it keeps happening, contact SIIT ICT with reference ${q.get('reference')}.` : '';
+    return `Sign-in didn’t work. Please try again.${ref}`;
+  }
+  return '';
+};
 
 export default function LandingPage() {
   const auth = useAuth();
@@ -75,6 +81,7 @@ export default function LandingPage() {
             <span className="muted">Available to request:</span>
             {RESOURCES.map((r) => <span key={r} className="chip">{r}</span>)}
           </div>
+          <p className="muted small privacy-link">How we use your data: <Link to="/privacy">privacy notice</Link>.</p>
         </div>
       </section>
     </div>

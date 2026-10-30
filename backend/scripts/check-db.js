@@ -22,7 +22,7 @@ const restores = [];
 try {
   await originalTransaction(async tx => {
     // Run the real services against one isolated, rollback-only transaction.
-    for (const [model, methods] of Object.entries({ user: ['upsert', 'findUnique', 'update'], request: ['findFirst', 'findUnique', 'findMany'], request_event: ['findMany'] })) {
+    for (const [model, methods] of Object.entries({ user: ['upsert', 'findUnique', 'update'], request: ['findFirst', 'findUnique', 'findMany', 'count'], request_event: ['findMany'] })) {
       for (const method of methods) {
         const original = prisma[model][method];
         restores.push(() => { prisma[model][method] = original; });
@@ -46,7 +46,7 @@ try {
     const request = await createRequest(account.id, { purpose: 'Integration check', project_description: 'Test project', project_supervisor_name: 'Test supervisor', resource_type: 'VM', justification: 'Database verification', estimated_start_date: '2026-10-16', estimated_end_date: '2026-10-17', impact_score: 5, supervisor_confirmation: 'NOT_CONFIRMED' });
     assert.equal(request.status, 'PENDING');
     assert.equal(await tx.draft.findUnique({ where: { student_uid: account.id } }), null);
-    assert.equal((await getUserRequests(account.id)).length, 1);
+    assert.equal((await getUserRequests(account.id)).total, 1);
     assert.equal(await getRequestById(request.id, account.id + 1), null);
     assert.equal((await updateRequest(request.id, account.id, { purpose: 'Edited purpose', impact_score: 8 })).impact_score, 8);
     const reviewer = await tx.user.create({ data: { role: 'Approver', fullname: 'Test approver', siitemail: `approver-${marker}@example.invalid`, phone_number: '' } });
@@ -56,7 +56,7 @@ try {
     await assert.rejects(approveRequest(request.id, reviewer.uid, 'Verified'), err => err.statusCode === 409 && err.overlaps[0].id === second.id);
     assert.equal((await approveRequest(request.id, reviewer.uid, 'Verified', { confirm_overlap: true })).status, 'APPROVED');
     assert.equal((await activateRequest(request.id, reviewer.uid)).status, 'ACTIVE');
-    assert.equal((await getAllRequests({ status: 'ACTIVE', student_id: 'TEST123' })).some(r => r.id === request.id), true);
+    assert.equal((await getAllRequests({ status: 'ACTIVE', student_id: 'TEST123' })).rows.some(r => r.id === request.id), true);
     assert.equal((await completeRequest(request.id, reviewer.uid)).status, 'COMPLETED');
     const saved = await getRequestById(request.id, account.id);
     assert.equal(saved.review_comment, 'Verified');

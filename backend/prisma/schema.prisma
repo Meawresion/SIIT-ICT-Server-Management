@@ -49,7 +49,9 @@ model request {
   provision_job                   provision_job[]
 
   @@index([approver_uid], map: "request_approver_uid_foreign")
-  @@index([student_uid], map: "request_student_uid_foreign")
+  @@index([student_uid, created_at], map: "request_student_created_index")
+  @@index([status, created_at], map: "request_status_created_index")
+  @@index([created_at], map: "request_created_index")
 }
 
 model user {
@@ -114,6 +116,12 @@ model scheduler_lease {
   name        String   @id @db.VarChar(32)
   owner       String?  @db.VarChar(100)
   lease_until DateTime @db.DateTime(3)
+}
+
+model log_cursor {
+  name       String   @id @db.VarChar(32)
+  last_id    BigInt   @default(0) @db.UnsignedBigInt
+  updated_at DateTime @default(now()) @updatedAt @db.Timestamp(0)
 }
 
 enum provision_job_action {

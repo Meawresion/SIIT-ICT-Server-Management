@@ -8,35 +8,37 @@ import prisma from './lib/prisma.js';
 import { startProvisioning } from './messaging/index.js';
 import { startScheduler } from './services/scheduler.service.js';
 import { notifyRequestEvent } from './services/notify.service.js';
+import { startAuditShipper } from './services/audit-log.service.js';
+import { log } from './lib/log.js';
 
 // Fail at start, not at the first request, when settings are missing or wrong.
 checkEnv();
 loadIdentityRules();
 const provisioning = provisioningConfig();
 const schedulerConfig = loadSchedulerConfig();
-if (!loadMailConfig()) console.log('Status emails are off (no SMTP_HOST): they are only logged');
-
-// JSON lines, like acc-prov-vm; never message plaintext or secrets.
-const log = (event, fields = {}) => console.log(JSON.stringify({ ts: new Date().toISOString(), event, ...fields }));
+if (!loadMailConfig()) log('mail.off', { reason: 'no SMTP_HOST: status emails are only logged' });
 
 const port = env.port;
 const SHUTDOWN_TIMEOUT_MS = 10_000;
 
 const server = app.listen(port, () => {
-  console.log(`Server running on port ${port} (${env.node_env})`);
+  log('server.started', { port, node_env: env.node_env });
 });
 const provisioner = provisioning ? await startProvisioning(provisioning, { log }) : null;
-if (!provisioning) console.log('Automatic provisioning is off (no MESSAGE_TRANSPORT): GPU requests are activated by hand');
+if (!provisioning) log('provision.off', { reason: 'no MESSAGE_TRANSPORT: GPU and Big Data requests are activated by hand' });
 const scheduler = startScheduler(schedulerConfig, { provisioning, transport: provisioner?.transport, log, notify: notifyRequestEvent });
+// The audit trail as log lines too, so on AWS it reaches S3 and outlives the database.
+const auditShipper = startAuditShipper({ log });
 
 // ECS sends SIGTERM on every deploy and scale-in: stop taking connections, let the requests in
 // flight finish, then close the database pool. Exit anyway if that takes too long.
 for (const signal of ['SIGTERM', 'SIGINT']) {
   process.once(signal, () => {
-    console.log(`${signal} received, shutting down`);
+    log('server.stopping', { signal });
     setTimeout(() => process.exit(1), SHUTDOWN_TIMEOUT_MS).unref();
     server.close(async () => {
       await scheduler.stop();
+      await auditShipper.stop();
       await provisioner?.stop();
       await prisma.$disconnect();
       process.exit(0);

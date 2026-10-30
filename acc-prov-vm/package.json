@@ -18,6 +18,7 @@
     "test:worker-broker": "node --env-file=.env --test --test-concurrency=1 test/worker.broker.integration.test.js",
     "keygen": "node scripts/keygen.js",
     "check:config": "node --env-file=.env -e \"import('./src/config.js').then((c) => { c.loadPfSenseConfig(); const g = c.loadGpuConfig(); const b = c.loadBigDataConfig(); if (process.env.HUE_ENABLED === 'true') c.loadHueConfig(); console.log('config OK; GPU nodes:', g.nodes.map((n) => n.name + '=' + n.host).join(', '), '; Hadoop nodes:', b ? b.nodes.map((n) => n.name + '=' + n.host).join(', ') : '(none)'); })\"",
+    "cleanup-user": "node --env-file=.env scripts/cleanup-user.js",
     "send-test-job": "node --env-file=.env scripts/send-test-job.js"
   },
   "dependencies": {

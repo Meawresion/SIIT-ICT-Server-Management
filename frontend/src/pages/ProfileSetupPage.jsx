@@ -1,4 +1,4 @@
-import { Navigate, useNavigate } from 'react-router-dom';
+import { Link, Navigate, useNavigate } from 'react-router-dom';
 import { useAuth } from '../auth/context.js';
 import { createUserProfile } from '../api/users.js';
 import ProfileForm from '../components/ProfileForm.jsx';
@@ -25,6 +25,9 @@ export default function ProfileSetupPage() {
         <h1>Fill in your profile</h1>
         <p className="muted">
           We only ask once. These details are attached to every request you send, so approvers know who you are and who supervises you.
+        </p>
+        <p className="muted small">
+          SIIT ICT uses them only to handle your requests and accounts; see the <Link to="/privacy">privacy notice</Link>.
         </p>
         <ProfileForm initial={{ full_name: auth.account?.full_name }} email={auth.account?.email} studentId={auth.account?.student_id} degree={auth.account?.degree} onSubmit={submit} submitLabel="Save and continue" />
         <button type="button" className="link-button setup-signout" onClick={() => auth.logout().then(() => navigate('/'))}>
