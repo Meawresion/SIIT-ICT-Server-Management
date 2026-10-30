@@ -1,5 +1,5 @@
 {
-  "_comment": "Placeholders only (RFC 5737 documentation IPs, fake fingerprints). Copy to bigdata.json (git-ignored) and replace every value. Fingerprints: ssh-keyscan <ip> | ssh-keygen -lf - -E sha256. Exactly one node has hdfsHome: true (HDFS is one file system for the cluster). studentOwnsHome true = chown <user>:<group>, the student owns the home (the SIIT command step); false = chown :<group>, the owner stays the HDFS superuser and the student can't write there.",
+  "_comment": "Placeholders only (RFC 5737 documentation IPs, fake fingerprints). Copy to bigdata.json (git-ignored) and replace every value. Fingerprints: ssh-keyscan <ip> | ssh-keygen -lf - -E sha256. groups: hadoop only; never hdfs, the HDFS superuser group (dfs.permissions.superusergroup). Exactly one node has hdfsHome: true (HDFS is one file system for the cluster). studentOwnsHome true = chown <user>:<group>, the student owns the home (the SIIT command step); false = chown :<group>, the owner stays the HDFS superuser and the student can't write there.",
   "nodes": [
     {
       "name": "h99",
@@ -15,7 +15,7 @@
       "hdfsHome": true
     }
   ],
-  "groups": ["hadoop", "hdfs"],
+  "groups": ["hadoop"],
   "hdfs": {
     "command": "hdfs",
     "superuser": "hdfs",

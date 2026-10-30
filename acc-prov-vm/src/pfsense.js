@@ -259,6 +259,27 @@ export class PfSenseSession {
     return { changed: true };
   }
 
+  // Admin only (scripts/cleanup-user.js): the worker never deletes (D16). Deletes only after the
+  // edit page shows both the username and the full name. The trash link, its confirm() dialog and
+  // the alert text come from the recorded delete flow (P10); it had not run live when this was
+  // written. The user's certificate stays in Cert Manager.
+  async deleteUser({ username, fullName }) {
+    assertUsername(username);
+    assertNonEmpty('fullName', fullName);
+    await this.#requireEdit(username, { fullName });
+    const page = this.#page;
+    await this.#gotoUsers();
+    const row = this.#row(username);
+    if ((await row.count()) !== 1) throw new PfSenseError(`expected one row for ${username}`);
+    page.once('dialog', (dialog) => dialog.accept());
+    await row.locator('a.fa-trash-can').click();
+    await page.waitForLoadState('domcontentloaded');
+    await page.getByRole('alert').filter({ hasText: `Successfully deleted user: ${username}` }).waitFor();
+    await this.#gotoUsers();
+    if (await this.#row(username).count()) throw new PfSenseError(`${username} is still listed after the delete`);
+    this.#log('pfsense.deleteUser', { user: username });
+  }
+
   // Logs out (best effort) and always closes the browser.
   async close() {
     try {
