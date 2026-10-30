@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Deploys a throwaway copy of the portal (data, queues, app and web in direct mode on the ALB's
-# AWS name, with a placeholder Google client), checks it, then deletes what it deployed and checks
+# Deploys a throwaway copy of the portal (data, secrets, queues, app and web in direct mode on the
+# ALB's AWS name; the secrets stack keeps its placeholders: no real Google client, emails off), checks it, then deletes what it deployed and checks
 # that nothing is left behind. The stacks are deleted even when a step fails or the run is stopped.
 # Provisioning is on, with a throwaway site key: fake-site.mjs plays acc-prov-vm on the real queues.
 # The scheduler runs every 30 s, so check-scheduler.js sees it act.
@@ -22,9 +22,8 @@ export ENTRY_MODE=direct USE_DOMAIN=false PROVISIONING=true SITE_PUBLIC_KEYS GPU
   OVPN_PROFILE_URL=https://example.com/smoke-ovpn MANUAL_GPU_URL=https://example.com/smoke-manual SCHEDULER_INTERVAL_SEC=30
 . "$(dirname "$0")/lib.sh"
 SCRIPTS="$(dirname "$0")"
-STACK_TEST_GOOGLE="$PROJECT-test-google"
 # What this run deletes at the end. Never the kept stacks.
-TEST_STACKS=("$STACK_WEB" "$STACK_APP" "$STACK_QUEUES" "$STACK_DATA" "$STACK_TEST_GOOGLE")
+TEST_STACKS=("$STACK_WEB" "$STACK_APP" "$STACK_QUEUES" "$STACK_DATA" "$STACK_SECRETS")
 keep=false
 [ "${1:-}" = --keep ] && keep=true
 started=$(date +%s)
@@ -71,10 +70,7 @@ done
 # Creates network and platform when they are missing; otherwise a quick no-op (or an update).
 "$SCRIPTS/deploy.sh" network platform
 "$SCRIPTS/push-images.sh"
-deploy "$STACK_TEST_GOOGLE" test-google.yaml "Project=$PROJECT"
-GOOGLE_SECRET_ARN=$(stack_output "$STACK_TEST_GOOGLE" SecretArn)
-export GOOGLE_SECRET_ARN
-"$SCRIPTS/deploy.sh" data queues app web
+"$SCRIPTS/deploy.sh" data secrets queues app web
 
 url=$(stack_output "$STACK_APP" PublicUrl)
 echo "== checks against $url (after $(elapsed))"
@@ -95,6 +91,12 @@ expect "no sign-in token gives 401 (/api/auth/me)" 401 "$(status "$url/api/auth/
 expect "a state change from another origin gives 403" 403 "$(status -X POST -H 'Origin: https://evil.example' "$url/api/auth/logout")"
 redirect=$(curl -s "$url/api/auth/google" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{console.log(new URL(JSON.parse(s).auth_url).searchParams.get("redirect_uri"))}catch{console.log("none")}})')
 expect "Google sign-in starts with this deploy's callback URL" "$url/api/auth/google/callback" "$redirect"
+# ECS injects every key of the mail secret (the placeholders: SMTP_HOST empty, emails off).
+if "$SCRIPTS/run-task.sh" node -e "process.exit(['SMTP_HOST','SMTP_PORT','SMTP_SECURE','SMTP_USER','SMTP_APP_PASSWORD','MAIL_FROM','MAIL_REPLY_TO'].every(k => k in process.env) ? 0 : 1)"; then
+  pass "the SMTP settings reach the backend from Secrets Manager (secrets stack)"
+else
+  fail "SMTP settings from Secrets Manager"
+fi
 if "$SCRIPTS/run-task.sh" node scripts/check-db.js; then
   pass "database integration check in a one-off task (run-task.sh check-db)"
 else

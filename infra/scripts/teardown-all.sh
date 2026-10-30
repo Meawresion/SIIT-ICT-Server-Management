@@ -15,7 +15,7 @@ for arg in "$@"; do
   esac
 done
 
-stacks=("$STACK_EDGE" "$STACK_WEB" "$STACK_APP" "$STACK_QUEUES" "$STACK_DATA" "$PROJECT-test-google" "$STACK_PLATFORM" "$STACK_CERT" "$STACK_NETWORK")
+stacks=("$STACK_EDGE" "$STACK_WEB" "$STACK_APP" "$STACK_QUEUES" "$STACK_DATA" "$STACK_SECRETS" "$STACK_PLATFORM" "$STACK_CERT" "$STACK_NETWORK")
 kept=("$STACK_DNS")
 if [ "$with_dns" = true ]; then stacks+=("$STACK_DNS"); kept=(); fi
 

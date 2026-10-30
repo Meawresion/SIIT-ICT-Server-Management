@@ -42,7 +42,11 @@ Parameters:
     Description: Role of the running backend (Learner Lab - LabRole, D30)
   GoogleSecretArn:
     Type: String
-    Description: Secret with GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET, created once by hand (infra/README.md)
+    Description: Secret with GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET (secrets stack, filled by set-secrets.sh)
+  MailSecretArn:
+    Type: String
+    Default: ''
+    Description: Secret with the SMTP_* and MAIL_* settings (secrets stack); empty = no status emails
   CloudFrontPrefixListId:
     Type: String
     Default: ''
@@ -148,6 +152,7 @@ Conditions:
   ViaCloudFront: !Equals [!Ref EntryMode, cloudfront]
   HasDomain: !Not [!Equals [!Ref DnsStack, '']]
   HasCert: !Not [!Equals [!Ref CertStack, '']]
+  HasMail: !Not [!Equals [!Ref MailSecretArn, '']]
   NoCert: !Equals [!Ref CertStack, '']
   HasQueues: !Not [!Equals [!Ref QueuesStack, '']]
 
@@ -462,6 +467,42 @@ Resources:
               ValueFrom: !Sub '${GoogleSecretArn}:GOOGLE_CLIENT_ID::'
             - Name: GOOGLE_CLIENT_SECRET
               ValueFrom: !Sub '${GoogleSecretArn}:GOOGLE_CLIENT_SECRET::'
+            # Status emails (S2); SMTP_HOST empty = only logged.
+            - !If
+              - HasMail
+              - Name: SMTP_HOST
+                ValueFrom: !Sub '${MailSecretArn}:SMTP_HOST::'
+              - !Ref AWS::NoValue
+            - !If
+              - HasMail
+              - Name: SMTP_PORT
+                ValueFrom: !Sub '${MailSecretArn}:SMTP_PORT::'
+              - !Ref AWS::NoValue
+            - !If
+              - HasMail
+              - Name: SMTP_SECURE
+                ValueFrom: !Sub '${MailSecretArn}:SMTP_SECURE::'
+              - !Ref AWS::NoValue
+            - !If
+              - HasMail
+              - Name: SMTP_USER
+                ValueFrom: !Sub '${MailSecretArn}:SMTP_USER::'
+              - !Ref AWS::NoValue
+            - !If
+              - HasMail
+              - Name: SMTP_APP_PASSWORD
+                ValueFrom: !Sub '${MailSecretArn}:SMTP_APP_PASSWORD::'
+              - !Ref AWS::NoValue
+            - !If
+              - HasMail
+              - Name: MAIL_FROM
+                ValueFrom: !Sub '${MailSecretArn}:MAIL_FROM::'
+              - !Ref AWS::NoValue
+            - !If
+              - HasMail
+              - Name: MAIL_REPLY_TO
+                ValueFrom: !Sub '${MailSecretArn}:MAIL_REPLY_TO::'
+              - !Ref AWS::NoValue
             - !If
               - HasQueues
               - Name: MSG_PRIVATE_KEY

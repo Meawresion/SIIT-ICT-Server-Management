@@ -12,16 +12,25 @@ if [ ! -f "$CONFIG" ]; then
   exit 1
 fi
 # Values set in the environment (ENTRY_MODE=direct deploy.sh app) win over config.env.
-overrides=$(declare -p ENTRY_MODE USE_DOMAIN GOOGLE_SECRET_ARN PROVISIONING SITE_PUBLIC_KEYS GPU_NODES OVPN_PROFILE_URL MANUAL_GPU_URL SCHEDULER_INTERVAL_SEC 2>/dev/null || true)
+overrides=$(declare -p ENTRY_MODE USE_DOMAIN PROVISIONING SITE_PUBLIC_KEYS GPU_NODES OVPN_PROFILE_URL MANUAL_GPU_URL SCHEDULER_INTERVAL_SEC 2>/dev/null || true)
 set -a
 # shellcheck source=/dev/null
 . "$CONFIG"
 set +a
 eval "$overrides"
-for key in AWS_PROFILE AWS_REGION PROJECT ZONE_NAME APP_HOST ORIGIN_HOST ROLE_NAME GOOGLE_SECRET_NAME DOCKER; do
+# The secrets in config.env stay shell variables of this script: they are not passed on to the
+# programs it runs (aws, docker, node). set-secrets.sh hands them to one node process.
+SECRET_KEYS=(GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET SMTP_HOST SMTP_PORT SMTP_SECURE SMTP_USER SMTP_APP_PASSWORD MAIL_FROM MAIL_REPLY_TO)
+export -n "${SECRET_KEYS[@]}" 2>/dev/null || true
+for key in AWS_PROFILE AWS_REGION PROJECT ZONE_NAME APP_HOST ORIGIN_HOST ROLE_NAME DOCKER; do
   if [ -z "${!key:-}" ]; then echo "Missing $key in $CONFIG" >&2; exit 1; fi
 done
 export AWS_DEFAULT_REGION="$AWS_REGION"
+# A config.env written for Git Bash (DOCKER="wsl.exe -d <distro> -- docker") also works from a WSL
+# shell, where Docker runs right here.
+if [[ $DOCKER == wsl.exe* ]] && ! command -v cygpath >/dev/null && grep -qi microsoft /proc/version 2>/dev/null; then
+  DOCKER=docker
+fi
 # cloudfront: the target design. direct: the ALB is the public entry (accounts without CloudFront).
 ENTRY_MODE=${ENTRY_MODE:-cloudfront}
 # false: no hosted zone or certificate; the ALB answers on its AWS name over HTTP (smoke tests).
@@ -38,6 +47,7 @@ STACK_APP="$PROJECT-app"
 STACK_EDGE="$PROJECT-edge"
 STACK_WEB="$PROJECT-web"
 STACK_QUEUES="$PROJECT-queues"
+STACK_SECRETS="$PROJECT-secrets"
 
 # aws with text output and without the Windows carriage returns
 awst() { aws --output text "$@" | tr -d '\r'; }
@@ -88,9 +98,10 @@ require_image() {
   fi
 }
 
-# Docker may run in WSL (DOCKER="wsl.exe -d <distro> -- docker"): it then needs WSL paths.
+# From Git Bash, Docker may run in WSL (DOCKER="wsl.exe -d <distro> -- docker"): it then needs WSL
+# paths. Run from WSL or Linux itself (no cygpath), a path is already one.
 docker_path() {
-  if [[ $DOCKER == wsl.exe* ]]; then
+  if [[ $DOCKER == wsl.exe* ]] && command -v cygpath >/dev/null; then
     local distro
     distro=$(sed -E 's/.*-d ([^ ]+).*/\1/' <<<"$DOCKER")
     MSYS_NO_PATHCONV=1 wsl.exe -d "$distro" -- wslpath -a "$(cygpath -m "$1")" | tr -d '\r'
@@ -130,7 +141,7 @@ delete_stacks() {
       aws ecs update-service --cluster "$PROJECT" --service "$service" --desired-count 0 >/dev/null || true
     fi
   done
-  for wave in "$STACK_EDGE $STACK_WEB" "$STACK_APP" "$STACK_QUEUES $STACK_DATA $PROJECT-test-google" \
+  for wave in "$STACK_EDGE $STACK_WEB" "$STACK_APP" "$STACK_QUEUES $STACK_DATA $STACK_SECRETS" \
     "$STACK_PLATFORM $STACK_CERT" "$STACK_NETWORK $STACK_DNS"; do
     pids=()
     for stack in $wave; do
