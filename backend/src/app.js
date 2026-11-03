@@ -1,6 +1,6 @@
 import express from 'express';
 import cors from 'cors';
-import env from './config/env.js';
+import env, { serviceRole, servesIdentity, servesRequests } from './config/env.js';
 import prisma from './lib/prisma.js';
 import { errorHandler, notFoundHandler, requestContext } from './middleware/error.middleware.js';
 import auth_routes from './routes/auth.routes.js';
@@ -53,11 +53,17 @@ app.get('/health/ready', async (req, res) => {
   }
 });
 
-// Routes
-app.use('/api/auth', auth_routes);
-app.use('/api/users', user_routes);
-app.use('/api/requests', request_routes);
-app.use('/api/reviewer', reviewer_routes);
+// Routes. On AWS the identity and request services each serve their own (D34; the ALB routes by
+// path); the other service's paths are a 404 here.
+const role = serviceRole();
+if (servesIdentity(role)) {
+  app.use('/api/auth', auth_routes);
+  app.use('/api/users', user_routes);
+}
+if (servesRequests(role)) {
+  app.use('/api/requests', request_routes);
+  app.use('/api/reviewer', reviewer_routes);
+}
 
 // 404 handler
 app.use(notFoundHandler);

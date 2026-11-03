@@ -15,7 +15,7 @@
 //                          in load goes to the first (D12)
 //   OVPN_PROFILE_URL, MANUAL_GPU_URL, MANUAL_BIGDATA_URL   links put in the student's email (D14)
 //
-// SERVICE_ROLE=api (the API service on AWS, D34) only queues jobs in the outbox: it needs
+// SERVICE_ROLE=api or requests (the API services on AWS, D34) only queue jobs in the outbox: they need
 // MESSAGE_TRANSPORT (provisioning on), GPU_NODES and the links, but no queue, key or lifetime. The
 // provisioning service (SERVICE_ROLE=worker) and a single local process (all) need everything.
 
@@ -38,7 +38,7 @@ export function loadProvisioningConfig(source = process.env) {
   if (!transport) return null;
   const problems = [];
   const need = (keys) => keys.filter((k) => !source[k]).forEach((k) => problems.push(`${k} is required`));
-  const apiOnly = source.SERVICE_ROLE === 'api';
+  const apiOnly = ['api', 'requests'].includes(source.SERVICE_ROLE);
 
   let amqp, sqs;
   if (!['amqp', 'sqs'].includes(transport)) {

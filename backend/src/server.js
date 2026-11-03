@@ -1,5 +1,5 @@
 import app from './app.js';
-import env, { checkEnv, serviceRole } from './config/env.js';
+import env, { checkEnv, serviceRole, servesRequests } from './config/env.js';
 import { loadIdentityRules } from './config/identity.js';
 import { provisioningConfig } from './config/provisioning.js';
 import { loadMailConfig } from './config/mail.js';
@@ -13,8 +13,10 @@ checkEnv();
 const role = serviceRole();
 if (role === 'worker') throw new Error('SERVICE_ROLE=worker runs src/worker.js, not the API');
 loadIdentityRules();
-provisioningConfig();
-loadSchedulerConfig();
+if (servesRequests(role)) {
+  provisioningConfig();
+  loadSchedulerConfig();
+}
 if (process.env.EVENT_BUS_NAME) log('mail.via_events', { bus: process.env.EVENT_BUS_NAME });
 else if (!loadMailConfig()) log('mail.off', { reason: 'no SMTP_HOST: status emails are only logged' });
 
@@ -24,7 +26,7 @@ const SHUTDOWN_TIMEOUT_MS = 10_000;
 const server = app.listen(port, () => {
   log('server.started', { port, node_env: env.node_env, role });
 });
-// SERVICE_ROLE=api (AWS): the provisioning service does the background work (D34).
+// On AWS (api, identity, requests) the provisioning service does the background work (D34).
 const background = role === 'all' ? await startBackground({ log }) : null;
 
 // ECS sends SIGTERM on every deploy and scale-in: stop taking connections, let the requests in
