@@ -6,9 +6,11 @@ Description: >-
   entry, over HTTPS with a domain, or over HTTP on its AWS name for smoke tests (no sign-in: the
   cookie needs HTTPS); it sends /api/* and /health to the backend, and the web stack adds the
   frontend for everything else. Plain settings go in the task definition; secret ones come from Secrets
-  Manager (D13). This is the API service (D34): with a queues stack it queues GPU and Big Data jobs
-  in the outbox, and the provisioning stack's service sends them; status emails go as events to the
-  events stack's notification service. It holds neither the site key nor the SMTP settings.
+  Manager (D13). The service here is the request service (D34: /api/requests, /api/reviewer and
+  /health); the identity stack adds the identity service for /api/auth and /api/users. With a
+  queues stack it queues GPU and Big Data jobs in the outbox, and the provisioning stack's service
+  sends them; status emails go as events to the events stack's notification service. It holds
+  neither the site key, the SMTP settings nor the Google client.
 
 Parameters:
   Project:
@@ -42,9 +44,6 @@ Parameters:
   TaskRoleArn:
     Type: String
     Description: Role of the running backend (Learner Lab - LabRole, D30)
-  GoogleSecretArn:
-    Type: String
-    Description: Secret with GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET (secrets stack, filled by set-secrets.sh)
   EventsStack:
     Type: String
     Description: The events stack (event bus to the notification service)
@@ -306,7 +305,8 @@ Resources:
     Type: AWS::ElasticLoadBalancingV2::ListenerRule
     Properties:
       ListenerArn: !If [HasCert, !Ref HttpsListener, !Ref HttpListener]
-      Priority: 1
+      # After the identity stack's rule (priority 2), before the web stack's (10).
+      Priority: 5
       Conditions:
         - !If
           - ViaCloudFront
@@ -466,14 +466,6 @@ Resources:
                   - Zone:
                       Fn::ImportValue: !Sub '${DnsStack}-ZoneName'
                 - !Sub 'http://${LoadBalancer.DNSName}'
-            - Name: GOOGLE_CALLBACK_URL
-              Value: !If
-                - HasDomain
-                - !Sub
-                  - 'https://${AppHost}.${Zone}/api/auth/google/callback'
-                  - Zone:
-                      Fn::ImportValue: !Sub '${DnsStack}-ZoneName'
-                - !Sub 'http://${LoadBalancer.DNSName}/api/auth/google/callback'
             - Name: STUDENT_EMAIL_DOMAIN
               Value: !Ref StudentEmailDomain
             - Name: STUDENT_ID_DIGITS
@@ -496,7 +488,7 @@ Resources:
               Value: !Ref AWS::Region
             # The API service: no background work (the provisioning service does it, D34).
             - Name: SERVICE_ROLE
-              Value: api
+              Value: requests
             # Status emails go as events to the notification service.
             - Name: EVENT_BUS_NAME
               Value:
@@ -541,10 +533,6 @@ Resources:
                     Fn::ImportValue: !Sub '${DataStack}-DbSecretArn'
             - Name: JWT_SECRET
               ValueFrom: !Sub '${AppSecret}:JWT_SECRET::'
-            - Name: GOOGLE_CLIENT_ID
-              ValueFrom: !Sub '${GoogleSecretArn}:GOOGLE_CLIENT_ID::'
-            - Name: GOOGLE_CLIENT_SECRET
-              ValueFrom: !Sub '${GoogleSecretArn}:GOOGLE_CLIENT_SECRET::'
           LogConfiguration:
             LogDriver: awslogs
             Options:
@@ -592,6 +580,11 @@ Outputs:
     Value: !Ref OriginVerifySecret
     Export:
       Name: !Sub '${AWS::StackName}-OriginVerifySecretArn'
+  AppSecretArn:
+    Description: JWT_SECRET, shared with the identity service (it signs, both check)
+    Value: !Ref AppSecret
+    Export:
+      Name: !Sub '${AWS::StackName}-AppSecretArn'
   ListenerArn:
     Description: The web stack adds its frontend rule here (direct mode)
     Value: !If [HasCert, !Ref HttpsListener, !Ref HttpListener]

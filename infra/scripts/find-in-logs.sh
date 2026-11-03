@@ -3,7 +3,7 @@
 # Usage: find-in-logs.sh <text> [--since <time>] [--until <time>] [--group <name>]... [--alb [--date YYYY-MM-DD]...]
 #   Default: a CloudWatch Logs Insights query over the service and audit log groups (logs stack),
 #   from --since (default: 2 days ago) to --until (default: now). Times are anything `date -d`
-#   reads, e.g. 2026-11-03T10:00Z or "3 hours ago". --group backend|frontend|mysql|audit limits
+#   reads, e.g. 2026-11-03T10:00Z or "3 hours ago". --group backend|identity|provisioning|notification|frontend|mysql|audit limits
 #   the search (repeatable). Prints "time  log group  log line" for every matching line, oldest first.
 #   --alb: searches the ALB access log files in S3 instead (UTC days; default today and yesterday).
 #   Exit code 1 when nothing matched.
@@ -56,7 +56,7 @@ if [ "$alb" = true ]; then
 fi
 
 if [ ${#groups[@]} -eq 0 ]; then
-  for output in BackendLogGroup FrontendLogGroup MysqlLogGroup AuditLogGroup; do groups+=("$(stack_output "$STACK_LOGS" "$output")"); done
+  for output in BackendLogGroup IdentityLogGroup ProvisioningLogGroup NotificationLogGroup FrontendLogGroup MysqlLogGroup AuditLogGroup; do groups+=("$(stack_output "$STACK_LOGS" "$output")"); done
 fi
 start=$(date -u -d "${since:-2 days ago}" +%s)
 end=$(date -u -d "${until:-now}" +%s)

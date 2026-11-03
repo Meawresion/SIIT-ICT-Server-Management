@@ -57,6 +57,12 @@ Resources:
     Properties:
       LogGroupName: !Sub '/${Project}/frontend'
       RetentionInDays: !Ref AppLogDays
+  # The identity service (D34: sign-in, profiles).
+  IdentityLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/${Project}/identity'
+      RetentionInDays: !Ref AppLogDays
   # The provisioning service (D34: site jobs and results, scheduler, audit shipping).
   ProvisioningLogGroup:
     Type: AWS::Logs::LogGroup
@@ -88,6 +94,17 @@ Resources:
     Type: AWS::Logs::MetricFilter
     Properties:
       LogGroupName: !Ref BackendLogGroup
+      FilterPattern: '{ $.level = "error" }'
+      MetricTransformations:
+        - MetricNamespace: !Sub '${Project}/logs'
+          MetricName: BackendErrors
+          MetricValue: '1'
+          DefaultValue: 0
+  # Same metric as the request service's errors, so one alarm covers both API services.
+  IdentityErrorFilter:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !Ref IdentityLogGroup
       FilterPattern: '{ $.level = "error" }'
       MetricTransformations:
         - MetricNamespace: !Sub '${Project}/logs'
@@ -131,7 +148,7 @@ Resources:
     Type: AWS::Logs::QueryDefinition
     Properties:
       Name: !Sub '${Project}/find-reference'
-      LogGroupNames: [!Ref BackendLogGroup, !Ref ProvisioningLogGroup, !Ref NotificationLogGroup, !Ref FrontendLogGroup, !Ref MysqlLogGroup, !Ref AuditLogGroup]
+      LogGroupNames: [!Ref BackendLogGroup, !Ref IdentityLogGroup, !Ref ProvisioningLogGroup, !Ref NotificationLogGroup, !Ref FrontendLogGroup, !Ref MysqlLogGroup, !Ref AuditLogGroup]
       QueryString: |-
         fields @timestamp, @log, @message
         | filter @message like "REFERENCE-FROM-THE-ERROR-PAGE"
@@ -141,7 +158,7 @@ Resources:
     Type: AWS::Logs::QueryDefinition
     Properties:
       Name: !Sub '${Project}/backend-errors'
-      LogGroupNames: [!Ref BackendLogGroup, !Ref ProvisioningLogGroup, !Ref NotificationLogGroup]
+      LogGroupNames: [!Ref BackendLogGroup, !Ref IdentityLogGroup, !Ref ProvisioningLogGroup, !Ref NotificationLogGroup]
       QueryString: |-
         fields @timestamp, event, request_id, error.message, @message
         | filter level = "error" or status >= 500
@@ -275,6 +292,10 @@ Outputs:
     Value: !Ref FrontendLogGroup
     Export:
       Name: !Sub '${AWS::StackName}-FrontendLogGroup'
+  IdentityLogGroup:
+    Value: !Ref IdentityLogGroup
+    Export:
+      Name: !Sub '${AWS::StackName}-IdentityLogGroup'
   ProvisioningLogGroup:
     Value: !Ref ProvisioningLogGroup
     Export:

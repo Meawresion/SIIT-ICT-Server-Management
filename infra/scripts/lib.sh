@@ -51,6 +51,7 @@ STACK_SECRETS="$PROJECT-secrets"
 STACK_LOGS="$PROJECT-logs"
 STACK_EVENTS="$PROJECT-events"
 STACK_PROVISIONING="$PROJECT-provisioning"
+STACK_IDENTITY="$PROJECT-identity"
 
 # aws with text output and without the Windows carriage returns
 awst() { aws --output text "$@" | tr -d '\r'; }
@@ -156,12 +157,12 @@ delete_one() {
 # a stack goes only after the stacks that import from it, and the stacks of one wave go in parallel.
 delete_stacks() {
   local wanted=" $* " wave stack failed=0 pids p service
-  for service in frontend backend provisioning mysql; do
+  for service in frontend identity backend provisioning mysql; do
     if service_exists "$service"; then
       aws ecs update-service --cluster "$PROJECT" --service "$service" --desired-count 0 >/dev/null || true
     fi
   done
-  for wave in "$STACK_EDGE $STACK_WEB $STACK_PROVISIONING" "$STACK_APP" "$STACK_EVENTS" "$STACK_QUEUES $STACK_DATA $STACK_SECRETS" \
+  for wave in "$STACK_EDGE $STACK_WEB $STACK_PROVISIONING $STACK_IDENTITY" "$STACK_APP" "$STACK_EVENTS" "$STACK_QUEUES $STACK_DATA $STACK_SECRETS" \
     "$STACK_PLATFORM $STACK_CERT $STACK_LOGS" "$STACK_NETWORK $STACK_DNS"; do
     pids=()
     for stack in $wave; do
@@ -207,7 +208,7 @@ leftovers() {
   check "EFS file systems" efs describe-file-systems --query "FileSystems[?Name=='$PROJECT-mysql-data'].FileSystemId"
   local kept_groups=()
   [[ $allowed == *" $STACK_QUEUES "* ]] && kept_groups+=("/$PROJECT/message-keys")
-  [[ $allowed == *" $STACK_LOGS "* ]] && kept_groups+=("/$PROJECT/backend" "/$PROJECT/provisioning" "/$PROJECT/notification" "/$PROJECT/frontend" "/$PROJECT/mysql" "/$PROJECT/audit")
+  [[ $allowed == *" $STACK_LOGS "* ]] && kept_groups+=("/$PROJECT/backend" "/$PROJECT/identity" "/$PROJECT/provisioning" "/$PROJECT/notification" "/$PROJECT/frontend" "/$PROJECT/mysql" "/$PROJECT/audit")
   check "log groups" logs describe-log-groups --log-group-name-prefix "/$PROJECT/" \
     --query "logGroups[?!contains([$(printf "'%s'," "${kept_groups[@]}" | sed 's/,$//')], logGroupName)].logGroupName"
   # The queues stack's provisioning queues and key Lambda may stay; the events stack's never do.
