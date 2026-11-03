@@ -6,7 +6,9 @@ Description: >-
   entry, over HTTPS with a domain, or over HTTP on its AWS name for smoke tests (no sign-in: the
   cookie needs HTTPS); it sends /api/* and /health to the backend, and the web stack adds the
   frontend for everything else. Plain settings go in the task definition; secret ones come from Secrets
-  Manager (D13). With a queues stack, the backend also provisions GPU requests through SQS.
+  Manager (D13). This is the API service (D34): with a queues stack it queues GPU and Big Data jobs
+  in the outbox, and the provisioning stack's service sends them; status emails go as events to the
+  events stack's notification service. It holds neither the site key nor the SMTP settings.
 
 Parameters:
   Project:
@@ -43,10 +45,9 @@ Parameters:
   GoogleSecretArn:
     Type: String
     Description: Secret with GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET (secrets stack, filled by set-secrets.sh)
-  MailSecretArn:
+  EventsStack:
     Type: String
-    Default: ''
-    Description: Secret with the SMTP_* and MAIL_* settings (secrets stack); empty = no status emails
+    Description: The events stack (event bus to the notification service)
   CloudFrontPrefixListId:
     Type: String
     Default: ''
@@ -105,10 +106,6 @@ Parameters:
     Type: String
     Default: ''
     Description: Empty = automatic provisioning off (GPU requests are activated by hand)
-  SitePublicKeys:
-    Type: String
-    Default: ''
-    Description: acc-prov-vm's public key bundle(s), comma-separated (MSG_PEER_PUBLIC_KEYS; public, not secret)
   GpuNodes:
     Type: String
     Default: ''
@@ -122,10 +119,6 @@ Parameters:
   ManualBigDataUrl:
     Type: String
     Default: ''
-  MessageJobTtlSeconds:
-    Type: Number
-    Default: 259200
-    Description: How long a job stays valid, so it survives the site being offline
 
 Rules:
   CloudFrontNeedsDomain:
@@ -140,12 +133,11 @@ Rules:
     RuleCondition: !Not [!Equals [!Ref QueuesStack, '']]
     Assertions:
       - Assert: !And
-          - !Not [!Equals [!Ref SitePublicKeys, '']]
           - !Not [!Equals [!Ref GpuNodes, '']]
           - !Not [!Equals [!Ref OvpnProfileUrl, '']]
           - !Not [!Equals [!Ref ManualGpuUrl, '']]
           - !Not [!Equals [!Ref ManualBigDataUrl, '']]
-        AssertDescription: provisioning needs SitePublicKeys, GpuNodes, OvpnProfileUrl, ManualGpuUrl and ManualBigDataUrl
+        AssertDescription: provisioning needs GpuNodes, OvpnProfileUrl, ManualGpuUrl and ManualBigDataUrl
   CertNeedsDomain:
     RuleCondition: !Not [!Equals [!Ref CertStack, '']]
     Assertions:
@@ -156,7 +148,6 @@ Conditions:
   ViaCloudFront: !Equals [!Ref EntryMode, cloudfront]
   HasDomain: !Not [!Equals [!Ref DnsStack, '']]
   HasCert: !Not [!Equals [!Ref CertStack, '']]
-  HasMail: !Not [!Equals [!Ref MailSecretArn, '']]
   NoCert: !Equals [!Ref CertStack, '']
   HasQueues: !Not [!Equals [!Ref QueuesStack, '']]
   # direct mode with a certificate: port 80 only redirects to HTTPS.
@@ -401,44 +392,6 @@ Resources:
       ComparisonOperator: GreaterThanOrEqualToThreshold
       TreatMissingData: notBreaching
       AlarmActions: [{'Fn::ImportValue': !Sub '${LogsStack}-AlertTopicArn'}]
-  # A job or result the other side could not process (the scheduler also fails the request).
-  DeadLetterAlarm:
-    Type: AWS::CloudWatch::Alarm
-    Condition: HasQueues
-    Properties:
-      AlarmName: !Sub '${Project}-dead-letters'
-      AlarmDescription: A provisioning job or result reached a dead-letter queue
-      Metrics:
-        - Id: total
-          Expression: requests + results
-          ReturnData: true
-        - Id: requests
-          ReturnData: false
-          MetricStat:
-            Stat: Maximum
-            Period: 300
-            Metric:
-              Namespace: AWS/SQS
-              MetricName: ApproximateNumberOfMessagesVisible
-              Dimensions:
-                - Name: QueueName
-                  Value: !Sub '${Project}-provision-requests-dlq'
-        - Id: results
-          ReturnData: false
-          MetricStat:
-            Stat: Maximum
-            Period: 300
-            Metric:
-              Namespace: AWS/SQS
-              MetricName: ApproximateNumberOfMessagesVisible
-              Dimensions:
-                - Name: QueueName
-                  Value: !Sub '${Project}-provision-results-dlq'
-      EvaluationPeriods: 1
-      Threshold: 1
-      ComparisonOperator: GreaterThanOrEqualToThreshold
-      TreatMissingData: notBreaching
-      AlarmActions: [{'Fn::ImportValue': !Sub '${LogsStack}-AlertTopicArn'}]
   # A task of this project's cluster that crashed or could not start (deploys and scale-in stop
   # tasks with other stop codes, so they are not reported). EventBridge rules cost nothing.
   TaskStoppedRule:
@@ -541,54 +494,19 @@ Resources:
               Value: !Ref SiteTimeZone
             - Name: AWS_REGION
               Value: !Ref AWS::Region
-            # The audit trail (request_event) is copied into this log group (kept 400 days).
-            - Name: AUDIT_LOG_GROUP
+            # The API service: no background work (the provisioning service does it, D34).
+            - Name: SERVICE_ROLE
+              Value: api
+            # Status emails go as events to the notification service.
+            - Name: EVENT_BUS_NAME
               Value:
-                Fn::ImportValue: !Sub '${LogsStack}-AuditLogGroup'
-            # Automatic provisioning through acc-prov-vm (plan §2), only with a queues stack.
+                Fn::ImportValue: !Sub '${EventsStack}-EventBusName'
+            # Automatic provisioning through acc-prov-vm (plan §2), only with a queues stack: the
+            # API only queues the jobs, so it needs no queue URL or key.
             - !If
               - HasQueues
               - Name: MESSAGE_TRANSPORT
                 Value: sqs
-              - !Ref AWS::NoValue
-            - !If
-              - HasQueues
-              - Name: SQS_REQUEST_QUEUE_URL
-                Value:
-                  Fn::ImportValue: !Sub '${QueuesStack}-RequestQueueUrl'
-              - !Ref AWS::NoValue
-            - !If
-              - HasQueues
-              - Name: SQS_RESULT_QUEUE_URL
-                Value:
-                  Fn::ImportValue: !Sub '${QueuesStack}-ResultQueueUrl'
-              - !Ref AWS::NoValue
-            - !If
-              - HasQueues
-              - Name: SQS_REQUEST_DLQ_URL
-                Value:
-                  Fn::ImportValue: !Sub '${QueuesStack}-RequestDeadLetterQueueUrl'
-              - !Ref AWS::NoValue
-            - !If
-              - HasQueues
-              - Name: SQS_RESULT_DLQ_URL
-                Value:
-                  Fn::ImportValue: !Sub '${QueuesStack}-ResultDeadLetterQueueUrl'
-              - !Ref AWS::NoValue
-            - !If
-              - HasQueues
-              - Name: MSG_PEER_PUBLIC_KEYS
-                Value: !Ref SitePublicKeys
-              - !Ref AWS::NoValue
-            - !If
-              - HasQueues
-              - Name: MSG_JOB_TTL_SEC
-                Value: !Ref MessageJobTtlSeconds
-              - !Ref AWS::NoValue
-            - !If
-              - HasQueues
-              - Name: MSG_MAX_TTL_SEC
-                Value: !Ref MessageJobTtlSeconds
               - !Ref AWS::NoValue
             - !If
               - HasQueues
@@ -627,50 +545,6 @@ Resources:
               ValueFrom: !Sub '${GoogleSecretArn}:GOOGLE_CLIENT_ID::'
             - Name: GOOGLE_CLIENT_SECRET
               ValueFrom: !Sub '${GoogleSecretArn}:GOOGLE_CLIENT_SECRET::'
-            # Status emails (S2); SMTP_HOST empty = only logged.
-            - !If
-              - HasMail
-              - Name: SMTP_HOST
-                ValueFrom: !Sub '${MailSecretArn}:SMTP_HOST::'
-              - !Ref AWS::NoValue
-            - !If
-              - HasMail
-              - Name: SMTP_PORT
-                ValueFrom: !Sub '${MailSecretArn}:SMTP_PORT::'
-              - !Ref AWS::NoValue
-            - !If
-              - HasMail
-              - Name: SMTP_SECURE
-                ValueFrom: !Sub '${MailSecretArn}:SMTP_SECURE::'
-              - !Ref AWS::NoValue
-            - !If
-              - HasMail
-              - Name: SMTP_USER
-                ValueFrom: !Sub '${MailSecretArn}:SMTP_USER::'
-              - !Ref AWS::NoValue
-            - !If
-              - HasMail
-              - Name: SMTP_APP_PASSWORD
-                ValueFrom: !Sub '${MailSecretArn}:SMTP_APP_PASSWORD::'
-              - !Ref AWS::NoValue
-            - !If
-              - HasMail
-              - Name: MAIL_FROM
-                ValueFrom: !Sub '${MailSecretArn}:MAIL_FROM::'
-              - !Ref AWS::NoValue
-            - !If
-              - HasMail
-              - Name: MAIL_REPLY_TO
-                ValueFrom: !Sub '${MailSecretArn}:MAIL_REPLY_TO::'
-              - !Ref AWS::NoValue
-            - !If
-              - HasQueues
-              - Name: MSG_PRIVATE_KEY
-                ValueFrom: !Sub
-                  - '${Arn}:MSG_PRIVATE_KEY::'
-                  - Arn:
-                      Fn::ImportValue: !Sub '${QueuesStack}-BackendKeysSecretArn'
-              - !Ref AWS::NoValue
           LogConfiguration:
             LogDriver: awslogs
             Options:
@@ -740,7 +614,9 @@ Outputs:
     Export:
       Name: !Sub '${AWS::StackName}-LoadBalancerFullName'
   PublicUrl:
-    Description: The portal in direct mode (cloudfront mode - the edge stack's AppUrl)
+    Description: The portal in direct mode (cloudfront mode - the edge stack's AppUrl); the provisioning service's email links
+    Export:
+      Name: !Sub '${AWS::StackName}-PublicUrl'
     Value: !If
       - HasDomain
       - !Sub

@@ -57,6 +57,18 @@ Resources:
     Properties:
       LogGroupName: !Sub '/${Project}/frontend'
       RetentionInDays: !Ref AppLogDays
+  # The provisioning service (D34: site jobs and results, scheduler, audit shipping).
+  ProvisioningLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/${Project}/provisioning'
+      RetentionInDays: !Ref AppLogDays
+  # The notification service (Lambda).
+  NotificationLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/${Project}/notification'
+      RetentionInDays: !Ref AppLogDays
   MysqlLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
@@ -82,6 +94,26 @@ Resources:
           MetricName: BackendErrors
           MetricValue: '1'
           DefaultValue: 0
+  ProvisioningErrorFilter:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !Ref ProvisioningLogGroup
+      FilterPattern: '{ $.level = "error" }'
+      MetricTransformations:
+        - MetricNamespace: !Sub '${Project}/logs'
+          MetricName: ProvisioningErrors
+          MetricValue: '1'
+          DefaultValue: 0
+  NotificationErrorFilter:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !Ref NotificationLogGroup
+      FilterPattern: '{ $.level = "error" }'
+      MetricTransformations:
+        - MetricNamespace: !Sub '${Project}/logs'
+          MetricName: NotificationErrors
+          MetricValue: '1'
+          DefaultValue: 0
   BackendServerErrorFilter:
     Type: AWS::Logs::MetricFilter
     Properties:
@@ -99,7 +131,7 @@ Resources:
     Type: AWS::Logs::QueryDefinition
     Properties:
       Name: !Sub '${Project}/find-reference'
-      LogGroupNames: [!Ref BackendLogGroup, !Ref FrontendLogGroup, !Ref MysqlLogGroup, !Ref AuditLogGroup]
+      LogGroupNames: [!Ref BackendLogGroup, !Ref ProvisioningLogGroup, !Ref NotificationLogGroup, !Ref FrontendLogGroup, !Ref MysqlLogGroup, !Ref AuditLogGroup]
       QueryString: |-
         fields @timestamp, @log, @message
         | filter @message like "REFERENCE-FROM-THE-ERROR-PAGE"
@@ -109,7 +141,7 @@ Resources:
     Type: AWS::Logs::QueryDefinition
     Properties:
       Name: !Sub '${Project}/backend-errors'
-      LogGroupNames: [!Ref BackendLogGroup]
+      LogGroupNames: [!Ref BackendLogGroup, !Ref ProvisioningLogGroup, !Ref NotificationLogGroup]
       QueryString: |-
         fields @timestamp, event, request_id, error.message, @message
         | filter level = "error" or status >= 500
@@ -243,6 +275,14 @@ Outputs:
     Value: !Ref FrontendLogGroup
     Export:
       Name: !Sub '${AWS::StackName}-FrontendLogGroup'
+  ProvisioningLogGroup:
+    Value: !Ref ProvisioningLogGroup
+    Export:
+      Name: !Sub '${AWS::StackName}-ProvisioningLogGroup'
+  NotificationLogGroup:
+    Value: !Ref NotificationLogGroup
+    Export:
+      Name: !Sub '${AWS::StackName}-NotificationLogGroup'
   MysqlLogGroup:
     Value: !Ref MysqlLogGroup
     Export:

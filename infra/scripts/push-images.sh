@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Builds the images (production stages) and pushes them to ECR. Needs the platform stack.
-# Usage: push-images.sh [backend] [mysql] [frontend]
-#   default: backend and mysql, plus frontend in direct mode (with CloudFront it goes to S3:
-#   publish-frontend.sh).
+# Usage: push-images.sh [backend] [mysql] [frontend] [notification]
+#   default: backend, mysql and notification, plus frontend in direct mode (with CloudFront it goes
+#   to S3: publish-frontend.sh).
 . "$(dirname "$0")/lib.sh"
 
 registry="$(account_id).dkr.ecr.$AWS_REGION.amazonaws.com"
@@ -23,7 +23,7 @@ push() {
 }
 
 if [ $# -eq 0 ]; then
-  set -- backend mysql
+  set -- backend mysql notification
   if [ "$ENTRY_MODE" = direct ]; then set -- "$@" frontend; fi
 fi
 for name in "$@"; do
@@ -34,6 +34,8 @@ for name in "$@"; do
     # in frontend/ (or a -dirty build), because the tag follows frontend/ only.
     frontend) push frontend "$(frontend_tag)" "$REPO_DIR/frontend" --target prod \
       --build-arg "VITE_CONTACT_EMAIL=${CONTACT_EMAIL:-}" ;;
+    # The notification Lambda (D34).
+    notification) push notification "$(notification_tag)" "$REPO_DIR/notification" ;;
     *) echo "Unknown image: $name" >&2; exit 1 ;;
   esac
 done

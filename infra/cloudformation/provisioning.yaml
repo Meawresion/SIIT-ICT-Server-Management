@@ -1,0 +1,332 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  The provisioning service (D34): the backend image started as `node src/worker.js`, without HTTP
+  or a load balancer. It sends the outbox's jobs to the site, applies the results, runs the
+  scheduler (reminders, expiry, dead letters, jobs without an answer) and copies the audit trail
+  to its log group. Only this service holds the backend's message key and reads the site queues;
+  the API service just queues jobs. Deleted with the app between test runs.
+
+Parameters:
+  Project:
+    Type: String
+    Default: siit
+  NetworkStack:
+    Type: String
+  PlatformStack:
+    Type: String
+  DataStack:
+    Type: String
+  AppStack:
+    Type: String
+  LogsStack:
+    Type: String
+  EventsStack:
+    Type: String
+  QueuesStack:
+    Type: String
+    Default: ''
+    Description: Empty = automatic provisioning off (only the scheduler and audit shipping run)
+  ImageTag:
+    Type: String
+  ExecutionRoleArn:
+    Type: String
+  TaskRoleArn:
+    Type: String
+  DesiredCount:
+    Type: Number
+    Default: 1
+    Description: Several tasks are safe (SKIP LOCKED, the scheduler lease); one is enough
+  Cpu:
+    Type: String
+    Default: '256'
+  Memory:
+    Type: String
+    Default: '512'
+  StudentEmailDomain:
+    Type: String
+  StudentIdDigits:
+    Type: Number
+  DegreeEmailPrefixes:
+    Type: String
+  StaffEmailDomains:
+    Type: String
+  SchedulerIntervalSeconds:
+    Type: Number
+    Default: 300
+    MinValue: 30
+  ExpiryReminderDays:
+    Type: Number
+    Default: 3
+    MinValue: 0
+    MaxValue: 60
+  SiteTimeZone:
+    Type: String
+    Default: Asia/Bangkok
+  SitePublicKeys:
+    Type: String
+    Default: ''
+  GpuNodes:
+    Type: String
+    Default: ''
+  OvpnProfileUrl:
+    Type: String
+    Default: ''
+  ManualGpuUrl:
+    Type: String
+    Default: ''
+  ManualBigDataUrl:
+    Type: String
+    Default: ''
+  MessageJobTtlSeconds:
+    Type: Number
+    Default: 259200
+
+Rules:
+  ProvisioningNeedsSettings:
+    RuleCondition: !Not [!Equals [!Ref QueuesStack, '']]
+    Assertions:
+      - Assert: !And
+          - !Not [!Equals [!Ref SitePublicKeys, '']]
+          - !Not [!Equals [!Ref GpuNodes, '']]
+          - !Not [!Equals [!Ref OvpnProfileUrl, '']]
+          - !Not [!Equals [!Ref ManualGpuUrl, '']]
+          - !Not [!Equals [!Ref ManualBigDataUrl, '']]
+        AssertDescription: provisioning needs SitePublicKeys, GpuNodes, OvpnProfileUrl, ManualGpuUrl and ManualBigDataUrl
+
+Conditions:
+  HasQueues: !Not [!Equals [!Ref QueuesStack, '']]
+
+Resources:
+  TaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub '${Project}-provisioning'
+      RequiresCompatibilities: [FARGATE]
+      NetworkMode: awsvpc
+      Cpu: !Ref Cpu
+      Memory: !Ref Memory
+      ExecutionRoleArn: !Ref ExecutionRoleArn
+      TaskRoleArn: !Ref TaskRoleArn
+      ContainerDefinitions:
+        - Name: provisioning
+          Image: !Sub
+            - '${Repo}:${ImageTag}'
+            - Repo:
+                Fn::ImportValue: !Sub '${PlatformStack}-BackendRepositoryUri'
+          Essential: true
+          Command: [node, src/worker.js]
+          Environment:
+            - Name: NODE_ENV
+              Value: production
+            - Name: SERVICE_ROLE
+              Value: worker
+            - Name: DB_HOST
+              Value:
+                Fn::ImportValue: !Sub '${DataStack}-DbHost'
+            - Name: DB_PORT
+              Value:
+                Fn::ImportValue: !Sub '${DataStack}-DbPort'
+            - Name: DB_NAME
+              Value:
+                Fn::ImportValue: !Sub '${DataStack}-DbName'
+            # The portal link in the status emails.
+            - Name: FRONTEND_URL
+              Value:
+                Fn::ImportValue: !Sub '${AppStack}-PublicUrl'
+            # The sign-in domains: status emails go only there.
+            - Name: STUDENT_EMAIL_DOMAIN
+              Value: !Ref StudentEmailDomain
+            - Name: STUDENT_ID_DIGITS
+              Value: !Ref StudentIdDigits
+            - Name: DEGREE_EMAIL_PREFIXES
+              Value: !Ref DegreeEmailPrefixes
+            - Name: STAFF_EMAIL_DOMAINS
+              Value: !Ref StaffEmailDomains
+            - Name: SCHEDULER_INTERVAL_SEC
+              Value: !Ref SchedulerIntervalSeconds
+            - Name: EXPIRY_REMINDER_DAYS
+              Value: !Ref ExpiryReminderDays
+            - Name: SITE_TIME_ZONE
+              Value: !Ref SiteTimeZone
+            - Name: AWS_REGION
+              Value: !Ref AWS::Region
+            - Name: AUDIT_LOG_GROUP
+              Value:
+                Fn::ImportValue: !Sub '${LogsStack}-AuditLogGroup'
+            - Name: EVENT_BUS_NAME
+              Value:
+                Fn::ImportValue: !Sub '${EventsStack}-EventBusName'
+            - !If
+              - HasQueues
+              - Name: MESSAGE_TRANSPORT
+                Value: sqs
+              - !Ref AWS::NoValue
+            - !If
+              - HasQueues
+              - Name: SQS_REQUEST_QUEUE_URL
+                Value:
+                  Fn::ImportValue: !Sub '${QueuesStack}-RequestQueueUrl'
+              - !Ref AWS::NoValue
+            - !If
+              - HasQueues
+              - Name: SQS_RESULT_QUEUE_URL
+                Value:
+                  Fn::ImportValue: !Sub '${QueuesStack}-ResultQueueUrl'
+              - !Ref AWS::NoValue
+            - !If
+              - HasQueues
+              - Name: SQS_REQUEST_DLQ_URL
+                Value:
+                  Fn::ImportValue: !Sub '${QueuesStack}-RequestDeadLetterQueueUrl'
+              - !Ref AWS::NoValue
+            - !If
+              - HasQueues
+              - Name: SQS_RESULT_DLQ_URL
+                Value:
+                  Fn::ImportValue: !Sub '${QueuesStack}-ResultDeadLetterQueueUrl'
+              - !Ref AWS::NoValue
+            - !If
+              - HasQueues
+              - Name: MSG_PEER_PUBLIC_KEYS
+                Value: !Ref SitePublicKeys
+              - !Ref AWS::NoValue
+            - !If
+              - HasQueues
+              - Name: MSG_JOB_TTL_SEC
+                Value: !Ref MessageJobTtlSeconds
+              - !Ref AWS::NoValue
+            - !If
+              - HasQueues
+              - Name: MSG_MAX_TTL_SEC
+                Value: !Ref MessageJobTtlSeconds
+              - !Ref AWS::NoValue
+            - !If
+              - HasQueues
+              - Name: GPU_NODES
+                Value: !Ref GpuNodes
+              - !Ref AWS::NoValue
+            - !If
+              - HasQueues
+              - Name: OVPN_PROFILE_URL
+                Value: !Ref OvpnProfileUrl
+              - !Ref AWS::NoValue
+            - !If
+              - HasQueues
+              - Name: MANUAL_GPU_URL
+                Value: !Ref ManualGpuUrl
+              - !Ref AWS::NoValue
+            - !If
+              - HasQueues
+              - Name: MANUAL_BIGDATA_URL
+                Value: !Ref ManualBigDataUrl
+              - !Ref AWS::NoValue
+          Secrets:
+            - Name: DB_USER
+              ValueFrom: !Sub
+                - '${Arn}:username::'
+                - Arn:
+                    Fn::ImportValue: !Sub '${DataStack}-DbSecretArn'
+            - Name: DB_PASSWORD
+              ValueFrom: !Sub
+                - '${Arn}:password::'
+                - Arn:
+                    Fn::ImportValue: !Sub '${DataStack}-DbSecretArn'
+            - !If
+              - HasQueues
+              - Name: MSG_PRIVATE_KEY
+                ValueFrom: !Sub
+                  - '${Arn}:MSG_PRIVATE_KEY::'
+                  - Arn:
+                      Fn::ImportValue: !Sub '${QueuesStack}-BackendKeysSecretArn'
+              - !Ref AWS::NoValue
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group:
+                Fn::ImportValue: !Sub '${LogsStack}-ProvisioningLogGroup'
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: provisioning
+
+  # No load balancer: it only talks to the database, SQS, EventBridge and CloudWatch Logs.
+  Service:
+    Type: AWS::ECS::Service
+    Properties:
+      ServiceName: provisioning
+      Cluster:
+        Fn::ImportValue: !Sub '${PlatformStack}-ClusterName'
+      TaskDefinition: !Ref TaskDefinition
+      LaunchType: FARGATE
+      DesiredCount: !Ref DesiredCount
+      DeploymentConfiguration:
+        MinimumHealthyPercent: 0
+        MaximumPercent: 200
+        DeploymentCircuitBreaker:
+          Enable: true
+          Rollback: true
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: ENABLED
+          Subnets: !Split [',', {'Fn::ImportValue': !Sub '${NetworkStack}-PublicSubnets'}]
+          SecurityGroups:
+            - Fn::ImportValue: !Sub '${PlatformStack}-BackendSecurityGroupId'
+
+  ProvisioningErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${Project}-provisioning-errors'
+      AlarmDescription: The provisioning service logged an error (find it with find-in-logs.sh --group provisioning)
+      Namespace:
+        Fn::ImportValue: !Sub '${LogsStack}-MetricNamespace'
+      MetricName: ProvisioningErrors
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [{'Fn::ImportValue': !Sub '${LogsStack}-AlertTopicArn'}]
+  # A job or result the other side could not process (the scheduler also fails the request).
+  DeadLetterAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Condition: HasQueues
+    Properties:
+      AlarmName: !Sub '${Project}-dead-letters'
+      AlarmDescription: A provisioning job or result reached a dead-letter queue
+      Metrics:
+        - Id: total
+          Expression: requests + results
+          ReturnData: true
+        - Id: requests
+          ReturnData: false
+          MetricStat:
+            Stat: Maximum
+            Period: 300
+            Metric:
+              Namespace: AWS/SQS
+              MetricName: ApproximateNumberOfMessagesVisible
+              Dimensions:
+                - Name: QueueName
+                  Value: !Sub '${Project}-provision-requests-dlq'
+        - Id: results
+          ReturnData: false
+          MetricStat:
+            Stat: Maximum
+            Period: 300
+            Metric:
+              Namespace: AWS/SQS
+              MetricName: ApproximateNumberOfMessagesVisible
+              Dimensions:
+                - Name: QueueName
+                  Value: !Sub '${Project}-provision-results-dlq'
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [{'Fn::ImportValue': !Sub '${LogsStack}-AlertTopicArn'}]
+
+Outputs:
+  ServiceName:
+    Value: !GetAtt Service.Name
+  TaskDefinitionArn:
+    Description: For one-off tasks (run-task.sh --provisioning)
+    Value: !Ref TaskDefinition

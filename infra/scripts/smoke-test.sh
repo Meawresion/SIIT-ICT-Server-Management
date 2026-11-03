@@ -36,7 +36,7 @@ export ENTRY_MODE=direct USE_DOMAIN PROVISIONING=true SITE_PUBLIC_KEYS GPU_NODES
 . "$(dirname "$0")/lib.sh"
 SCRIPTS="$(dirname "$0")"
 # What this run deletes at the end. Never the kept stacks.
-TEST_STACKS=("$STACK_WEB" "$STACK_APP" "$STACK_DATA" "$STACK_SECRETS")
+TEST_STACKS=("$STACK_WEB" "$STACK_PROVISIONING" "$STACK_APP" "$STACK_EVENTS" "$STACK_DATA" "$STACK_SECRETS")
 started=$(date +%s)
 started_iso=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 elapsed() { echo "$(( ($(date +%s) - started) / 60 )) min"; }
@@ -82,7 +82,7 @@ done
 # Creates the kept stacks when they are missing; otherwise a quick no-op (or an update).
 "$SCRIPTS/deploy.sh" network platform logs
 "$SCRIPTS/push-images.sh"
-"$SCRIPTS/deploy.sh" data secrets queues app web
+"$SCRIPTS/deploy.sh" data secrets queues events app provisioning web
 
 url=$(stack_output "$STACK_APP" PublicUrl)
 echo "== checks against $url (after $(elapsed))"
@@ -115,11 +115,11 @@ expect "an unknown API path is a JSON 404 with its reference and no framework he
 expect "a state change from another origin gives 403" 403 "$(status -X POST -H 'Origin: https://evil.example' "$url/api/auth/logout")"
 redirect=$(curl -s "$url/api/auth/google" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{console.log(new URL(JSON.parse(s).auth_url).searchParams.get("redirect_uri"))}catch{console.log("none")}})')
 expect "Google sign-in starts with this deploy's callback URL" "$url/api/auth/google/callback" "$redirect"
-# ECS injects every key of the mail secret (the placeholders: SMTP_HOST empty, emails off).
-if "$SCRIPTS/run-task.sh" node -e "process.exit(['SMTP_HOST','SMTP_PORT','SMTP_SECURE','SMTP_USER','SMTP_APP_PASSWORD','MAIL_FROM','MAIL_REPLY_TO'].every(k => k in process.env) ? 0 : 1)"; then
-  pass "the SMTP settings reach the backend from Secrets Manager (secrets stack)"
+# D34: the API service holds neither the SMTP settings nor the site key; it has the event bus.
+if "$SCRIPTS/run-task.sh" node -e "const e=process.env; process.exit(e.SERVICE_ROLE==='api' && e.EVENT_BUS_NAME && !Object.keys(e).some(k => /^(SMTP_|MAIL_FROM|MSG_PRIVATE_KEY|SQS_)/.test(k)) ? 0 : 1)"; then
+  pass "the API service has the event bus but no SMTP settings, site key or queue (D34)"
 else
-  fail "SMTP settings from Secrets Manager"
+  fail "API service settings (D34)"
 fi
 if "$SCRIPTS/run-task.sh" node scripts/check-db.js; then
   pass "database integration check in a one-off task (run-task.sh check-db)"
@@ -135,11 +135,11 @@ REQUEST_QUEUE_URL=$(stack_output "$STACK_QUEUES" RequestQueueUrl) RESULT_QUEUE_U
   node "$SCRIPTS/fake-site.mjs" 4 900 &
 site_pid=$!
 if "$SCRIPTS/run-task.sh" node scripts/check-provisioning.js; then
-  pass "GPU request set up and revoked through SQS by the backend service (run-task.sh check-provisioning)"
+  pass "GPU request set up and revoked through SQS by the provisioning service (run-task.sh check-provisioning)"
 else
   fail "provisioning through SQS"
 fi
-if "$SCRIPTS/run-task.sh" node scripts/check-scheduler.js; then
+if "$SCRIPTS/run-task.sh" --provisioning node scripts/check-scheduler.js; then
   pass "the service's scheduler: expiry REVOKE, reminder, notice by hand, dead letter (run-task.sh check-scheduler)"
 else
   fail "scheduler"
@@ -156,5 +156,13 @@ in_logs() { # in_logs <text> [find-in-logs options]: polls for a line written du
 if in_logs "$marker" --group backend; then pass "a request's access log line is in CloudWatch Logs (find-in-logs.sh, Logs Insights)"; else fail "access log line in CloudWatch Logs"; fi
 if in_logs '"action":"PROVISIONED"' --group audit; then pass "the audit trail reached its log group (request_event copied to /$PROJECT/audit)"; else fail "audit events in the audit log group"; fi
 if in_logs "$marker" --alb; then pass "the ALB access logs reached S3"; else fail "ALB access logs in S3"; fi
+# The status emails of these checks went API/provisioning -> event bus -> queue -> notification
+# Lambda, which read the mail secret (placeholders: SMTP_HOST empty, so it only logs them).
+if in_logs '"event":"mail.skipped"' --group notification; then
+  pass "status emails reached the notification Lambda through the event bus (D34)"
+else
+  fail "status emails through the event bus"
+fi
+if in_logs '"event":"worker.started"' --group provisioning; then pass "the provisioning service runs on its own (D34)"; else fail "provisioning service log"; fi
 alarms=$(awst cloudwatch describe-alarms --alarm-name-prefix "$PROJECT-" --query 'length(MetricAlarms)')
-expect "the app and web stacks' alarms exist (errors, ALB 5xx, unhealthy targets, dead letters)" 5 "$alarms"
+expect "the alarms exist (errors x3, ALB 5xx, unhealthy targets x2, dead letters x2)" 8 "$alarms"

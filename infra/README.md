@@ -21,13 +21,27 @@ Browser ─▶ ALB  APP_HOST.ZONE_NAME (HTTPS; HTTP only redirects), or its AWS 
             └─ everything else ─▶ ECS Fargate frontend (web stack)
 ```
 
-With `PROVISIONING=true` the backend also sets up GPU requests through acc-prov-vm at the SIIT
-site (plan §2): it sends signed and encrypted jobs to SQS and reads the results.
+**Services (D34).** The backend runs as separate services that never call each other: they share
+the database (each change and its outbox row in one transaction) and talk through queues and an
+event bus. Each can be deployed, scaled or deleted on its own (`destroy.sh provisioning` stops
+provisioning; the portal keeps working and the jobs wait in the outbox).
+
+| Service | Stack | Runs | Holds |
+|---|---|---|---|
+| frontend | `web` | nginx + the React build (ECS) | nothing secret |
+| API (`backend`) | `app` | the HTTP API behind the ALB (ECS, `SERVICE_ROLE=api`); queues jobs in the outbox | Google client, `JWT_SECRET`, DB user |
+| provisioning | `provisioning` | `node src/worker.js` (ECS, no load balancer): sends the outbox's jobs, applies the results, scheduler, audit shipping | the backend message key, the site queues, DB user |
+| notification | `events` | a Lambda (container image) fed by the event bus through its own SQS queue | the SMTP settings (mail secret) |
+| acc-prov-vm | on-site | creates the accounts at SIIT | the site key, pfSense and SSH access |
 
 ```
-ECS backend ──job──▶ SQS provision-requests (+DLQ) ──▶ acc-prov-vm (SIIT site)
-            ◀─result─ SQS provision-results  (+DLQ) ◀──┘
+API ──outbox (DB)──▶ provisioning ──job──▶ SQS provision-requests (+DLQ) ──▶ acc-prov-vm (SIIT site)
+                                 ◀─result─ SQS provision-results  (+DLQ) ◀──┘
+API, provisioning ──"Email requested"──▶ EventBridge bus ──rule──▶ SQS notifications (+DLQ) ──▶ notification Lambda ──SMTP──▶ student / approvers
 ```
+
+Locally (`docker compose`) one backend process does both (`SERVICE_ROLE=all`) and sends the emails
+itself.
 
 **Logs** (`logs` stack, kept between runs): every container writes one JSON line per event to
 stdout, and ECS sends it to the service's CloudWatch Logs group (`/<project>/backend`,
@@ -63,11 +77,13 @@ sends the end-date reminders and removes access when a request ends (FR-8.2, FR-
 | `<project>-cert` | `cert.yaml` | ACM certificate for the zone and `*.zone`, validated through DNS (us-east-1, used by CloudFront and the ALB). |
 | `<project>-logs` | `logs.yaml` | The CloudWatch Logs groups of every service and the audit group, error metric filters, saved Logs Insights queries, the alert SNS topic (with `ALERT_EMAIL`), and the S3 bucket for the ALB access logs (SSE-S3, TLS only, no public access). Kept between runs; deleting it deletes the logs. |
 | `<project>-network` | `network.yaml` | VPC, 2 public subnets (ALB, tasks), 2 private subnets (EFS, RDS later). No NAT gateway. |
-| `<project>-platform` | `platform.yaml` | ECR repositories for backend, mysql and frontend (emptied on delete), ECS cluster, backend security group. |
+| `<project>-platform` | `platform.yaml` | ECR repositories for backend, mysql, frontend and notification (emptied on delete), ECS cluster, backend security group. |
 | `<project>-data` | `data-ecs.yaml` | MySQL 8.4 task + EFS + internal NLB (stable DB name) + generated DB passwords. Later replaced by an RDS stack with the same outputs. |
 | `<project>-secrets` | `secrets.yaml` | The secrets you provide: the Google OAuth client and the SMTP settings, created with placeholders (no sign-in, emails off); `set-secrets.sh` puts your values. |
 | `<project>-queues` | `queues.yaml` | With `PROVISIONING=true`: the SQS request and result queues, each with a dead-letter queue (14 days, TLS only, encrypted at rest), and the backend's message keys. A small Lambda generates the key pair straight into Secrets Manager; the public half is the `BackendPublicKey` output. |
-| `<project>-app` | `app.yaml` | ALB (with a certificate in direct mode: HTTPS on 443, and 80 only redirects to HTTPS), backend service, generated `JWT_SECRET` and origin header; the queues and keys when provisioning is on; ALB access logs and the log subscription when the logs stack exists. |
+| `<project>-events` | `events.yaml` | The event bus, the notification queue (+ dead-letter queue, alarm) and the notification Lambda, the only reader of the mail secret. |
+| `<project>-app` | `app.yaml` | ALB (with a certificate in direct mode: HTTPS on 443, and 80 only redirects to HTTPS), the API service, generated `JWT_SECRET` and origin header, ALB access logs, alarms, the task-stopped rule. |
+| `<project>-provisioning` | `provisioning.yaml` | The provisioning service (no load balancer): the site queues and the backend message key when provisioning is on, the scheduler, audit shipping; its error and dead-letter alarms. |
 | `<project>-edge` | `edge.yaml` | CloudFront mode: S3 bucket, CloudFront (SPA rewrite function), DNS records for the portal. |
 | `<project>-web` | `web.yaml` | Direct mode: the frontend service (nginx, `frontend/Dockerfile` `prod` stage) and its ALB rule for every path the backend doesn't take. |
 
@@ -88,27 +104,29 @@ name. That is enough for smoke tests, but not for signing in: the sign-in cookie
 ## Smoke test (deploy, check, delete)
 
 `infra/scripts/smoke-test.sh` deploys network, platform, the images, data, secrets (left
-with its placeholders: your real secrets are never used), queues, logs, app and web (direct mode, no
+with its placeholders: your real secrets are never used), queues, logs, events, app, provisioning and web (direct mode, no
 domain, provisioning on with a throwaway site key), and checks:
 - the frontend answers through the ALB, also on client-side routes;
 - the backend answers through the ALB;
 - it reaches MySQL as the app user;
-- every SMTP setting reaches the backend from the secrets stack;
+- the API service has the event bus but no SMTP setting, site key or queue (D34);
 - it refuses unsigned and cross-site requests;
 - an unknown API path is a JSON 404 with its reference (the `X-Request-Id`) and no framework header;
 - Google sign-in uses this deploy's callback URL;
 - `check-db.js` passes in a one-off task;
 - provisioning through the real queues: a one-off task (`check-provisioning.js`) approves a GPU
-  request, the backend service sends the job, `fake-site.mjs` plays acc-prov-vm and answers, the
+  request, the provisioning service sends the job, `fake-site.mjs` plays acc-prov-vm and answers, the
   request becomes On Use; then the same for the removal;
-- the service's scheduler (every 30 s here, `check-scheduler.js`): a GPU request that ended gets
+- the provisioning service's scheduler (every 30 s here, `check-scheduler.js` in a provisioning task): a GPU request that ended gets
   its removal and is completed, a VM request gets its reminder and then the approvers' notice, and
   a job put into the request dead-letter queue is failed;
 - the logs: that 404's access log line is found in CloudWatch Logs (`find-in-logs.sh`, Logs
-  Insights), the audit events reach `/<project>/audit`, the ALB access logs reach S3, and the 5
-  alarms exist.
+  Insights), the audit events reach `/<project>/audit`, the ALB access logs reach S3;
+- the status emails of these checks reach the notification Lambda through the event bus (it reads
+  the mail secret; with the placeholders it only logs them), the provisioning service logs its
+  start, and the 8 alarms exist.
 
-Then it deletes the test stacks (`web`, `app`, `data`, `secrets`), even after a
+Then it deletes the test stacks (`web`, `provisioning`, `app`, `events`, `data`, `secrets`), even after a
 failure or Ctrl+C, and lists anything left behind (stacks, ECS services and tasks, load
 balancers, EFS, SQS, Lambda, log groups, secrets). The teardown is fast: every ECS task is
 stopped at once, then the stacks go in dependency order, independent ones in parallel.
@@ -176,7 +194,9 @@ The scripts are bash (Git Bash on Windows, or Linux/WSL) and need the AWS CLI v2
 
 | Task | Command |
 |---|---|
-| New backend version | commit, `push-images.sh backend`, `deploy.sh app` |
+| New backend version | commit, `push-images.sh backend`, `deploy.sh app provisioning` |
+| New notification version | commit, `push-images.sh notification`, `deploy.sh events` |
+| Run a check in the provisioning service | `run-task.sh --provisioning node scripts/check-scheduler.js` |
 | New frontend version | `publish-frontend.sh` (direct mode: commit, `push-images.sh frontend`, `deploy.sh web`) |
 | Check the database from inside AWS | `run-task.sh node scripts/check-db.js` |
 | Find an incident from its reference | `find-in-logs.sh <reference>` (last 2 days; `--since "2026-11-01"` for older ones, `--group audit` for one group) |
