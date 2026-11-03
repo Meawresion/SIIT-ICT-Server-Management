@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
-# Stops the frontend, backend and MySQL tasks between test sessions (the ALB, EFS and CloudFront
+# Stops the frontend, identity, backend, provisioning and MySQL tasks between test sessions (the ALB, EFS and CloudFront
 # stay). The data stays on EFS. resume.sh starts them again; the next deploy.sh also restores the
 # counts.
 . "$(dirname "$0")/lib.sh"
 
 services=(backend mysql)
+service_exists provisioning && services=(provisioning "${services[@]}")
+service_exists identity && services=(identity "${services[@]}")
 service_exists frontend && services=(frontend "${services[@]}")
 for service in "${services[@]}"; do
   aws ecs update-service --cluster "$PROJECT" --service "$service" --desired-count 0 \

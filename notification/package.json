@@ -1,0 +1,15 @@
+{
+  "name": "siit-notification",
+  "version": "1.0.0",
+  "description": "Sends the portal's status emails (Lambda, fed by the EventBridge bus through SQS)",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "dependencies": {
+    "@aws-sdk/client-secrets-manager": "3.1151.0",
+    "nodemailer": "10.1.7"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

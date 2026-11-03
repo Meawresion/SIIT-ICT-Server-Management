@@ -1,0 +1,245 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  The identity service (D34): the backend image with SERVICE_ROLE=identity behind the app stack's
+  ALB for /api/auth/* and /api/users (Google sign-in, the sign-in token, profiles). Only this
+  service holds the Google client; the request service only checks the token (shared JWT_SECRET).
+  Deleted with the app between test runs; without it, sign-in stops but signed-in users keep working
+  until their token expires.
+
+Parameters:
+  Project:
+    Type: String
+    Default: siit
+  NetworkStack:
+    Type: String
+  PlatformStack:
+    Type: String
+  DataStack:
+    Type: String
+  AppStack:
+    Type: String
+  LogsStack:
+    Type: String
+  ImageTag:
+    Type: String
+  ExecutionRoleArn:
+    Type: String
+  TaskRoleArn:
+    Type: String
+  GoogleSecretArn:
+    Type: String
+    Description: Secret with GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET (secrets stack, filled by set-secrets.sh)
+  OriginVerifySecretArn:
+    Type: String
+    Default: ''
+    Description: cloudfront mode - the app stack's origin header secret (the ALB rule checks it); direct mode - empty
+  DesiredCount:
+    Type: Number
+    Default: 1
+  Cpu:
+    Type: String
+    Default: '256'
+  Memory:
+    Type: String
+    Default: '512'
+  StudentEmailDomain:
+    Type: String
+  StudentIdDigits:
+    Type: Number
+  DegreeEmailPrefixes:
+    Type: String
+  StaffEmailDomains:
+    Type: String
+  SessionIdleMinutes:
+    Type: Number
+    Default: 30
+  SessionMaxHours:
+    Type: Number
+    Default: 12
+
+Conditions:
+  ViaCloudFront: !Not [!Equals [!Ref OriginVerifySecretArn, '']]
+
+Resources:
+  TargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      TargetType: ip
+      Protocol: HTTP
+      Port: 3000
+      VpcId:
+        Fn::ImportValue: !Sub '${NetworkStack}-VpcId'
+      HealthCheckPath: /health
+      HealthCheckIntervalSeconds: 15
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
+      Matcher:
+        HttpCode: '200'
+      TargetGroupAttributes:
+        - Key: deregistration_delay.timeout_seconds
+          Value: '30'
+
+  # Before the app stack's rule for /api/* (priority 5).
+  IdentityRule:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      ListenerArn:
+        Fn::ImportValue: !Sub '${AppStack}-ListenerArn'
+      Priority: 2
+      Conditions:
+        - Field: path-pattern
+          PathPatternConfig:
+            Values: ['/api/auth/*', '/api/users', '/api/users/*']
+        - !If
+          - ViaCloudFront
+          - Field: http-header
+            HttpHeaderConfig:
+              HttpHeaderName: X-Origin-Verify
+              Values:
+                - !Sub '{{resolve:secretsmanager:${OriginVerifySecretArn}:SecretString:value}}'
+          - !Ref AWS::NoValue
+      Actions:
+        - Type: forward
+          TargetGroupArn: !Ref TargetGroup
+
+  TaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub '${Project}-identity'
+      RequiresCompatibilities: [FARGATE]
+      NetworkMode: awsvpc
+      Cpu: !Ref Cpu
+      Memory: !Ref Memory
+      ExecutionRoleArn: !Ref ExecutionRoleArn
+      TaskRoleArn: !Ref TaskRoleArn
+      ContainerDefinitions:
+        - Name: identity
+          Image: !Sub
+            - '${Repo}:${ImageTag}'
+            - Repo:
+                Fn::ImportValue: !Sub '${PlatformStack}-BackendRepositoryUri'
+          Essential: true
+          PortMappings:
+            - ContainerPort: 3000
+              Protocol: tcp
+          Environment:
+            - Name: NODE_ENV
+              Value: production
+            - Name: PORT
+              Value: '3000'
+            - Name: SERVICE_ROLE
+              Value: identity
+            # CloudFront, then the ALB (as the app stack's service)
+            - Name: TRUST_PROXY
+              Value: '2'
+            - Name: DB_HOST
+              Value:
+                Fn::ImportValue: !Sub '${DataStack}-DbHost'
+            - Name: DB_PORT
+              Value:
+                Fn::ImportValue: !Sub '${DataStack}-DbPort'
+            - Name: DB_NAME
+              Value:
+                Fn::ImportValue: !Sub '${DataStack}-DbName'
+            - Name: FRONTEND_URL
+              Value:
+                Fn::ImportValue: !Sub '${AppStack}-PublicUrl'
+            - Name: GOOGLE_CALLBACK_URL
+              Value: !Sub
+                - '${Url}/api/auth/google/callback'
+                - Url:
+                    Fn::ImportValue: !Sub '${AppStack}-PublicUrl'
+            - Name: STUDENT_EMAIL_DOMAIN
+              Value: !Ref StudentEmailDomain
+            - Name: STUDENT_ID_DIGITS
+              Value: !Ref StudentIdDigits
+            - Name: DEGREE_EMAIL_PREFIXES
+              Value: !Ref DegreeEmailPrefixes
+            - Name: STAFF_EMAIL_DOMAINS
+              Value: !Ref StaffEmailDomains
+            - Name: SESSION_IDLE_MINUTES
+              Value: !Ref SessionIdleMinutes
+            - Name: SESSION_MAX_HOURS
+              Value: !Ref SessionMaxHours
+          Secrets:
+            - Name: DB_USER
+              ValueFrom: !Sub
+                - '${Arn}:username::'
+                - Arn:
+                    Fn::ImportValue: !Sub '${DataStack}-DbSecretArn'
+            - Name: DB_PASSWORD
+              ValueFrom: !Sub
+                - '${Arn}:password::'
+                - Arn:
+                    Fn::ImportValue: !Sub '${DataStack}-DbSecretArn'
+            - Name: JWT_SECRET
+              ValueFrom: !Sub
+                - '${Arn}:JWT_SECRET::'
+                - Arn:
+                    Fn::ImportValue: !Sub '${AppStack}-AppSecretArn'
+            - Name: GOOGLE_CLIENT_ID
+              ValueFrom: !Sub '${GoogleSecretArn}:GOOGLE_CLIENT_ID::'
+            - Name: GOOGLE_CLIENT_SECRET
+              ValueFrom: !Sub '${GoogleSecretArn}:GOOGLE_CLIENT_SECRET::'
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group:
+                Fn::ImportValue: !Sub '${LogsStack}-IdentityLogGroup'
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: identity
+
+  Service:
+    Type: AWS::ECS::Service
+    DependsOn: IdentityRule
+    Properties:
+      ServiceName: identity
+      Cluster:
+        Fn::ImportValue: !Sub '${PlatformStack}-ClusterName'
+      TaskDefinition: !Ref TaskDefinition
+      LaunchType: FARGATE
+      DesiredCount: !Ref DesiredCount
+      HealthCheckGracePeriodSeconds: 60
+      DeploymentConfiguration:
+        MinimumHealthyPercent: 100
+        MaximumPercent: 200
+        DeploymentCircuitBreaker:
+          Enable: true
+          Rollback: true
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: ENABLED
+          Subnets: !Split [',', {'Fn::ImportValue': !Sub '${NetworkStack}-PublicSubnets'}]
+          SecurityGroups:
+            - Fn::ImportValue: !Sub '${PlatformStack}-BackendSecurityGroupId'
+      LoadBalancers:
+        - ContainerName: identity
+          ContainerPort: 3000
+          TargetGroupArn: !Ref TargetGroup
+
+  IdentityUnhealthyAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${Project}-identity-unhealthy'
+      AlarmDescription: An identity task failed the ALB health check for 3 minutes (sign-in may be down)
+      Namespace: AWS/ApplicationELB
+      MetricName: UnHealthyHostCount
+      Dimensions:
+        - Name: LoadBalancer
+          Value:
+            Fn::ImportValue: !Sub '${AppStack}-LoadBalancerFullName'
+        - Name: TargetGroup
+          Value: !GetAtt TargetGroup.TargetGroupFullName
+      Statistic: Maximum
+      Period: 60
+      EvaluationPeriods: 3
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [{'Fn::ImportValue': !Sub '${LogsStack}-AlertTopicArn'}]
+
+Outputs:
+  ServiceName:
+    Value: !GetAtt Service.Name
+  TaskDefinitionArn:
+    Value: !Ref TaskDefinition

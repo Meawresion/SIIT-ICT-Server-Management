@@ -15,7 +15,7 @@ for arg in "$@"; do
   esac
 done
 
-stacks=("$STACK_EDGE" "$STACK_WEB" "$STACK_APP" "$STACK_QUEUES" "$STACK_DATA" "$STACK_SECRETS" "$STACK_LOGS" "$STACK_PLATFORM" "$STACK_CERT" "$STACK_NETWORK")
+stacks=("$STACK_EDGE" "$STACK_WEB" "$STACK_IDENTITY" "$STACK_PROVISIONING" "$STACK_APP" "$STACK_EVENTS" "$STACK_QUEUES" "$STACK_DATA" "$STACK_SECRETS" "$STACK_LOGS" "$STACK_PLATFORM" "$STACK_CERT" "$STACK_NETWORK")
 kept=("$STACK_DNS")
 if [ "$with_dns" = true ]; then stacks+=("$STACK_DNS"); kept=(); fi
 
@@ -28,7 +28,7 @@ if [ ${#existing[@]} -eq 0 ]; then
 else
   echo "Deletes: ${existing[*]}"
   echo "This includes the database, the ECR images (the next deploy uploads them again), the log"
-  echo "archive in S3 and the backend message key (acc-prov-vm then needs the new public key)."
+  echo "groups with the audit trail and the backend message key (acc-prov-vm then needs the new public key)."
   if [ "$ask" = true ]; then
     read -rp "Type 'delete all' to continue: " answer
     [ "$answer" = "delete all" ] || { echo "Stopped." >&2; exit 1; }

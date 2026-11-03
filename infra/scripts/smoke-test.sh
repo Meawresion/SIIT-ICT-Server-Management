@@ -6,7 +6,7 @@
 # The scheduler runs every 30 s, so check-scheduler.js sees it act.
 #
 # Kept between runs: network, platform (the ECR images), queues (the backend key acc-prov-vm is set
-# up with) and logs (the S3 log archive), created here only when they are missing; images already
+# up with) and logs (log groups, audit trail, alert topic), created here only when they are missing; images already
 # in ECR are not uploaded again. The dns and cert stacks are left alone too. Only teardown-all.sh
 # deletes them. Don't run this while the real acc-prov-vm is connected to the queues: it would take
 # the test jobs, which are sealed for the throwaway site key, and dead-letter them.
@@ -36,7 +36,7 @@ export ENTRY_MODE=direct USE_DOMAIN PROVISIONING=true SITE_PUBLIC_KEYS GPU_NODES
 . "$(dirname "$0")/lib.sh"
 SCRIPTS="$(dirname "$0")"
 # What this run deletes at the end. Never the kept stacks.
-TEST_STACKS=("$STACK_WEB" "$STACK_APP" "$STACK_DATA" "$STACK_SECRETS")
+TEST_STACKS=("$STACK_WEB" "$STACK_IDENTITY" "$STACK_PROVISIONING" "$STACK_APP" "$STACK_EVENTS" "$STACK_DATA" "$STACK_SECRETS")
 started=$(date +%s)
 started_iso=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 elapsed() { echo "$(( ($(date +%s) - started) / 60 )) min"; }
@@ -82,7 +82,7 @@ done
 # Creates the kept stacks when they are missing; otherwise a quick no-op (or an update).
 "$SCRIPTS/deploy.sh" network platform logs
 "$SCRIPTS/push-images.sh"
-"$SCRIPTS/deploy.sh" data secrets queues app web
+"$SCRIPTS/deploy.sh" data secrets queues events app identity provisioning web
 
 url=$(stack_output "$STACK_APP" PublicUrl)
 echo "== checks against $url (after $(elapsed))"
@@ -115,12 +115,16 @@ expect "an unknown API path is a JSON 404 with its reference and no framework he
 expect "a state change from another origin gives 403" 403 "$(status -X POST -H 'Origin: https://evil.example' "$url/api/auth/logout")"
 redirect=$(curl -s "$url/api/auth/google" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{console.log(new URL(JSON.parse(s).auth_url).searchParams.get("redirect_uri"))}catch{console.log("none")}})')
 expect "Google sign-in starts with this deploy's callback URL" "$url/api/auth/google/callback" "$redirect"
-# ECS injects every key of the mail secret (the placeholders: SMTP_HOST empty, emails off).
-if "$SCRIPTS/run-task.sh" node -e "process.exit(['SMTP_HOST','SMTP_PORT','SMTP_SECURE','SMTP_USER','SMTP_APP_PASSWORD','MAIL_FROM','MAIL_REPLY_TO'].every(k => k in process.env) ? 0 : 1)"; then
-  pass "the SMTP settings reach the backend from Secrets Manager (secrets stack)"
+# D34: the request service holds neither the Google client, the SMTP settings nor the site key.
+if "$SCRIPTS/run-task.sh" node -e "const e=process.env; process.exit(e.SERVICE_ROLE==='requests' && e.EVENT_BUS_NAME && e.JWT_SECRET && !Object.keys(e).some(k => /^(GOOGLE_|SMTP_|MAIL_FROM|MSG_PRIVATE_KEY|SQS_)/.test(k)) ? 0 : 1)"; then
+  pass "the request service has the event bus and token secret but no Google client, SMTP settings, site key or queue (D34)"
 else
-  fail "SMTP settings from Secrets Manager"
+  fail "request service settings (D34)"
 fi
+# The ALB sends /api/auth and /api/users to the identity service, the rest of /api to the request
+# service: each answers only its own paths, so a wrong rule shows up as a 404.
+expect "the identity service answers /api/users/me and the request service /api/requests/me (401, not 404)" "401 401" \
+  "$(status "$url/api/users/me") $(status "$url/api/requests/me")"
 if "$SCRIPTS/run-task.sh" node scripts/check-db.js; then
   pass "database integration check in a one-off task (run-task.sh check-db)"
 else
@@ -135,11 +139,11 @@ REQUEST_QUEUE_URL=$(stack_output "$STACK_QUEUES" RequestQueueUrl) RESULT_QUEUE_U
   node "$SCRIPTS/fake-site.mjs" 4 900 &
 site_pid=$!
 if "$SCRIPTS/run-task.sh" node scripts/check-provisioning.js; then
-  pass "GPU request set up and revoked through SQS by the backend service (run-task.sh check-provisioning)"
+  pass "GPU request set up and revoked through SQS by the provisioning service (run-task.sh check-provisioning)"
 else
   fail "provisioning through SQS"
 fi
-if "$SCRIPTS/run-task.sh" node scripts/check-scheduler.js; then
+if "$SCRIPTS/run-task.sh" --provisioning node scripts/check-scheduler.js; then
   pass "the service's scheduler: expiry REVOKE, reminder, notice by hand, dead letter (run-task.sh check-scheduler)"
 else
   fail "scheduler"
@@ -147,13 +151,23 @@ fi
 if wait "$site_pid"; then pass "the fake site opened all four signed and encrypted jobs and answered"; else fail "fake site"; fi
 site_pid=
 
-# The log archive: CloudWatch -> Firehose (about a minute) -> S3. The audit shipper copies events
-# older than 2 minutes every 30 s, so give both up to 6 minutes.
-in_s3() { # in_s3 <text> [--alb]: polls the archive for a line written during this run
+# The logs: CloudWatch Logs takes seconds; the audit shipper copies events older than 2 minutes
+# every 30 s; the ALB writes its access log files to S3 every 5 minutes. Give each up to 6 minutes.
+in_logs() { # in_logs <text> [find-in-logs options]: polls for a line written during this run
   for _ in $(seq 1 24); do "$SCRIPTS/find-in-logs.sh" "$1" --since "$started_iso" "${@:2}" >/dev/null 2>&1 && return 0; sleep 15; done
   return 1
 }
-if in_s3 "$marker"; then pass "a request's access log line reached the S3 log archive (find-in-logs.sh)"; else fail "access log line in S3"; fi
-if in_s3 '"action":"PROVISIONED"'; then pass "the audit trail reached S3 (audit.event lines from request_event)"; else fail "audit events in S3"; fi
-# The ALB writes its access logs every 5 minutes.
-if in_s3 "$marker" --alb; then pass "the ALB access logs reached S3"; else fail "ALB access logs in S3"; fi
+if in_logs "$marker" --group backend; then pass "a request's access log line is in CloudWatch Logs (find-in-logs.sh, Logs Insights)"; else fail "access log line in CloudWatch Logs"; fi
+if in_logs '"action":"PROVISIONED"' --group audit; then pass "the audit trail reached its log group (request_event copied to /$PROJECT/audit)"; else fail "audit events in the audit log group"; fi
+if in_logs "$marker" --alb; then pass "the ALB access logs reached S3"; else fail "ALB access logs in S3"; fi
+# The status emails of these checks went API/provisioning -> event bus -> queue -> notification
+# Lambda, which read the mail secret (placeholders: SMTP_HOST empty, so it only logs them).
+if in_logs '"event":"mail.skipped"' --group notification; then
+  pass "status emails reached the notification Lambda through the event bus (D34)"
+else
+  fail "status emails through the event bus"
+fi
+if in_logs '"path":"/api/users/me"' --group identity; then pass "the identity service logged its request in its own log group (D34)"; else fail "identity service log"; fi
+if in_logs '"event":"worker.started"' --group provisioning; then pass "the provisioning service runs on its own (D34)"; else fail "provisioning service log"; fi
+alarms=$(awst cloudwatch describe-alarms --alarm-name-prefix "$PROJECT-" --query 'length(MetricAlarms)')
+expect "the alarms exist (errors x3, ALB 5xx, unhealthy targets x3, dead letters x2)" 9 "$alarms"

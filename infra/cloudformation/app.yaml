@@ -6,7 +6,11 @@ Description: >-
   entry, over HTTPS with a domain, or over HTTP on its AWS name for smoke tests (no sign-in: the
   cookie needs HTTPS); it sends /api/* and /health to the backend, and the web stack adds the
   frontend for everything else. Plain settings go in the task definition; secret ones come from Secrets
-  Manager (D13). With a queues stack, the backend also provisions GPU requests through SQS.
+  Manager (D13). The service here is the request service (D34: /api/requests, /api/reviewer and
+  /health); the identity stack adds the identity service for /api/auth and /api/users. With a
+  queues stack it queues GPU and Big Data jobs in the outbox, and the provisioning stack's service
+  sends them; status emails go as events to the events stack's notification service. It holds
+  neither the site key, the SMTP settings nor the Google client.
 
 Parameters:
   Project:
@@ -40,13 +44,9 @@ Parameters:
   TaskRoleArn:
     Type: String
     Description: Role of the running backend (Learner Lab - LabRole, D30)
-  GoogleSecretArn:
+  EventsStack:
     Type: String
-    Description: Secret with GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET (secrets stack, filled by set-secrets.sh)
-  MailSecretArn:
-    Type: String
-    Default: ''
-    Description: Secret with the SMTP_* and MAIL_* settings (secrets stack); empty = no status emails
+    Description: The events stack (event bus to the notification service)
   CloudFrontPrefixListId:
     Type: String
     Default: ''
@@ -98,21 +98,13 @@ Parameters:
     Type: String
     Default: Asia/Bangkok
     Description: The time zone request dates are in
-  LogRetentionDays:
-    Type: Number
-    Default: 14
   LogsStack:
     Type: String
-    Default: ''
-    Description: Empty = the logs stay in CloudWatch only; else ALB access logs and every log line also go to its S3 bucket
+    Description: The logs stack (log groups, audit group, alert topic, ALB access log bucket)
   QueuesStack:
     Type: String
     Default: ''
     Description: Empty = automatic provisioning off (GPU requests are activated by hand)
-  SitePublicKeys:
-    Type: String
-    Default: ''
-    Description: acc-prov-vm's public key bundle(s), comma-separated (MSG_PEER_PUBLIC_KEYS; public, not secret)
   GpuNodes:
     Type: String
     Default: ''
@@ -126,10 +118,6 @@ Parameters:
   ManualBigDataUrl:
     Type: String
     Default: ''
-  MessageJobTtlSeconds:
-    Type: Number
-    Default: 259200
-    Description: How long a job stays valid, so it survives the site being offline
 
 Rules:
   CloudFrontNeedsDomain:
@@ -144,12 +132,11 @@ Rules:
     RuleCondition: !Not [!Equals [!Ref QueuesStack, '']]
     Assertions:
       - Assert: !And
-          - !Not [!Equals [!Ref SitePublicKeys, '']]
           - !Not [!Equals [!Ref GpuNodes, '']]
           - !Not [!Equals [!Ref OvpnProfileUrl, '']]
           - !Not [!Equals [!Ref ManualGpuUrl, '']]
           - !Not [!Equals [!Ref ManualBigDataUrl, '']]
-        AssertDescription: provisioning needs SitePublicKeys, GpuNodes, OvpnProfileUrl, ManualGpuUrl and ManualBigDataUrl
+        AssertDescription: provisioning needs GpuNodes, OvpnProfileUrl, ManualGpuUrl and ManualBigDataUrl
   CertNeedsDomain:
     RuleCondition: !Not [!Equals [!Ref CertStack, '']]
     Assertions:
@@ -160,10 +147,8 @@ Conditions:
   ViaCloudFront: !Equals [!Ref EntryMode, cloudfront]
   HasDomain: !Not [!Equals [!Ref DnsStack, '']]
   HasCert: !Not [!Equals [!Ref CertStack, '']]
-  HasMail: !Not [!Equals [!Ref MailSecretArn, '']]
   NoCert: !Equals [!Ref CertStack, '']
   HasQueues: !Not [!Equals [!Ref QueuesStack, '']]
-  HasLogs: !Not [!Equals [!Ref LogsStack, '']]
   # direct mode with a certificate: port 80 only redirects to HTTPS.
   RedirectHttp: !And [!Not [!Condition ViaCloudFront], !Condition HasCert]
 
@@ -242,20 +227,14 @@ Resources:
       LoadBalancerAttributes:
         - Key: routing.http.drop_invalid_header_fields.enabled
           Value: 'true'
-        # Access logs (every request, incl. the ALB's own 4xx/5xx) to the log archive, every 5 minutes.
+        # Access logs (every request, incl. the ALB's own 4xx/5xx) to the logs bucket, every 5 minutes.
         - Key: access_logs.s3.enabled
-          Value: !If [HasLogs, 'true', 'false']
-        - !If
-          - HasLogs
-          - Key: access_logs.s3.bucket
-            Value:
-              Fn::ImportValue: !Sub '${LogsStack}-BucketName'
-          - !Ref AWS::NoValue
-        - !If
-          - HasLogs
-          - Key: access_logs.s3.prefix
-            Value: alb
-          - !Ref AWS::NoValue
+          Value: 'true'
+        - Key: access_logs.s3.bucket
+          Value:
+            Fn::ImportValue: !Sub '${LogsStack}-BucketName'
+        - Key: access_logs.s3.prefix
+          Value: alb
   TargetGroup:
     Type: AWS::ElasticLoadBalancingV2::TargetGroup
     Properties:
@@ -326,7 +305,8 @@ Resources:
     Type: AWS::ElasticLoadBalancingV2::ListenerRule
     Properties:
       ListenerArn: !If [HasCert, !Ref HttpsListener, !Ref HttpListener]
-      Priority: 1
+      # After the identity stack's rule (priority 2), before the web stack's (10).
+      Priority: 5
       Conditions:
         - !If
           - ViaCloudFront
@@ -359,23 +339,87 @@ Resources:
         DNSName: !GetAtt LoadBalancer.DNSName
         HostedZoneId: !GetAtt LoadBalancer.CanonicalHostedZoneID
 
-  LogGroup:
-    Type: AWS::Logs::LogGroup
+  # Alarms mail the logs stack's alert topic. They live here, so they are billed ($0.10 each a
+  # month) only while the app runs.
+  BackendErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
     Properties:
-      LogGroupName: !Sub '/${Project}/backend'
-      RetentionInDays: !Ref LogRetentionDays
-
-  # Every log line also goes to the S3 log archive (logs stack), so it outlives this stack.
-  LogsToArchive:
-    Type: AWS::Logs::SubscriptionFilter
-    Condition: HasLogs
+      AlarmName: !Sub '${Project}-backend-errors'
+      AlarmDescription: The backend logged an error (find it with find-in-logs.sh or the saved query backend-errors)
+      Namespace:
+        Fn::ImportValue: !Sub '${LogsStack}-MetricNamespace'
+      MetricName: BackendErrors
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [{'Fn::ImportValue': !Sub '${LogsStack}-AlertTopicArn'}]
+  AlbServerErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
     Properties:
-      LogGroupName: !Ref LogGroup
-      FilterPattern: ''
-      DestinationArn:
-        Fn::ImportValue: !Sub '${LogsStack}-DeliveryStreamArn'
-      RoleArn:
-        Fn::ImportValue: !Sub '${LogsStack}-SubscriptionRoleArn'
+      AlarmName: !Sub '${Project}-alb-5xx'
+      AlarmDescription: The ALB answered 5xx itself (502/503/504), usually no healthy target
+      Namespace: AWS/ApplicationELB
+      MetricName: HTTPCode_ELB_5XX_Count
+      Dimensions:
+        - Name: LoadBalancer
+          Value: !GetAtt LoadBalancer.LoadBalancerFullName
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 5
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [{'Fn::ImportValue': !Sub '${LogsStack}-AlertTopicArn'}]
+  BackendUnhealthyAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${Project}-backend-unhealthy'
+      AlarmDescription: A backend task failed the ALB health check for 3 minutes
+      Namespace: AWS/ApplicationELB
+      MetricName: UnHealthyHostCount
+      Dimensions:
+        - Name: LoadBalancer
+          Value: !GetAtt LoadBalancer.LoadBalancerFullName
+        - Name: TargetGroup
+          Value: !GetAtt TargetGroup.TargetGroupFullName
+      Statistic: Maximum
+      Period: 60
+      EvaluationPeriods: 3
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [{'Fn::ImportValue': !Sub '${LogsStack}-AlertTopicArn'}]
+  # A task of this project's cluster that crashed or could not start (deploys and scale-in stop
+  # tasks with other stop codes, so they are not reported). EventBridge rules cost nothing.
+  TaskStoppedRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: !Sub 'Mail the alert topic when a ${Project} task crashes or fails to start'
+      EventPattern:
+        source: [aws.ecs]
+        detail-type: [ECS Task State Change]
+        detail:
+          clusterArn:
+            - !Sub
+              - 'arn:${AWS::Partition}:ecs:${AWS::Region}:${AWS::AccountId}:cluster/${Cluster}'
+              - Cluster:
+                  Fn::ImportValue: !Sub '${PlatformStack}-ClusterName'
+          lastStatus: [STOPPED]
+          stopCode: [EssentialContainerExited, TaskFailedToStart]
+      Targets:
+        - Id: alerts
+          Arn:
+            Fn::ImportValue: !Sub '${LogsStack}-AlertTopicArn'
+          InputTransformer:
+            InputPathsMap:
+              group: $.detail.group
+              code: $.detail.stopCode
+              reason: $.detail.stoppedReason
+              task: $.detail.taskArn
+            InputTemplate: '"ECS task stopped: <group> (<code>): <reason>. Task <task>. Its last log lines are in CloudWatch Logs."'
 
   TaskDefinition:
     Type: AWS::ECS::TaskDefinition
@@ -422,14 +466,6 @@ Resources:
                   - Zone:
                       Fn::ImportValue: !Sub '${DnsStack}-ZoneName'
                 - !Sub 'http://${LoadBalancer.DNSName}'
-            - Name: GOOGLE_CALLBACK_URL
-              Value: !If
-                - HasDomain
-                - !Sub
-                  - 'https://${AppHost}.${Zone}/api/auth/google/callback'
-                  - Zone:
-                      Fn::ImportValue: !Sub '${DnsStack}-ZoneName'
-                - !Sub 'http://${LoadBalancer.DNSName}/api/auth/google/callback'
             - Name: STUDENT_EMAIL_DOMAIN
               Value: !Ref StudentEmailDomain
             - Name: STUDENT_ID_DIGITS
@@ -448,55 +484,21 @@ Resources:
               Value: !Ref ExpiryReminderDays
             - Name: SITE_TIME_ZONE
               Value: !Ref SiteTimeZone
-            # Automatic provisioning through acc-prov-vm (plan §2), only with a queues stack.
+            - Name: AWS_REGION
+              Value: !Ref AWS::Region
+            # The API service: no background work (the provisioning service does it, D34).
+            - Name: SERVICE_ROLE
+              Value: requests
+            # Status emails go as events to the notification service.
+            - Name: EVENT_BUS_NAME
+              Value:
+                Fn::ImportValue: !Sub '${EventsStack}-EventBusName'
+            # Automatic provisioning through acc-prov-vm (plan §2), only with a queues stack: the
+            # API only queues the jobs, so it needs no queue URL or key.
             - !If
               - HasQueues
               - Name: MESSAGE_TRANSPORT
                 Value: sqs
-              - !Ref AWS::NoValue
-            - !If
-              - HasQueues
-              - Name: AWS_REGION
-                Value: !Ref AWS::Region
-              - !Ref AWS::NoValue
-            - !If
-              - HasQueues
-              - Name: SQS_REQUEST_QUEUE_URL
-                Value:
-                  Fn::ImportValue: !Sub '${QueuesStack}-RequestQueueUrl'
-              - !Ref AWS::NoValue
-            - !If
-              - HasQueues
-              - Name: SQS_RESULT_QUEUE_URL
-                Value:
-                  Fn::ImportValue: !Sub '${QueuesStack}-ResultQueueUrl'
-              - !Ref AWS::NoValue
-            - !If
-              - HasQueues
-              - Name: SQS_REQUEST_DLQ_URL
-                Value:
-                  Fn::ImportValue: !Sub '${QueuesStack}-RequestDeadLetterQueueUrl'
-              - !Ref AWS::NoValue
-            - !If
-              - HasQueues
-              - Name: SQS_RESULT_DLQ_URL
-                Value:
-                  Fn::ImportValue: !Sub '${QueuesStack}-ResultDeadLetterQueueUrl'
-              - !Ref AWS::NoValue
-            - !If
-              - HasQueues
-              - Name: MSG_PEER_PUBLIC_KEYS
-                Value: !Ref SitePublicKeys
-              - !Ref AWS::NoValue
-            - !If
-              - HasQueues
-              - Name: MSG_JOB_TTL_SEC
-                Value: !Ref MessageJobTtlSeconds
-              - !Ref AWS::NoValue
-            - !If
-              - HasQueues
-              - Name: MSG_MAX_TTL_SEC
-                Value: !Ref MessageJobTtlSeconds
               - !Ref AWS::NoValue
             - !If
               - HasQueues
@@ -531,58 +533,11 @@ Resources:
                     Fn::ImportValue: !Sub '${DataStack}-DbSecretArn'
             - Name: JWT_SECRET
               ValueFrom: !Sub '${AppSecret}:JWT_SECRET::'
-            - Name: GOOGLE_CLIENT_ID
-              ValueFrom: !Sub '${GoogleSecretArn}:GOOGLE_CLIENT_ID::'
-            - Name: GOOGLE_CLIENT_SECRET
-              ValueFrom: !Sub '${GoogleSecretArn}:GOOGLE_CLIENT_SECRET::'
-            # Status emails (S2); SMTP_HOST empty = only logged.
-            - !If
-              - HasMail
-              - Name: SMTP_HOST
-                ValueFrom: !Sub '${MailSecretArn}:SMTP_HOST::'
-              - !Ref AWS::NoValue
-            - !If
-              - HasMail
-              - Name: SMTP_PORT
-                ValueFrom: !Sub '${MailSecretArn}:SMTP_PORT::'
-              - !Ref AWS::NoValue
-            - !If
-              - HasMail
-              - Name: SMTP_SECURE
-                ValueFrom: !Sub '${MailSecretArn}:SMTP_SECURE::'
-              - !Ref AWS::NoValue
-            - !If
-              - HasMail
-              - Name: SMTP_USER
-                ValueFrom: !Sub '${MailSecretArn}:SMTP_USER::'
-              - !Ref AWS::NoValue
-            - !If
-              - HasMail
-              - Name: SMTP_APP_PASSWORD
-                ValueFrom: !Sub '${MailSecretArn}:SMTP_APP_PASSWORD::'
-              - !Ref AWS::NoValue
-            - !If
-              - HasMail
-              - Name: MAIL_FROM
-                ValueFrom: !Sub '${MailSecretArn}:MAIL_FROM::'
-              - !Ref AWS::NoValue
-            - !If
-              - HasMail
-              - Name: MAIL_REPLY_TO
-                ValueFrom: !Sub '${MailSecretArn}:MAIL_REPLY_TO::'
-              - !Ref AWS::NoValue
-            - !If
-              - HasQueues
-              - Name: MSG_PRIVATE_KEY
-                ValueFrom: !Sub
-                  - '${Arn}:MSG_PRIVATE_KEY::'
-                  - Arn:
-                      Fn::ImportValue: !Sub '${QueuesStack}-BackendKeysSecretArn'
-              - !Ref AWS::NoValue
           LogConfiguration:
             LogDriver: awslogs
             Options:
-              awslogs-group: !Ref LogGroup
+              awslogs-group:
+                Fn::ImportValue: !Sub '${LogsStack}-BackendLogGroup'
               awslogs-region: !Ref AWS::Region
               awslogs-stream-prefix: backend
 
@@ -625,6 +580,11 @@ Outputs:
     Value: !Ref OriginVerifySecret
     Export:
       Name: !Sub '${AWS::StackName}-OriginVerifySecretArn'
+  AppSecretArn:
+    Description: JWT_SECRET, shared with the identity service (it signs, both check)
+    Value: !Ref AppSecret
+    Export:
+      Name: !Sub '${AWS::StackName}-AppSecretArn'
   ListenerArn:
     Description: The web stack adds its frontend rule here (direct mode)
     Value: !If [HasCert, !Ref HttpsListener, !Ref HttpListener]
@@ -641,8 +601,15 @@ Outputs:
     Value: !Ref TaskDefinition
   LoadBalancerDnsName:
     Value: !GetAtt LoadBalancer.DNSName
+  LoadBalancerFullName:
+    Description: For the web stack's alarm
+    Value: !GetAtt LoadBalancer.LoadBalancerFullName
+    Export:
+      Name: !Sub '${AWS::StackName}-LoadBalancerFullName'
   PublicUrl:
-    Description: The portal in direct mode (cloudfront mode - the edge stack's AppUrl)
+    Description: The portal in direct mode (cloudfront mode - the edge stack's AppUrl); the provisioning service's email links
+    Export:
+      Name: !Sub '${AWS::StackName}-PublicUrl'
     Value: !If
       - HasDomain
       - !Sub

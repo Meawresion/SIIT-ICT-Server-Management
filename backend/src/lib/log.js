@@ -1,5 +1,5 @@
 // Structured logs (NFR-4.2): one JSON line per event on stdout, { ts, level, event, ...fields }.
-// On AWS, ECS sends stdout to CloudWatch Logs and the logs stack copies every line to S3, so these
+// On AWS, ECS sends stdout to the service's CloudWatch Logs group (logs stack, kept 90 days), so these
 // lines are the incident and audit record. Nothing secret may reach them: values under keys that
 // look secret are replaced, and token-like strings anywhere are masked.
 

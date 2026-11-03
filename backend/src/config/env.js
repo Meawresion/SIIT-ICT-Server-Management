@@ -2,6 +2,15 @@
 // root .env, and ECS passes them from the task definition and Secrets Manager (D13).
 
 const REQUIRED = ['GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET', 'GOOGLE_CALLBACK_URL', 'FRONTEND_URL', 'JWT_SECRET'];
+// SERVICE_ROLE (D34): all (one local process: every API route and the background work), api (every
+// API route, no background work), identity (sign-in and profiles: /api/auth, /api/users), requests
+// (requests and review: /api/requests, /api/reviewer; checks the sign-in token but needs no Google
+// client) or worker (the provisioning service: no HTTP, no sign-in).
+export const SERVICE_ROLES = ['all', 'api', 'identity', 'requests', 'worker'];
+const ROLE_REQUIRED = { worker: ['FRONTEND_URL'], requests: ['FRONTEND_URL', 'JWT_SECRET'] };
+// The routes each HTTP role serves.
+export const servesIdentity = role => ['all', 'api', 'identity'].includes(role);
+export const servesRequests = role => ['all', 'api', 'requests'].includes(role);
 const DB_KEYS = ['DB_HOST', 'DB_NAME', 'DB_USER', 'DB_PASSWORD'];
 const MIN_SECRET_LENGTH = 32;
 
@@ -15,16 +24,23 @@ export function databaseUrl(source = process.env) {
   return `mysql://${user}:${password}@${source.DB_HOST}:${port}/${encodeURIComponent(source.DB_NAME ?? '')}`;
 }
 
-// Called once at start (server.js): no fallback secrets or URLs, so a missing key stops the server
-// instead of running with a default (B7).
+// Called once at start (server.js, worker.js): no fallback secrets or URLs, so a missing key stops
+// the service instead of running with a default (B7).
 export function checkEnv(source = process.env) {
-  const missing = REQUIRED.filter(key => !source[key]);
+  const role = serviceRole(source);
+  const missing = (ROLE_REQUIRED[role] ?? REQUIRED).filter(key => !source[key]);
   if (source.DB_HOST) missing.push(...DB_KEYS.filter(key => !source[key]));
   else if (!source.DATABASE_URL) missing.push('DB_HOST (or DATABASE_URL)');
   if (missing.length) throw new Error(`Missing settings: ${missing.join(', ')}`);
-  if (source.NODE_ENV === 'production' && source.JWT_SECRET.length < MIN_SECRET_LENGTH) {
+  if (role !== 'worker' && source.NODE_ENV === 'production' && source.JWT_SECRET.length < MIN_SECRET_LENGTH) {
     throw new Error(`JWT_SECRET must be at least ${MIN_SECRET_LENGTH} characters in production`);
   }
+}
+
+export function serviceRole(source = process.env) {
+  const role = source.SERVICE_ROLE || 'all';
+  if (!SERVICE_ROLES.includes(role)) throw new Error(`SERVICE_ROLE must be one of ${SERVICE_ROLES.join(', ')}`);
+  return role;
 }
 
 const database_url = databaseUrl();
