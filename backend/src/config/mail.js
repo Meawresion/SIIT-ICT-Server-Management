@@ -6,6 +6,12 @@
 
 import { loadIdentityRules } from './identity.js';
 
+// The domains status emails may go to (also checked by the notification service on AWS).
+export function mailRecipientDomains(source = process.env) {
+  const rules = loadIdentityRules(source);
+  return [rules.studentDomain, ...rules.staffDomains];
+}
+
 export function loadMailConfig(source = process.env) {
   if (!String(source.SMTP_HOST ?? '').trim()) return null;
   const problems = [];
@@ -14,7 +20,6 @@ export function loadMailConfig(source = process.env) {
   if (source.SMTP_PORT && (!Number.isInteger(port) || port < 1 || port > 65535)) problems.push('SMTP_PORT is invalid');
   if (source.SMTP_SECURE && !['true', 'false'].includes(source.SMTP_SECURE)) problems.push('SMTP_SECURE must be true or false');
   if (problems.length) throw new Error(`Mail settings: ${problems.join('; ')}`);
-  const rules = loadIdentityRules(source);
   return {
     smtp: {
       host: source.SMTP_HOST, port, secure: source.SMTP_SECURE === 'true', requireTLS: source.SMTP_SECURE !== 'true',
@@ -22,6 +27,6 @@ export function loadMailConfig(source = process.env) {
     },
     from: source.MAIL_FROM,
     replyTo: source.MAIL_REPLY_TO || undefined,
-    allowedRecipientDomains: [rules.studentDomain, ...rules.staffDomains],
+    allowedRecipientDomains: mailRecipientDomains(source),
   };
 }

@@ -14,6 +14,10 @@
 //   GPU_NODES              comma-separated node names, as in acc-prov-vm's gpu-nodes.json; a tie
 //                          in load goes to the first (D12)
 //   OVPN_PROFILE_URL, MANUAL_GPU_URL, MANUAL_BIGDATA_URL   links put in the student's email (D14)
+//
+// SERVICE_ROLE=api (the API service on AWS, D34) only queues jobs in the outbox: it needs
+// MESSAGE_TRANSPORT (provisioning on), GPU_NODES and the links, but no queue, key or lifetime. The
+// provisioning service (SERVICE_ROLE=worker) and a single local process (all) need everything.
 
 import { EnvelopeError, parsePrivateBundle, parsePublicBundles } from '../messaging/envelope.js';
 
@@ -34,9 +38,14 @@ export function loadProvisioningConfig(source = process.env) {
   if (!transport) return null;
   const problems = [];
   const need = (keys) => keys.filter((k) => !source[k]).forEach((k) => problems.push(`${k} is required`));
+  const apiOnly = source.SERVICE_ROLE === 'api';
 
   let amqp, sqs;
-  if (transport === 'amqp') {
+  if (!['amqp', 'sqs'].includes(transport)) {
+    problems.push('MESSAGE_TRANSPORT must be amqp, sqs or empty');
+  } else if (apiOnly) {
+    // The outbox only: the provisioning service sends and receives.
+  } else if (transport === 'amqp') {
     need(['AMQP_URL', 'AMQP_USER', 'AMQP_PASSWORD', 'AMQP_REQUEST_QUEUE', 'AMQP_RESULT_QUEUE']);
     if (source.AMQP_URL && !/^amqps?:\/\//.test(source.AMQP_URL)) problems.push('AMQP_URL must be amqp:// or amqps://');
     for (const k of ['AMQP_REQUEST_QUEUE', 'AMQP_RESULT_QUEUE', 'AMQP_DEAD_LETTER_QUEUE']) {
@@ -52,20 +61,19 @@ export function loadProvisioningConfig(source = process.env) {
     }
     sqs = { region: source.AWS_REGION, requestQueueUrl: source.SQS_REQUEST_QUEUE_URL, resultQueueUrl: source.SQS_RESULT_QUEUE_URL,
       deadLetterQueues: [source.SQS_REQUEST_DLQ_URL, source.SQS_RESULT_DLQ_URL].filter(Boolean) };
-  } else {
-    problems.push('MESSAGE_TRANSPORT must be amqp, sqs or empty');
   }
 
-  need(['MSG_PRIVATE_KEY', 'MSG_PEER_PUBLIC_KEYS', 'MSG_JOB_TTL_SEC', 'MSG_MAX_TTL_SEC', 'GPU_NODES', 'OVPN_PROFILE_URL', 'MANUAL_GPU_URL', 'MANUAL_BIGDATA_URL']);
+  need(['GPU_NODES', 'OVPN_PROFILE_URL', 'MANUAL_GPU_URL', 'MANUAL_BIGDATA_URL']);
+  if (!apiOnly) need(['MSG_PRIVATE_KEY', 'MSG_PEER_PUBLIC_KEYS', 'MSG_JOB_TTL_SEC', 'MSG_MAX_TTL_SEC']);
   let me, peers;
   try {
-    if (source.MSG_PRIVATE_KEY) me = parsePrivateBundle(source.MSG_PRIVATE_KEY);
+    if (source.MSG_PRIVATE_KEY && !apiOnly) me = parsePrivateBundle(source.MSG_PRIVATE_KEY);
   } catch (err) {
     if (!(err instanceof EnvelopeError)) throw err;
     problems.push(`MSG_PRIVATE_KEY: ${err.message}`);
   }
   try {
-    if (source.MSG_PEER_PUBLIC_KEYS) peers = parsePublicBundles(source.MSG_PEER_PUBLIC_KEYS);
+    if (source.MSG_PEER_PUBLIC_KEYS && !apiOnly) peers = parsePublicBundles(source.MSG_PEER_PUBLIC_KEYS);
   } catch (err) {
     if (!(err instanceof EnvelopeError)) throw err;
     problems.push(`MSG_PEER_PUBLIC_KEYS: ${err.message}`);

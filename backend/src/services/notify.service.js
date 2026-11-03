@@ -5,12 +5,15 @@
 // these emails never carry credentials.
 //
 // Sent after the change is committed, best effort: a mail failure is logged and never undoes or
-// blocks the decision. Without SMTP settings the emails are only logged.
+// blocks the decision. On AWS (EVENT_BUS_NAME set) each email goes as an "Email requested" event to
+// the notification service, which alone holds the SMTP settings (D34); locally the backend sends it
+// over SMTP itself. Without either the emails are only logged.
 
 import nodemailer from 'nodemailer';
 import prisma from '../lib/prisma.js';
 import env from '../config/env.js';
-import { loadMailConfig } from '../config/mail.js';
+import { loadMailConfig, mailRecipientDomains } from '../config/mail.js';
+import { createEventPublisher, EMAIL_REQUESTED } from '../lib/events.js';
 import { AUTOMATED_RESOURCES } from './provisioning.service.js';
 import { log } from '../lib/log.js';
 
@@ -94,20 +97,28 @@ function render({ fullName, lines, link }) {
   return { text, html };
 }
 
-// config: loadMailConfig() or null. transport: optional nodemailer transport (tests).
-export function createNotifier(config, { transport, log = () => {}, portalUrl = env.frontend_url } = {}) {
-  const transporter = config ? nodemailer.createTransport(transport ?? config.smtp) : null;
+// config: loadMailConfig() or null. transport: optional nodemailer transport (tests). events: an
+// event publisher (lib/events.js): the emails then go to the notification service instead, and
+// allowedRecipientDomains replaces config's.
+export function createNotifier(config, { transport, events, allowedRecipientDomains, log = () => {}, portalUrl = env.frontend_url } = {}) {
+  const transporter = !events && config ? nodemailer.createTransport(transport ?? config.smtp) : null;
+  const allowed = allowedRecipientDomains ?? config?.allowedRecipientDomains;
 
   async function send({ to, fullName, subject, lines, path }) {
     const { text, html } = render({ fullName, lines, link: new URL(path, portalUrl).toString() });
-    assertRecipient(to, config.allowedRecipientDomains);
+    assertRecipient(to, allowed);
+    if (events) {
+      await events.publish(EMAIL_REQUESTED, { to, subject, text, html });
+      log('mail.requested', { subject });
+      return;
+    }
     const info = await transporter.sendMail({ from: config.from, replyTo: config.replyTo, to: { name: '', address: to }, subject, text, html });
     log('mail.sent', { subject, messageId: info.messageId });
   }
 
   // event: { rid, action, from, to, comment, details? } (statuses as stored, e.g. 'On_Use').
   async function requestEvent({ rid, action, from, to, comment, details }) {
-    if (!transporter) {
+    if (!transporter && !events) {
       log('mail.skipped', { rid, action, reason: 'SMTP is not configured' });
       return;
     }
@@ -161,8 +172,11 @@ export function createNotifier(config, { transport, log = () => {}, portalUrl = 
 }
 
 let notifier;
-// The running server's notifier (settings read on first use; server.js checks them at start).
+// The running service's notifier (settings read on first use; server.js checks them at start).
 export function notifyRequestEvent(event) {
-  notifier ??= createNotifier(loadMailConfig(), { log });
+  const busName = process.env.EVENT_BUS_NAME;
+  notifier ??= busName
+    ? createNotifier(null, { events: createEventPublisher({ busName }), allowedRecipientDomains: mailRecipientDomains(), log })
+    : createNotifier(loadMailConfig(), { log });
   return notifier.notify(event);
 }

@@ -32,6 +32,9 @@ services:
     environment:
       NODE_ENV: ${NODE_ENV}
       PORT: 3000
+      # all: this one process is the API and the provisioning service (on AWS they are separate
+      # ECS services, D34; status emails then go through the notification Lambda).
+      SERVICE_ROLE: all
       DB_HOST: mysql
       DB_PORT: 3306
       DB_NAME: ${MYSQL_DATABASE}
