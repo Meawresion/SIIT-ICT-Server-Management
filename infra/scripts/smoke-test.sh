@@ -6,7 +6,7 @@
 # The scheduler runs every 30 s, so check-scheduler.js sees it act.
 #
 # Kept between runs: network, platform (the ECR images), queues (the backend key acc-prov-vm is set
-# up with) and logs (the S3 log archive), created here only when they are missing; images already
+# up with) and logs (log groups, audit trail, alert topic), created here only when they are missing; images already
 # in ECR are not uploaded again. The dns and cert stacks are left alone too. Only teardown-all.sh
 # deletes them. Don't run this while the real acc-prov-vm is connected to the queues: it would take
 # the test jobs, which are sealed for the throwaway site key, and dead-letter them.
@@ -147,13 +147,14 @@ fi
 if wait "$site_pid"; then pass "the fake site opened all four signed and encrypted jobs and answered"; else fail "fake site"; fi
 site_pid=
 
-# The log archive: CloudWatch -> Firehose (about a minute) -> S3. The audit shipper copies events
-# older than 2 minutes every 30 s, so give both up to 6 minutes.
-in_s3() { # in_s3 <text> [--alb]: polls the archive for a line written during this run
+# The logs: CloudWatch Logs takes seconds; the audit shipper copies events older than 2 minutes
+# every 30 s; the ALB writes its access log files to S3 every 5 minutes. Give each up to 6 minutes.
+in_logs() { # in_logs <text> [find-in-logs options]: polls for a line written during this run
   for _ in $(seq 1 24); do "$SCRIPTS/find-in-logs.sh" "$1" --since "$started_iso" "${@:2}" >/dev/null 2>&1 && return 0; sleep 15; done
   return 1
 }
-if in_s3 "$marker"; then pass "a request's access log line reached the S3 log archive (find-in-logs.sh)"; else fail "access log line in S3"; fi
-if in_s3 '"action":"PROVISIONED"'; then pass "the audit trail reached S3 (audit.event lines from request_event)"; else fail "audit events in S3"; fi
-# The ALB writes its access logs every 5 minutes.
-if in_s3 "$marker" --alb; then pass "the ALB access logs reached S3"; else fail "ALB access logs in S3"; fi
+if in_logs "$marker" --group backend; then pass "a request's access log line is in CloudWatch Logs (find-in-logs.sh, Logs Insights)"; else fail "access log line in CloudWatch Logs"; fi
+if in_logs '"action":"PROVISIONED"' --group audit; then pass "the audit trail reached its log group (request_event copied to /$PROJECT/audit)"; else fail "audit events in the audit log group"; fi
+if in_logs "$marker" --alb; then pass "the ALB access logs reached S3"; else fail "ALB access logs in S3"; fi
+alarms=$(awst cloudwatch describe-alarms --alarm-name-prefix "$PROJECT-" --query 'length(MetricAlarms)')
+expect "the app and web stacks' alarms exist (errors, ALB 5xx, unhealthy targets, dead letters)" 5 "$alarms"

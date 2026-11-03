@@ -98,13 +98,9 @@ Parameters:
     Type: String
     Default: Asia/Bangkok
     Description: The time zone request dates are in
-  LogRetentionDays:
-    Type: Number
-    Default: 14
   LogsStack:
     Type: String
-    Default: ''
-    Description: Empty = the logs stay in CloudWatch only; else ALB access logs and every log line also go to its S3 bucket
+    Description: The logs stack (log groups, audit group, alert topic, ALB access log bucket)
   QueuesStack:
     Type: String
     Default: ''
@@ -163,7 +159,6 @@ Conditions:
   HasMail: !Not [!Equals [!Ref MailSecretArn, '']]
   NoCert: !Equals [!Ref CertStack, '']
   HasQueues: !Not [!Equals [!Ref QueuesStack, '']]
-  HasLogs: !Not [!Equals [!Ref LogsStack, '']]
   # direct mode with a certificate: port 80 only redirects to HTTPS.
   RedirectHttp: !And [!Not [!Condition ViaCloudFront], !Condition HasCert]
 
@@ -242,20 +237,14 @@ Resources:
       LoadBalancerAttributes:
         - Key: routing.http.drop_invalid_header_fields.enabled
           Value: 'true'
-        # Access logs (every request, incl. the ALB's own 4xx/5xx) to the log archive, every 5 minutes.
+        # Access logs (every request, incl. the ALB's own 4xx/5xx) to the logs bucket, every 5 minutes.
         - Key: access_logs.s3.enabled
-          Value: !If [HasLogs, 'true', 'false']
-        - !If
-          - HasLogs
-          - Key: access_logs.s3.bucket
-            Value:
-              Fn::ImportValue: !Sub '${LogsStack}-BucketName'
-          - !Ref AWS::NoValue
-        - !If
-          - HasLogs
-          - Key: access_logs.s3.prefix
-            Value: alb
-          - !Ref AWS::NoValue
+          Value: 'true'
+        - Key: access_logs.s3.bucket
+          Value:
+            Fn::ImportValue: !Sub '${LogsStack}-BucketName'
+        - Key: access_logs.s3.prefix
+          Value: alb
   TargetGroup:
     Type: AWS::ElasticLoadBalancingV2::TargetGroup
     Properties:
@@ -359,23 +348,125 @@ Resources:
         DNSName: !GetAtt LoadBalancer.DNSName
         HostedZoneId: !GetAtt LoadBalancer.CanonicalHostedZoneID
 
-  LogGroup:
-    Type: AWS::Logs::LogGroup
+  # Alarms mail the logs stack's alert topic. They live here, so they are billed ($0.10 each a
+  # month) only while the app runs.
+  BackendErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
     Properties:
-      LogGroupName: !Sub '/${Project}/backend'
-      RetentionInDays: !Ref LogRetentionDays
-
-  # Every log line also goes to the S3 log archive (logs stack), so it outlives this stack.
-  LogsToArchive:
-    Type: AWS::Logs::SubscriptionFilter
-    Condition: HasLogs
+      AlarmName: !Sub '${Project}-backend-errors'
+      AlarmDescription: The backend logged an error (find it with find-in-logs.sh or the saved query backend-errors)
+      Namespace:
+        Fn::ImportValue: !Sub '${LogsStack}-MetricNamespace'
+      MetricName: BackendErrors
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [{'Fn::ImportValue': !Sub '${LogsStack}-AlertTopicArn'}]
+  AlbServerErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
     Properties:
-      LogGroupName: !Ref LogGroup
-      FilterPattern: ''
-      DestinationArn:
-        Fn::ImportValue: !Sub '${LogsStack}-DeliveryStreamArn'
-      RoleArn:
-        Fn::ImportValue: !Sub '${LogsStack}-SubscriptionRoleArn'
+      AlarmName: !Sub '${Project}-alb-5xx'
+      AlarmDescription: The ALB answered 5xx itself (502/503/504), usually no healthy target
+      Namespace: AWS/ApplicationELB
+      MetricName: HTTPCode_ELB_5XX_Count
+      Dimensions:
+        - Name: LoadBalancer
+          Value: !GetAtt LoadBalancer.LoadBalancerFullName
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 5
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [{'Fn::ImportValue': !Sub '${LogsStack}-AlertTopicArn'}]
+  BackendUnhealthyAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${Project}-backend-unhealthy'
+      AlarmDescription: A backend task failed the ALB health check for 3 minutes
+      Namespace: AWS/ApplicationELB
+      MetricName: UnHealthyHostCount
+      Dimensions:
+        - Name: LoadBalancer
+          Value: !GetAtt LoadBalancer.LoadBalancerFullName
+        - Name: TargetGroup
+          Value: !GetAtt TargetGroup.TargetGroupFullName
+      Statistic: Maximum
+      Period: 60
+      EvaluationPeriods: 3
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [{'Fn::ImportValue': !Sub '${LogsStack}-AlertTopicArn'}]
+  # A job or result the other side could not process (the scheduler also fails the request).
+  DeadLetterAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Condition: HasQueues
+    Properties:
+      AlarmName: !Sub '${Project}-dead-letters'
+      AlarmDescription: A provisioning job or result reached a dead-letter queue
+      Metrics:
+        - Id: total
+          Expression: requests + results
+          ReturnData: true
+        - Id: requests
+          ReturnData: false
+          MetricStat:
+            Stat: Maximum
+            Period: 300
+            Metric:
+              Namespace: AWS/SQS
+              MetricName: ApproximateNumberOfMessagesVisible
+              Dimensions:
+                - Name: QueueName
+                  Value: !Sub '${Project}-provision-requests-dlq'
+        - Id: results
+          ReturnData: false
+          MetricStat:
+            Stat: Maximum
+            Period: 300
+            Metric:
+              Namespace: AWS/SQS
+              MetricName: ApproximateNumberOfMessagesVisible
+              Dimensions:
+                - Name: QueueName
+                  Value: !Sub '${Project}-provision-results-dlq'
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [{'Fn::ImportValue': !Sub '${LogsStack}-AlertTopicArn'}]
+  # A task of this project's cluster that crashed or could not start (deploys and scale-in stop
+  # tasks with other stop codes, so they are not reported). EventBridge rules cost nothing.
+  TaskStoppedRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: !Sub 'Mail the alert topic when a ${Project} task crashes or fails to start'
+      EventPattern:
+        source: [aws.ecs]
+        detail-type: [ECS Task State Change]
+        detail:
+          clusterArn:
+            - !Sub
+              - 'arn:${AWS::Partition}:ecs:${AWS::Region}:${AWS::AccountId}:cluster/${Cluster}'
+              - Cluster:
+                  Fn::ImportValue: !Sub '${PlatformStack}-ClusterName'
+          lastStatus: [STOPPED]
+          stopCode: [EssentialContainerExited, TaskFailedToStart]
+      Targets:
+        - Id: alerts
+          Arn:
+            Fn::ImportValue: !Sub '${LogsStack}-AlertTopicArn'
+          InputTransformer:
+            InputPathsMap:
+              group: $.detail.group
+              code: $.detail.stopCode
+              reason: $.detail.stoppedReason
+              task: $.detail.taskArn
+            InputTemplate: '"ECS task stopped: <group> (<code>): <reason>. Task <task>. Its last log lines are in CloudWatch Logs."'
 
   TaskDefinition:
     Type: AWS::ECS::TaskDefinition
@@ -448,16 +539,17 @@ Resources:
               Value: !Ref ExpiryReminderDays
             - Name: SITE_TIME_ZONE
               Value: !Ref SiteTimeZone
+            - Name: AWS_REGION
+              Value: !Ref AWS::Region
+            # The audit trail (request_event) is copied into this log group (kept 400 days).
+            - Name: AUDIT_LOG_GROUP
+              Value:
+                Fn::ImportValue: !Sub '${LogsStack}-AuditLogGroup'
             # Automatic provisioning through acc-prov-vm (plan §2), only with a queues stack.
             - !If
               - HasQueues
               - Name: MESSAGE_TRANSPORT
                 Value: sqs
-              - !Ref AWS::NoValue
-            - !If
-              - HasQueues
-              - Name: AWS_REGION
-                Value: !Ref AWS::Region
               - !Ref AWS::NoValue
             - !If
               - HasQueues
@@ -582,7 +674,8 @@ Resources:
           LogConfiguration:
             LogDriver: awslogs
             Options:
-              awslogs-group: !Ref LogGroup
+              awslogs-group:
+                Fn::ImportValue: !Sub '${LogsStack}-BackendLogGroup'
               awslogs-region: !Ref AWS::Region
               awslogs-stream-prefix: backend
 
@@ -641,6 +734,11 @@ Outputs:
     Value: !Ref TaskDefinition
   LoadBalancerDnsName:
     Value: !GetAtt LoadBalancer.DNSName
+  LoadBalancerFullName:
+    Description: For the web stack's alarm
+    Value: !GetAtt LoadBalancer.LoadBalancerFullName
+    Export:
+      Name: !Sub '${AWS::StackName}-LoadBalancerFullName'
   PublicUrl:
     Description: The portal in direct mode (cloudfront mode - the edge stack's AppUrl)
     Value: !If

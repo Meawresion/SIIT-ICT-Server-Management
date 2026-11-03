@@ -20,19 +20,21 @@ deploy_network() { deploy "$STACK_NETWORK" network.yaml "Project=$PROJECT"; }
 deploy_platform() { deploy "$STACK_PLATFORM" platform.yaml "Project=$PROJECT" "NetworkStack=$STACK_NETWORK"; }
 
 deploy_logs() {
-  deploy "$STACK_LOGS" logs.yaml "Project=$PROJECT" "FirehoseRoleArn=$(role_arn)" "SubscriptionRoleArn=$(role_arn)" \
-    "RetentionDays=${LOG_ARCHIVE_DAYS:-400}"
-  echo "Log archive: s3://$(stack_output "$STACK_LOGS" BucketName) (search it with find-in-logs.sh)"
+  deploy "$STACK_LOGS" logs.yaml "Project=$PROJECT" "AppLogDays=${APP_LOG_DAYS:-90}" \
+    "AuditLogDays=${AUDIT_LOG_DAYS:-400}" "AlbLogDays=${ALB_LOG_DAYS:-400}" "AlertEmail=${ALERT_EMAIL:-}"
+  echo "Logs: CloudWatch Logs /$PROJECT/* (search them with find-in-logs.sh); ALB access logs: s3://$(stack_output "$STACK_LOGS" BucketName)"
+  if [ -n "${ALERT_EMAIL:-}" ]; then echo "Alerts go to $ALERT_EMAIL once its confirmation link (from AWS Notifications) is clicked."; fi
 }
 
 deploy_data() {
   local tag role
+  require_logs_stack
   tag=$(mysql_tag)
   role=$(role_arn)
   require_image "$PROJECT-mysql" "$tag"
   deploy "$STACK_DATA" data-ecs.yaml "Project=$PROJECT" "NetworkStack=$STACK_NETWORK" \
     "PlatformStack=$STACK_PLATFORM" "ImageTag=$tag" "ExecutionRoleArn=$role" "TaskRoleArn=$role" \
-    "DesiredCount=${DB_DESIRED_COUNT:-1}" "$(logs_stack_param)"
+    "DesiredCount=${DB_DESIRED_COUNT:-1}" "LogsStack=$STACK_LOGS"
 }
 
 deploy_queues() {
@@ -47,6 +49,7 @@ deploy_secrets() {
 
 deploy_app() {
   local tag role google mail prefix_list='' dns_stack='' cert_stack='' provisioning=()
+  require_logs_stack
   tag=$(backend_tag)
   role=$(role_arn)
   require_image "$PROJECT-backend" "$tag"
@@ -85,7 +88,7 @@ deploy_app() {
     "DegreeEmailPrefixes=$DEGREE_EMAIL_PREFIXES" "StaffEmailDomains=$STAFF_EMAIL_DOMAINS" \
     "SessionIdleMinutes=${SESSION_IDLE_MINUTES:-30}" "SessionMaxHours=${SESSION_MAX_HOURS:-12}" \
     "SchedulerIntervalSeconds=${SCHEDULER_INTERVAL_SEC:-300}" "ExpiryReminderDays=${EXPIRY_REMINDER_DAYS:-3}" \
-    "SiteTimeZone=${SITE_TIME_ZONE:-Asia/Bangkok}" "$(logs_stack_param)" "${provisioning[@]}"
+    "SiteTimeZone=${SITE_TIME_ZONE:-Asia/Bangkok}" "LogsStack=$STACK_LOGS" "${provisioning[@]}"
   echo "Backend: $(stack_output "$STACK_APP" PublicUrl)"
 }
 
@@ -95,11 +98,12 @@ deploy_web() {
     echo "web needs ENTRY_MODE=direct (with CloudFront, edge serves the frontend from S3)." >&2
     exit 1
   fi
+  require_logs_stack
   tag=$(frontend_tag)
   require_image "$PROJECT-frontend" "$tag"
   deploy "$STACK_WEB" web.yaml "Project=$PROJECT" "NetworkStack=$STACK_NETWORK" \
     "PlatformStack=$STACK_PLATFORM" "AppStack=$STACK_APP" "ImageTag=$tag" \
-    "ExecutionRoleArn=$(role_arn)" "DesiredCount=${FRONTEND_DESIRED_COUNT:-1}" "$(logs_stack_param)"
+    "ExecutionRoleArn=$(role_arn)" "DesiredCount=${FRONTEND_DESIRED_COUNT:-1}" "LogsStack=$STACK_LOGS"
   echo "Portal: $(stack_output "$STACK_APP" PublicUrl)"
 }
 

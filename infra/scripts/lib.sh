@@ -114,12 +114,16 @@ docker_() { MSYS_NO_PATHCONV=1 $DOCKER "$@"; }
 
 # Kept between test runs: they run nothing and cost little or nothing while idle. platform holds the
 # ECR images (a run only uploads what changed); queues keeps the backend key and queue URLs that
-# acc-prov-vm is set up with (D33); logs is the log archive. Only teardown-all.sh deletes them.
+# acc-prov-vm is set up with (D33); logs holds the log groups, the audit trail and the alert topic.
+# Only teardown-all.sh deletes them.
 KEPT_STACKS=("$STACK_NETWORK" "$STACK_PLATFORM" "$STACK_QUEUES" "$STACK_LOGS")
 
-# "LogsStack=<name>" when the logs stack exists (log lines and ALB logs then go to S3), else empty.
-logs_stack_param() {
-  if aws cloudformation describe-stacks --stack-name "$STACK_LOGS" >/dev/null 2>&1; then echo "LogsStack=$STACK_LOGS"; else echo "LogsStack="; fi
+# The data, app and web stacks write to the logs stack's log groups, so it must exist first.
+require_logs_stack() {
+  if ! aws cloudformation describe-stacks --stack-name "$STACK_LOGS" >/dev/null 2>&1; then
+    echo "The $STACK_LOGS stack is missing: run deploy.sh logs first." >&2
+    exit 1
+  fi
 }
 
 # Deletes every object of a bucket (the logs bucket has no versioning).
@@ -199,6 +203,7 @@ leftovers() {
   check "EFS file systems" efs describe-file-systems --query "FileSystems[?Name=='$PROJECT-mysql-data'].FileSystemId"
   local kept_groups=()
   [[ $allowed == *" $STACK_QUEUES "* ]] && kept_groups+=("/$PROJECT/message-keys")
+  [[ $allowed == *" $STACK_LOGS "* ]] && kept_groups+=("/$PROJECT/backend" "/$PROJECT/frontend" "/$PROJECT/mysql" "/$PROJECT/audit")
   check "log groups" logs describe-log-groups --log-group-name-prefix "/$PROJECT/" \
     --query "logGroups[?!contains([$(printf "'%s'," "${kept_groups[@]}" | sed 's/,$//')], logGroupName)].logGroupName"
   if [[ $allowed != *" $STACK_QUEUES "* ]]; then
@@ -207,8 +212,12 @@ leftovers() {
   fi
   if [[ $allowed != *" $STACK_LOGS "* ]]; then
     check "S3 log buckets" s3api list-buckets --query "Buckets[?starts_with(Name,'$PROJECT-logs-')].Name"
-    check "Firehose streams" firehose list-delivery-streams --query "DeliveryStreamNames[?starts_with(@,'$PROJECT-')]"
+    check "SNS topics" sns list-topics --query "Topics[?contains(TopicArn,':$PROJECT-')].TopicArn"
   fi
+  # The alarms and the task-stopped rule belong to the app and web stacks, never to a kept one.
+  check "CloudWatch alarms" cloudwatch describe-alarms --alarm-name-prefix "$PROJECT-" --query 'MetricAlarms[].AlarmName'
+  check "EventBridge rules" events list-rules --name-prefix "$PROJECT-" --query 'Rules[].Name'
+  check "Firehose streams" firehose list-delivery-streams --query "DeliveryStreamNames[?starts_with(@,'$PROJECT-')]"
   # Secrets of the kept stacks (the queues stack holds the backend message key) are allowed.
   check "secrets (incl. pending deletion)" secretsmanager list-secrets --include-planned-deletion \
     --query "SecretList[?starts_with(Description,'$PROJECT ') && !contains([${skip%,}], Tags[?Key=='aws:cloudformation:stack-name'] | [0].Value || '')].[Name,DeletedDate]"
