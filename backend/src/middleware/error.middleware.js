@@ -1,6 +1,6 @@
 // Request IDs, the access log and error answers. Clients never see internal details: a 5xx answer
 // only carries a reference (the request ID). The full error goes to the logs under that ID; on AWS
-// the logs are in S3 too, so the reference finds the incident (infra/scripts/find-in-logs.sh).
+// the logs are kept in CloudWatch Logs, so the reference finds the incident (infra/scripts/find-in-logs.sh).
 
 import { randomUUID } from 'node:crypto';
 import { errorFields, log, logError, warn } from '../lib/log.js';

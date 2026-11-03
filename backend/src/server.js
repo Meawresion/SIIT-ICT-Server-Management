@@ -27,7 +27,7 @@ const server = app.listen(port, () => {
 const provisioner = provisioning ? await startProvisioning(provisioning, { log }) : null;
 if (!provisioning) log('provision.off', { reason: 'no MESSAGE_TRANSPORT: GPU and Big Data requests are activated by hand' });
 const scheduler = startScheduler(schedulerConfig, { provisioning, transport: provisioner?.transport, log, notify: notifyRequestEvent });
-// The audit trail as log lines too, so on AWS it reaches S3 and outlives the database.
+// The audit trail copied out of the database (on AWS: the audit log group), so it outlives the database.
 const auditShipper = startAuditShipper({ log });
 
 // ECS sends SIGTERM on every deploy and scale-in: stop taking connections, let the requests in
