@@ -267,3 +267,89 @@ npm run send-test-job -- create gpu-01 you@example.com     # terminal 2, prints 
 npm run send-test-job -- revoke gpu-01
 npm run send-test-job -- create bigdata you@example.com   # the Hadoop nodes of bigdata.json
 ```
+
+## Running at the site (systemd)
+
+`deploy/acc-prov-vm.service` runs the worker as the unprivileged `accprov` user. The code is
+root-owned, so the service can't change it. The settings are in `/etc/acc-prov-vm`, and the job
+store and Chromium live in `/var/lib/acc-prov-vm`.
+
+**Requirements on the host (Ubuntu):**
+- Node.js 22 at `/usr/bin/node` (e.g. from NodeSource; otherwise change `ExecStart`).
+- Outbound HTTPS to `sqs.<region>.amazonaws.com`, and SMTP to the mail server.
+- The pfSense webGUI, and SSH to the GPU and Hadoop nodes.
+
+**Install** (as an admin with sudo):
+
+1. Code, user and folders:
+   ```bash
+   sudo git clone https://github.com/Meawresion/SIIT-ICT-Server-Management.git /opt/siit
+   cd /opt/siit/acc-prov-vm && sudo npm ci --omit=dev
+   sudo useradd --system --home-dir /var/lib/acc-prov-vm --shell /usr/sbin/nologin accprov
+   sudo install -d -o accprov -g accprov -m 750 /var/lib/acc-prov-vm
+   sudo install -d -o root -g accprov -m 750 /etc/acc-prov-vm
+   ```
+2. Chromium for Playwright. The system libraries need root; the browser goes to the service's folder:
+   ```bash
+   sudo npx playwright install-deps chromium
+   sudo -u accprov env PLAYWRIGHT_BROWSERS_PATH=/var/lib/acc-prov-vm/ms-playwright npx playwright install chromium
+   ```
+3. Settings. Fill them in as in [Setup](#setup):
+   ```bash
+   sudo cp .env.example /etc/acc-prov-vm/acc-prov-vm.env
+   sudo cp gpu-nodes.example.json /etc/acc-prov-vm/gpu-nodes.json
+   sudo cp bigdata.example.json /etc/acc-prov-vm/bigdata.json
+   sudo chown root:accprov /etc/acc-prov-vm/*
+   sudo chmod 640 /etc/acc-prov-vm/*
+   sudoedit /etc/acc-prov-vm/acc-prov-vm.env
+   ```
+   - Paths in the settings file must be absolute: `GPU_NODES_FILE=/etc/acc-prov-vm/gpu-nodes.json`
+     and `BIGDATA_FILE=/etc/acc-prov-vm/bigdata.json`.
+   - An SSH key goes in `/etc/acc-prov-vm/ssh/`, owned `root:accprov`, mode 640.
+   - `JOB_STORE_FILE` is set by the unit (`/var/lib/acc-prov-vm/jobs.json`).
+   - Leave the `AWS_*` keys out of this file; step 6 puts them in `aws.env`.
+   - The npm scripts read `.env` in the code folder, so link it there:
+     ```bash
+     sudo ln -s /etc/acc-prov-vm/acc-prov-vm.env /opt/siit/acc-prov-vm/.env
+     ```
+4. Message keys and queues:
+   - `sudo -u accprov npm run keygen -- site-YYYY-MM`. The private line goes in the settings file
+     (`MSG_PRIVATE_KEY`). The public line goes to the portal's `SITE_PUBLIC_KEYS` (`infra/config.env`,
+     then `deploy.sh app identity provisioning`).
+   - Set `MESSAGE_TRANSPORT=sqs`, the two queue URLs and `MSG_PEER_PUBLIC_KEYS` from the queues
+     stack outputs (see [AWS SQS](#aws-sqs)).
+5. Check the settings:
+   ```bash
+   sudo -u accprov env PLAYWRIGHT_BROWSERS_PATH=/var/lib/acc-prov-vm/ms-playwright npm run check:config
+   ```
+   It lists the GPU and Hadoop nodes.
+6. The service and the AWS keys:
+   ```bash
+   sudo cp deploy/acc-prov-vm.service /etc/systemd/system/
+   sudo systemctl daemon-reload
+   sudo systemctl enable acc-prov-vm
+   sudo bash deploy/set-aws-creds.sh
+   ```
+   `set-aws-creds.sh` asks you to paste Learner Lab's "AWS CLI" block, then Ctrl+D. It writes
+   `/etc/acc-prov-vm/aws.env` (root only), then starts or restarts the service. The keys are never
+   printed.
+7. Watch the first start: `journalctl -u acc-prov-vm -f`. It logs JSON lines, starting with
+   `acc-prov-vm.ready` (the transport, the key id and the nodes).
+   - The hardening lines in the unit were checked with `systemd-analyze verify`, but not yet on the
+     SIIT host.
+   - If Chromium or SSH fails only under systemd, comment them out one at a time
+     (`ProtectSystem`, then `ProtectHome`, then `PrivateTmp`), `daemon-reload` and restart.
+
+**Day to day:**
+
+| Task | Command |
+|---|---|
+| New Learner Lab session (the keys expire after a few hours) | `sudo bash /opt/siit/acc-prov-vm/deploy/set-aws-creds.sh` |
+| Logs | `journalctl -u acc-prov-vm -f` (`--since "1 hour ago"`) |
+| Stop or start (e.g. before a portal smoke test, which must not meet the real worker) | `sudo systemctl stop acc-prov-vm` / `start` |
+| New version | `cd /opt/siit && sudo git pull && cd acc-prov-vm && sudo npm ci --omit=dev && sudo systemctl restart acc-prov-vm` |
+| Changed settings | `sudoedit /etc/acc-prov-vm/acc-prov-vm.env`, then `sudo systemctl restart acc-prov-vm` |
+| Delete a student's accounts (admin) | `cd /opt/siit/acc-prov-vm && sudo -u accprov npm run cleanup-user -- <username> --fullname "<name>"` (see above) |
+
+A stop or restart in the middle of a job is safe: the job comes back from the queue, and a
+CREATE retry sets one fresh password on every account and emails it last.
