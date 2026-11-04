@@ -1,0 +1,307 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  Database on RDS (D31): MySQL 8.4, Multi-AZ (a standby in the second AZ takes over by itself),
+  private subnets, TLS required, encrypted storage, automated backups with point-in-time recovery.
+  Same exports as data-ecs (DbHost, DbPort, DbName, DbTls and one database user secret per service,
+  D34), so the services switch by their DataStack parameter. The schema and the service users come
+  from rds-init.sh, which deploy.sh runs as a one-off task (InitTaskDefinitionArn) after each deploy.
+  With CopyFromStack set (switch-to-rds.sh), that task also copies the data of the ECS MySQL.
+
+Parameters:
+  Project:
+    Type: String
+    Default: siit
+  LogsStack:
+    Type: String
+    Description: The logs stack (MySQL log group for the init task, alert topic)
+  NetworkStack:
+    Type: String
+  PlatformStack:
+    Type: String
+  ImageTag:
+    Type: String
+    Description: Tag of the siit-mysql image in ECR (it holds rds-init.sh, init.sql and privileges.sh)
+  ExecutionRoleArn:
+    Type: String
+    Description: Pulls the image and reads the secrets (Learner Lab - LabRole, D30)
+  TaskRoleArn:
+    Type: String
+    Description: Role of the init task (Learner Lab - LabRole, D30)
+  DbName:
+    Type: String
+    Default: siit_resource
+  InstanceClass:
+    Type: String
+    Default: db.t3.micro
+  MultiAz:
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+  AllocatedStorage:
+    Type: Number
+    Default: 20
+    Description: GiB (gp3); grows by itself up to MaxAllocatedStorage
+  MaxAllocatedStorage:
+    Type: Number
+    Default: 50
+  BackupRetentionDays:
+    Type: Number
+    Default: 7
+    MinValue: 1
+    MaxValue: 35
+    Description: Days of automated backups (restore to any second in them). Kept after the stack is deleted until they expire.
+  CopyFromStack:
+    Type: String
+    Default: ''
+    Description: A data-ecs stack whose data the init task copies into this (still empty) database; empty = no copy
+
+Conditions:
+  Copy: !Not [!Equals [!Ref CopyFromStack, '']]
+
+Resources:
+  # Generated names (no Name property), so a recreated stack never collides with a secret that is
+  # still in its deletion recovery window. The admin is used by the init task only.
+  DbAdminSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Description: !Sub '${Project} RDS admin (schema and users only, rds-init.sh)'
+      GenerateSecretString:
+        SecretStringTemplate: !Sub '{"username":"${Project}admin"}'
+        GenerateStringKey: password
+        PasswordLength: 32
+        ExcludePunctuation: true
+  IdentityDbSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Description: !Sub '${Project} MySQL user of the identity service (username, password)'
+      GenerateSecretString:
+        SecretStringTemplate: !Sub '{"username":"${Project}_identity"}'
+        GenerateStringKey: password
+        PasswordLength: 32
+        ExcludePunctuation: true
+  RequestsDbSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Description: !Sub '${Project} MySQL user of the requests service (username, password)'
+      GenerateSecretString:
+        SecretStringTemplate: !Sub '{"username":"${Project}_requests"}'
+        GenerateStringKey: password
+        PasswordLength: 32
+        ExcludePunctuation: true
+  ProvisioningDbSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Description: !Sub '${Project} MySQL user of the provisioning service (username, password)'
+      GenerateSecretString:
+        SecretStringTemplate: !Sub '{"username":"${Project}_provisioning"}'
+        GenerateStringKey: password
+        PasswordLength: 32
+        ExcludePunctuation: true
+
+  DbSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: RDS MySQL (3306 only from the backend tasks and the init task)
+      VpcId:
+        Fn::ImportValue: !Sub '${NetworkStack}-VpcId'
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 3306
+          ToPort: 3306
+          SourceSecurityGroupId:
+            Fn::ImportValue: !Sub '${PlatformStack}-BackendSecurityGroupId'
+          Description: Backend tasks
+      Tags:
+        - Key: Name
+          Value: !Sub '${Project}-rds'
+
+  # The private subnets have no route to the internet (S7).
+  SubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: !Sub '${Project} RDS (private subnets, 2 AZs)'
+      SubnetIds: !Split [',', {'Fn::ImportValue': !Sub '${NetworkStack}-PrivateSubnets'}]
+
+  ParameterGroup:
+    Type: AWS::RDS::DBParameterGroup
+    Properties:
+      Description: !Sub '${Project} MySQL 8.4'
+      Family: mysql8.4
+      Parameters:
+        # Every connection must use TLS (the services: DB_TLS=verify).
+        require_secure_transport: '1'
+        # init.sql creates the audit log's triggers. With backups on, the binary log is on, and
+        # then only SUPER (which RDS doesn't give) may create triggers unless this is set.
+        log_bin_trust_function_creators: '1'
+
+  # Deleting the stack deletes the instance without a final snapshot, but its automated backups
+  # stay until they expire (BackupRetentionDays): restore from them in the RDS console. A change
+  # that replaces the instance takes a snapshot of the old one first.
+  DbInstance:
+    Type: AWS::RDS::DBInstance
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Snapshot
+    Properties:
+      Engine: mysql
+      EngineVersion: '8.4'
+      AutoMinorVersionUpgrade: true
+      DBInstanceClass: !Ref InstanceClass
+      MultiAZ: !Ref MultiAz
+      AllocatedStorage: !Ref AllocatedStorage
+      MaxAllocatedStorage: !Ref MaxAllocatedStorage
+      StorageType: gp3
+      StorageEncrypted: true
+      DBName: !Ref DbName
+      MasterUsername: !Sub '{{resolve:secretsmanager:${DbAdminSecret}:SecretString:username}}'
+      MasterUserPassword: !Sub '{{resolve:secretsmanager:${DbAdminSecret}:SecretString:password}}'
+      DBSubnetGroupName: !Ref SubnetGroup
+      VPCSecurityGroups: [!Ref DbSecurityGroup]
+      DBParameterGroupName: !Ref ParameterGroup
+      PubliclyAccessible: false
+      BackupRetentionPeriod: !Ref BackupRetentionDays
+      DeleteAutomatedBackups: false
+      CopyTagsToSnapshot: true
+      DeletionProtection: false
+      Tags:
+        - Key: Name
+          Value: !Sub '${Project}-db'
+
+  # One-off task (deploy.sh data runs it through run-task.sh --db-init): schema, service users,
+  # and with CopyFromStack the copy from the ECS MySQL. Public subnet + public IP to pull the image
+  # without a NAT gateway (S7); the backend security group lets it reach RDS.
+  InitTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub '${Project}-db-init'
+      RequiresCompatibilities: [FARGATE]
+      NetworkMode: awsvpc
+      Cpu: '256'
+      Memory: '512'
+      ExecutionRoleArn: !Ref ExecutionRoleArn
+      TaskRoleArn: !Ref TaskRoleArn
+      ContainerDefinitions:
+        - Name: rds-init
+          Image: !Sub
+            - '${Repo}:${ImageTag}'
+            - Repo:
+                Fn::ImportValue: !Sub '${PlatformStack}-MysqlRepositoryUri'
+          Essential: true
+          Command: [bash, /usr/local/bin/rds-init.sh]
+          Environment:
+            - Name: DB_HOST
+              Value: !GetAtt DbInstance.Endpoint.Address
+            - Name: DB_PORT
+              Value: !GetAtt DbInstance.Endpoint.Port
+            - Name: MYSQL_DATABASE
+              Value: !Ref DbName
+            - Name: IDENTITY_DB_USER
+              Value: !Sub '${Project}_identity'
+            - Name: REQUESTS_DB_USER
+              Value: !Sub '${Project}_requests'
+            - Name: PROVISIONING_DB_USER
+              Value: !Sub '${Project}_provisioning'
+            - !If
+              - Copy
+              - Name: SOURCE_DB_HOST
+                Value:
+                  Fn::ImportValue: !Sub '${CopyFromStack}-DbHost'
+              - !Ref AWS::NoValue
+          Secrets:
+            - Name: DB_ADMIN_USER
+              ValueFrom: !Sub '${DbAdminSecret}:username::'
+            - Name: DB_ADMIN_PASSWORD
+              ValueFrom: !Sub '${DbAdminSecret}:password::'
+            - Name: IDENTITY_DB_PASSWORD
+              ValueFrom: !Sub '${IdentityDbSecret}:password::'
+            - Name: REQUESTS_DB_PASSWORD
+              ValueFrom: !Sub '${RequestsDbSecret}:password::'
+            - Name: PROVISIONING_DB_PASSWORD
+              ValueFrom: !Sub '${ProvisioningDbSecret}:password::'
+            - !If
+              - Copy
+              - Name: SOURCE_DB_PASSWORD
+                ValueFrom: !Sub
+                  - '${Arn}:password::'
+                  - Arn:
+                      Fn::ImportValue: !Sub '${CopyFromStack}-DbRootSecretArn'
+              - !Ref AWS::NoValue
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group:
+                Fn::ImportValue: !Sub '${LogsStack}-MysqlLogGroup'
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: db-init
+
+  StorageAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${Project}-db-storage-low'
+      AlarmDescription: Less than 2 GiB free on RDS (storage grows by itself up to MaxAllocatedStorage)
+      Namespace: AWS/RDS
+      MetricName: FreeStorageSpace
+      Dimensions:
+        - Name: DBInstanceIdentifier
+          Value: !Ref DbInstance
+      Statistic: Minimum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 2147483648
+      ComparisonOperator: LessThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [{'Fn::ImportValue': !Sub '${LogsStack}-AlertTopicArn'}]
+  CpuAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${Project}-db-cpu-high'
+      AlarmDescription: RDS CPU above 80% for 15 minutes
+      Namespace: AWS/RDS
+      MetricName: CPUUtilization
+      Dimensions:
+        - Name: DBInstanceIdentifier
+          Value: !Ref DbInstance
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 3
+      Threshold: 80
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [{'Fn::ImportValue': !Sub '${LogsStack}-AlertTopicArn'}]
+
+Outputs:
+  DbHost:
+    Value: !GetAtt DbInstance.Endpoint.Address
+    Export:
+      Name: !Sub '${AWS::StackName}-DbHost'
+  DbPort:
+    Value: !GetAtt DbInstance.Endpoint.Port
+    Export:
+      Name: !Sub '${AWS::StackName}-DbPort'
+  DbName:
+    Value: !Ref DbName
+    Export:
+      Name: !Sub '${AWS::StackName}-DbName'
+  DbTls:
+    Description: The services' DB_TLS (verify - certificate and host name checked against the RDS CA)
+    Value: verify
+    Export:
+      Name: !Sub '${AWS::StackName}-DbTls'
+  IdentityDbSecretArn:
+    Value: !Ref IdentityDbSecret
+    Export:
+      Name: !Sub '${AWS::StackName}-IdentityDbSecretArn'
+  RequestsDbSecretArn:
+    Value: !Ref RequestsDbSecret
+    Export:
+      Name: !Sub '${AWS::StackName}-RequestsDbSecretArn'
+  ProvisioningDbSecretArn:
+    Value: !Ref ProvisioningDbSecret
+    Export:
+      Name: !Sub '${AWS::StackName}-ProvisioningDbSecretArn'
+  DbInstanceId:
+    Value: !Ref DbInstance
+  InitTaskDefinitionArn:
+    Value: !Ref InitTaskDefinition
+  DbAdminSecretArn:
+    Description: The RDS admin (schema changes from a one-off task)
+    Value: !Ref DbAdminSecret

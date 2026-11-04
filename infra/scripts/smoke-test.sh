@@ -16,6 +16,8 @@
 #             so HTTPS and the HTTP -> HTTPS redirect are checked too
 #   --keep: leave the test stacks running (delete them later with --teardown)
 #   --teardown: only delete the test stacks and check (after a run that was killed hard)
+# DATA_MODE=rds smoke-test.sh ... tests on RDS Multi-AZ instead of the ECS MySQL (D31; creating
+# RDS adds 15-25 minutes, deleting it about 10).
 # The private half of the throwaway site key stays in this shell; it is never printed or stored.
 read -r SITE_PRIVATE_KEY SITE_PUBLIC_KEYS < <(node --input-type=module -e "
   import { resolve } from 'node:path'; import { pathToFileURL } from 'node:url';
@@ -36,7 +38,7 @@ export ENTRY_MODE=direct USE_DOMAIN PROVISIONING=true SITE_PUBLIC_KEYS GPU_NODES
 . "$(dirname "$0")/lib.sh"
 SCRIPTS="$(dirname "$0")"
 # What this run deletes at the end. Never the kept stacks.
-TEST_STACKS=("$STACK_WEB" "$STACK_GRAFANA" "$STACK_IDENTITY" "$STACK_PROVISIONING" "$STACK_APP" "$STACK_EVENTS" "$STACK_DATA" "$STACK_SECRETS")
+TEST_STACKS=("$STACK_WEB" "$STACK_GRAFANA" "$STACK_IDENTITY" "$STACK_PROVISIONING" "$STACK_APP" "$STACK_EVENTS" "$STACK_DATA_RDS" "$STACK_DATA_ECS" "$STACK_SECRETS")
 started=$(date +%s)
 started_iso=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 elapsed() { echo "$(( ($(date +%s) - started) / 60 )) min"; }
@@ -76,7 +78,7 @@ trap teardown EXIT
 trap 'exit 130' INT TERM
 if [ "$teardown_only" = true ]; then echo "== teardown only"; exit 0; fi
 
-echo "== deploy (ENTRY_MODE=$ENTRY_MODE, USE_DOMAIN=$USE_DOMAIN)"
+echo "== deploy (ENTRY_MODE=$ENTRY_MODE, USE_DOMAIN=$USE_DOMAIN, DATA_MODE=$DATA_MODE)"
 for stack in "${KEPT_STACKS[@]}"; do
   state=$(awst cloudformation describe-stacks --stack-name "$stack" --query 'Stacks[0].StackStatus' 2>/dev/null || echo missing)
   echo "   $stack: $state"
@@ -89,14 +91,15 @@ done
 url=$(stack_output "$STACK_APP" PublicUrl)
 echo "== checks against $url (after $(elapsed))"
 status() { curl -s -o /dev/null -w '%{http_code}' "$@"; }
-wait_for_200() { # the ALB registers the task, and MySQL may still be running init.sql on EFS
+wait_for_200() { # the ALB registers the task, and the ECS MySQL may still be running init.sql on EFS
   for _ in $(seq 1 40); do [ "$(status "$1")" = 200 ] && return; sleep 15; done
 }
 wait_for_200 "$url/health"
 wait_for_200 "$url/health/ready"
 wait_for_200 "$url/"
 expect "backend answers through the ALB (/health)" 200 "$(status "$url/health")"
-expect "backend reaches MySQL through the internal NLB as its own database user (/health/ready)" 200 "$(status "$url/health/ready")"
+if [ "$DATA_MODE" = rds ]; then db_path="RDS (Multi-AZ, private subnets)"; else db_path="MySQL through the internal NLB"; fi
+expect "backend reaches $db_path as its own database user (/health/ready)" 200 "$(status "$url/health/ready")"
 has_root() { curl -s "$1" | grep -c '<div id="root">'; }
 expect "frontend answers through the ALB (/)" 1 "$(has_root "$url/")"
 expect "a client-side route gets index.html (/requests)" 1 "$(has_root "$url/requests")"
@@ -139,6 +142,13 @@ if "$SCRIPTS/run-task.sh" node scripts/check-db.js "$accounts"; then
   pass "request database check: requests, review, history; its database user has exactly its rights, the audit log is append-only (run-task.sh check-db)"
 else
   fail "request database check"
+fi
+# D31: TLS to the database; on RDS the certificate and host name are checked (verify).
+if [ "$DATA_MODE" = rds ]; then tls=verify; else tls=encrypt; fi
+if "$SCRIPTS/run-task.sh" node scripts/check-db-tls.js "$tls"; then
+  pass "the request service reaches the database over TLS (DB_TLS=$tls) (run-task.sh check-db-tls)"
+else
+  fail "database TLS (DB_TLS=$tls)"
 fi
 if "$SCRIPTS/run-task.sh" --provisioning node scripts/check-grants.js; then
   pass "the provisioning database user has exactly its rights, and the scheduler holds its lease (run-task.sh --provisioning check-grants)"
@@ -213,4 +223,8 @@ fi
 if in_logs '"path":"/api/users/me"' --group identity; then pass "the identity service logged its request in its own log group (D34)"; else fail "identity service log"; fi
 if in_logs '"event":"worker.started"' --group provisioning; then pass "the provisioning service runs on its own (D34)"; else fail "provisioning service log"; fi
 alarms=$(awst cloudwatch describe-alarms --alarm-name-prefix "$PROJECT-" --query 'length(MetricAlarms)')
-expect "the alarms exist (errors x3, ALB 5xx, unhealthy targets x3, dead letters x2)" 9 "$alarms"
+if [ "$DATA_MODE" = rds ]; then
+  expect "the alarms exist (errors x3, ALB 5xx, unhealthy targets x3, dead letters x2, RDS storage and CPU)" 11 "$alarms"
+else
+  expect "the alarms exist (errors x3, ALB 5xx, unhealthy targets x3, dead letters x2)" 9 "$alarms"
+fi

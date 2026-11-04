@@ -145,6 +145,10 @@ Resources:
             - Name: DB_NAME
               Value:
                 Fn::ImportValue: !Sub '${DataStack}-DbName'
+            # TLS to the database (D31): verify on RDS, encrypt on the ECS MySQL.
+            - Name: DB_TLS
+              Value:
+                Fn::ImportValue: !Sub '${DataStack}-DbTls'
             - Name: FRONTEND_URL
               Value:
                 Fn::ImportValue: !Sub '${AppStack}-PublicUrl'

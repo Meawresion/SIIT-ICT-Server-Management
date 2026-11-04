@@ -18,6 +18,13 @@ Request System.
     | `siit_provisioning` | site jobs and results, scheduler, audit shipping | `user`: select; `request`: select, update; `request_event`: select, insert; `provision_job`: select, insert, update; `scheduler_lease`, `log_cursor`: select, update |
 
     `backend/scripts/check-grants.js` checks that a user has exactly these rights.
+- `rds-init.sh` (RDS, D31) does the same on RDS, where the image's first-start scripts can't run:
+  it connects as the RDS admin over TLS (certificate and host name checked), runs `init.sql` while
+  the database has no tables, then sources `privileges.sh`. With `SOURCE_DB_HOST` it first copies
+  the data of the ECS MySQL in one transaction, only into a database without accounts, and
+  compares the row counts (`infra/scripts/switch-to-rds.sh`). The rds stack runs it as a one-off
+  task after each deploy; running it again changes nothing but the passwords from the secrets.
+  RDS needs `log_bin_trust_function_creators=1` (its parameter group) for the audit log's triggers.
 - `init.sql` also creates stored procedures for direct SQL access to student,
   approver, request, and draft workflows. The HTTP backend uses Prisma with the same tables and workflow rules.
 - `docker-compose.yml` mounts `database/init.sql` into the MySQL container at

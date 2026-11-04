@@ -36,9 +36,25 @@ deploy_data() {
   tag=$(mysql_tag)
   role=$(role_arn)
   require_image "$PROJECT-mysql" "$tag"
+  if [ "$DATA_MODE" = rds ]; then deploy_rds "$tag" "$role"; return; fi
   deploy "$STACK_DATA" data-ecs.yaml "Project=$PROJECT" "NetworkStack=$STACK_NETWORK" \
     "PlatformStack=$STACK_PLATFORM" "ImageTag=$tag" "ExecutionRoleArn=$role" "TaskRoleArn=$role" \
     "DesiredCount=${DB_DESIRED_COUNT:-1}" "LogsStack=$STACK_LOGS"
+}
+
+# DATA_MODE=rds (D31): RDS Multi-AZ, then rds-init.sh as a one-off task (schema when empty, service
+# users; with COPY_FROM_STACK, set by switch-to-rds.sh, the data of that data-ecs stack too).
+deploy_rds() {
+  local copy_from=${COPY_FROM_STACK:-}
+  if ! aws cloudformation describe-stacks --stack-name "$STACK_DATA_RDS" >/dev/null 2>&1; then
+    echo "(creating RDS takes 15-25 minutes, longer with Multi-AZ: the standby is built in the second AZ)"
+  fi
+  deploy "$STACK_DATA_RDS" data-rds.yaml "Project=$PROJECT" "NetworkStack=$STACK_NETWORK" \
+    "PlatformStack=$STACK_PLATFORM" "LogsStack=$STACK_LOGS" "ImageTag=$1" "ExecutionRoleArn=$2" "TaskRoleArn=$2" \
+    "InstanceClass=${DB_INSTANCE_CLASS:-db.t3.micro}" "MultiAz=${DB_MULTI_AZ:-true}" \
+    "BackupRetentionDays=${DB_BACKUP_DAYS:-7}" "CopyFromStack=$copy_from"
+  echo "== preparing the database (rds-init.sh${copy_from:+, copy from $copy_from})"
+  "$(dirname "$0")/run-task.sh" --db-init
 }
 
 deploy_queues() {

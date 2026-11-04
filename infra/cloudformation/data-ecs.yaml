@@ -4,9 +4,9 @@ Description: >-
   through an internal Network Load Balancer (a stable name for a task whose IP changes; Cloud Map
   isn't allowed on Learner Lab). The first start on an empty EFS runs database/init.sql (baked
   into the image).
-  To move to RDS, deploy data-rds instead and point the app stack at it: both export DbHost,
-  DbPort, DbName and one database user secret per service (IdentityDbSecretArn, RequestsDbSecretArn,
-  ProvisioningDbSecretArn; D34). Pause with DesiredCount 0; deleting this stack deletes the data
+  To move to RDS, run switch-to-rds.sh (data-rds, then the services point at it): both export
+  DbHost, DbPort, DbName, DbTls and one database user secret per service (IdentityDbSecretArn,
+  RequestsDbSecretArn, ProvisioningDbSecretArn; D34). The services connect over TLS (DB_TLS=encrypt). Pause with DesiredCount 0; deleting this stack deletes the data
   and its passwords together.
 
 Parameters:
@@ -325,6 +325,13 @@ Outputs:
     Value: !GetAtt Service.Name
   FileSystemId:
     Value: !Ref FileSystem
+  DbTls:
+    Description: The services' DB_TLS (encrypt - MySQL's own self-signed certificate, not checked)
+    Value: encrypt
+    Export:
+      Name: !Sub '${AWS::StackName}-DbTls'
   DbRootSecretArn:
-    Description: Root password, for schema changes from a one-off task
+    Description: Root password, for schema changes from a one-off task and the copy to RDS (switch-to-rds.sh)
     Value: !Ref DbRootSecret
+    Export:
+      Name: !Sub '${AWS::StackName}-DbRootSecretArn'
