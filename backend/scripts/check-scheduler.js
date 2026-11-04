@@ -1,5 +1,9 @@
-// One-off scheduler check on AWS (infra/scripts/smoke-test.sh, through run-task.sh). The backend
-// service's own scheduler must act; this task only sets things up and waits:
+// One-off scheduler check on AWS (infra/scripts/smoke-test.sh), in a request service task with the
+// request dead-letter queue added (the check puts a message there, as the queue's redrive would):
+//   run-task.sh --env SQS_REQUEST_DLQ_URL=<url> node scripts/check-scheduler.js <marker>
+// It uses the accounts check-identity.js added for the marker; check-grants.js in the provisioning
+// service has already seen its scheduler take the lease. That scheduler must act; this task only
+// sets things up and waits:
 // - an automated GPU request whose end date has passed gets its REVOKE (the result, from
 //   infra/scripts/fake-site.mjs, completes it);
 // - a VM request set up by hand gets its end-date reminder, then the approvers' notice once it ended;
@@ -7,7 +11,7 @@
 // Run it with a short SCHEDULER_INTERVAL_SEC (the smoke test deploys 30). Its rows stay behind
 // (the audit log can't be deleted), so run it only on a throwaway database.
 import assert from 'node:assert/strict';
-import { randomInt, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { SendMessageCommand, SQSClient } from '@aws-sdk/client-sqs';
 import prisma from '../src/lib/prisma.js';
 import { loadSchedulerConfig } from '../src/config/scheduler.js';
@@ -30,19 +34,18 @@ const today = siteToday(config.timeZone);
 const dayOffset = (n) => new Date(Date.parse(`${today}T00:00:00Z`) + n * 86_400_000);
 const events = async (rid) => (await prisma.request_event.findMany({ where: { rid }, orderBy: { eid: 'asc' } })).map(e => e.action);
 const status = async (rid) => (await prisma.request.findUnique({ where: { rid } })).status;
+const marker = process.argv[2];
+// The accounts check-identity.js added, found by the marker in their name.
+const account = (name) => prisma.user.findFirstOrThrow({ where: { fullname: `Check ${name} ${marker}` } });
 
 try {
-  const lease = await waitFor('the service to hold the scheduler lease', async () => {
-    const row = await prisma.scheduler_lease.findUnique({ where: { name: 'scheduler' } });
-    return row.owner && row.lease_until > new Date() && row;
-  });
-  console.log(`the backend service runs the scheduler every ${config.intervalSec} s (lease held by ${lease.owner.split(':')[0]})`);
-
-  // A student ID with leading zeros, which SIIT doesn't issue.
-  const sid = String(randomInt(10 ** 6)).padStart(10, '0');
-  const student = await prisma.user.create({ data: { role: 'Student', fullname: 'Scheduler check', siitemail: `m${sid}@check.invalid`,
-    phone_number: '0', s_id: sid, study_degree: 'Master', s_program: 'ICT' } });
-  const approver = await prisma.user.create({ data: { role: 'Approver', fullname: 'Scheduler check approver', siitemail: `approver-${sid}@check.invalid`, phone_number: '0' } });
+  if (!marker || !process.env.SQS_REQUEST_DLQ_URL) {
+    throw new Error('Usage: SQS_REQUEST_DLQ_URL=<url> node scripts/check-scheduler.js <marker> (after check-identity.js <marker>)');
+  }
+  console.log(`site day ${today} (${config.timeZone}); the provisioning service's scheduler must act`);
+  // Its student ID starts with zeros, which SIIT doesn't issue.
+  const student = await account('scheduler');
+  const approver = await account('approver');
   const form = { purpose: 'Scheduler check', project_description: 'check', project_supervisor_name: 'Check', resource_type: 'HPC_GPU',
     justification: 'check', estimated_start_date: '2026-11-10', estimated_end_date: '2026-11-30', impact_score: 5, supervisor_confirmation: 'CONFIRMED' };
 

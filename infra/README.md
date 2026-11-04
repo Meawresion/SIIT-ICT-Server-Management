@@ -110,17 +110,19 @@ with its placeholders: your real secrets are never used), queues, logs, events, 
 domain, provisioning on with a throwaway site key), and checks:
 - the frontend answers through the ALB, also on client-side routes;
 - the backend answers through the ALB;
-- it reaches MySQL as the app user;
+- it reaches MySQL as the request service's own database user (D34);
 - the request service has the event bus and token secret but no Google client, SMTP setting, site key or queue (D34);
 - the ALB sends `/api/users` to the identity service and `/api/requests` to the request service (each answers 401, not 404), and the identity service logs into its own group;
 - it refuses unsigned and cross-site requests;
 - an unknown API path is a JSON 404 with its reference (the `X-Request-Id`) and no framework header;
 - Google sign-in uses this deploy's callback URL;
-- `check-db.js` passes in a one-off task;
+- each service's database user has exactly its rights: `check-identity.js` in an identity task
+  (it also adds the check accounts), `check-db.js` in a request service task, `check-grants.js`
+  in a provisioning task (which also sees its scheduler take the lease);
 - provisioning through the real queues: a one-off task (`check-provisioning.js`) approves a GPU
   request, the provisioning service sends the job, `fake-site.mjs` plays acc-prov-vm and answers, the
   request becomes On Use; then the same for the removal;
-- the provisioning service's scheduler (every 30 s here, `check-scheduler.js` in a provisioning task): a GPU request that ended gets
+- the provisioning service's scheduler (every 30 s here; `check-scheduler.js` sets up its requests in a request service task given the dead-letter queue URL): a GPU request that ended gets
   its removal and is completed, a VM request gets its reminder and then the approvers' notice, and
   a job put into the request dead-letter queue is failed;
 - the logs: that 404's access log line is found in CloudWatch Logs (`find-in-logs.sh`, Logs
@@ -191,7 +193,8 @@ The scripts are bash (Git Bash on Windows, or Linux/WSL) and need the AWS CLI v2
     `https://APP_HOST.ZONE_NAME/api/auth/google/callback` and the JavaScript origin
     `https://APP_HOST.ZONE_NAME`.
 11. Sign in once, then grant approver access:
-    `infra/scripts/run-task.sh node scripts/set-user-role.js person@siit.tu.ac.th Approver`
+    `infra/scripts/run-task.sh --identity node scripts/set-user-role.js person@siit.tu.ac.th Approver`
+    (accounts belong to the identity service; the request service's database user may only read them)
 
 ## Day to day
 
@@ -199,9 +202,9 @@ The scripts are bash (Git Bash on Windows, or Linux/WSL) and need the AWS CLI v2
 |---|---|
 | New backend version | commit, `push-images.sh backend`, `deploy.sh app identity provisioning` |
 | New notification version | commit, `push-images.sh notification`, `deploy.sh events` |
-| Run a check in the provisioning service | `run-task.sh --provisioning node scripts/check-scheduler.js` |
+| Check a service's database rights | `run-task.sh [--identity|--provisioning] node scripts/check-grants.js` |
 | New frontend version | `publish-frontend.sh` (direct mode: commit, `push-images.sh frontend`, `deploy.sh web`) |
-| Check the database from inside AWS | `run-task.sh node scripts/check-db.js` |
+| Check the database from inside AWS (adds 4 check accounts: throwaway data only) | `run-task.sh --identity node scripts/check-identity.js <marker>`, then `run-task.sh node scripts/check-db.js <marker>` |
 | Find an incident from its reference | `find-in-logs.sh <reference>` (last 2 days; `--since "2026-11-01"` for older ones, `--group audit` for one group) |
 | Search the ALB access logs | `find-in-logs.sh <text> --alb` (`--date YYYY-MM-DD` for other days) |
 | Stop the tasks between test sessions | `pause.sh` (the ALB still costs ~$0.6/day) |

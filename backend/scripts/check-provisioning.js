@@ -1,10 +1,10 @@
-// One-off provisioning check on AWS (infra/scripts/smoke-test.sh, through run-task.sh): approves a
-// GPU request so the running backend service sends the CREATE job through SQS, waits until the
+// One-off provisioning check on AWS (infra/scripts/smoke-test.sh), in a request service task:
+//   run-task.sh node scripts/check-provisioning.js <marker>   (after check-identity.js <marker>)
+// Approves a GPU request so the provisioning service sends the CREATE job through SQS, waits until the
 // result (from infra/scripts/fake-site.mjs, playing acc-prov-vm) makes the request On Use, then
 // completes it and waits for the REVOKE result.
 // Its rows stay behind (the audit log can't be deleted), so run it only on a throwaway database.
 import assert from 'node:assert/strict';
-import { randomInt } from 'node:crypto';
 import prisma from '../src/lib/prisma.js';
 import { createRequest } from '../src/services/request.service.js';
 import { approveRequest, completeRequest } from '../src/services/reviewer.service.js';
@@ -20,12 +20,16 @@ const waitFor = async (label, fn) => {
   }
 };
 
+const marker = process.argv[2];
+// The accounts check-identity.js added, found by the marker in their name.
+const account = (name) => prisma.user.findFirstOrThrow({ where: { fullname: `Check ${name} ${marker}` } });
+
 try {
-  // A student ID with leading zeros, which SIIT doesn't issue.
-  const sid = String(randomInt(10 ** 6)).padStart(10, '0');
-  const student = await prisma.user.create({ data: { role: 'Student', fullname: 'Provisioning check', siitemail: `m${sid}@check.invalid`,
-    phone_number: '0', s_id: sid, study_degree: 'Master', s_program: 'ICT' } });
-  const approver = await prisma.user.create({ data: { role: 'Approver', fullname: 'Provisioning check approver', siitemail: `approver-${sid}@check.invalid`, phone_number: '0' } });
+  if (!marker) throw new Error('Usage: node scripts/check-provisioning.js <marker> (after check-identity.js <marker>)');
+  // Its student ID starts with zeros, which SIIT doesn't issue.
+  const student = await account('provisioning');
+  const approver = await account('approver');
+  const sid = student.s_id;
   const request = await createRequest(student.uid, { purpose: 'Provisioning check', project_description: 'check', project_supervisor_name: 'Check',
     resource_type: 'HPC_GPU', justification: 'check', estimated_start_date: '2026-11-10', estimated_end_date: '2026-11-30', impact_score: 5,
     supervisor_confirmation: 'CONFIRMED' });
