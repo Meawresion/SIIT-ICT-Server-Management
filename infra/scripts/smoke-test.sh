@@ -36,7 +36,7 @@ export ENTRY_MODE=direct USE_DOMAIN PROVISIONING=true SITE_PUBLIC_KEYS GPU_NODES
 . "$(dirname "$0")/lib.sh"
 SCRIPTS="$(dirname "$0")"
 # What this run deletes at the end. Never the kept stacks.
-TEST_STACKS=("$STACK_WEB" "$STACK_IDENTITY" "$STACK_PROVISIONING" "$STACK_APP" "$STACK_EVENTS" "$STACK_DATA" "$STACK_SECRETS")
+TEST_STACKS=("$STACK_WEB" "$STACK_GRAFANA" "$STACK_IDENTITY" "$STACK_PROVISIONING" "$STACK_APP" "$STACK_EVENTS" "$STACK_DATA" "$STACK_SECRETS")
 started=$(date +%s)
 started_iso=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 elapsed() { echo "$(( ($(date +%s) - started) / 60 )) min"; }
@@ -54,6 +54,8 @@ teardown() {
   set +e
   [ -n "${site_pid:-}" ] && kill "$site_pid" 2>/dev/null
   if [ "$keep" = true ]; then
+    [ "$failures" = 0 ] || status=1
+    echo "$failures check(s) failed. Total $(elapsed)."
     echo "Kept the test stacks (--keep). Delete them with: smoke-test.sh --teardown"
     exit "$status"
   fi
@@ -82,7 +84,7 @@ done
 # Creates the kept stacks when they are missing; otherwise a quick no-op (or an update).
 "$SCRIPTS/deploy.sh" network platform logs
 "$SCRIPTS/push-images.sh"
-"$SCRIPTS/deploy.sh" data secrets queues events app identity provisioning web
+"$SCRIPTS/deploy.sh" data secrets queues events app identity provisioning grafana web
 
 url=$(stack_output "$STACK_APP" PublicUrl)
 echo "== checks against $url (after $(elapsed))"
@@ -174,12 +176,39 @@ in_logs() { # in_logs <text> [find-in-logs options]: polls for a line written du
 if in_logs "$marker" --group backend; then pass "a request's access log line is in CloudWatch Logs (find-in-logs.sh, Logs Insights)"; else fail "access log line in CloudWatch Logs"; fi
 if in_logs '"action":"PROVISIONED"' --group audit; then pass "the audit trail reached its log group (request_event copied to /$PROJECT/audit)"; else fail "audit events in the audit log group"; fi
 if in_logs "$marker" --alb; then pass "the ALB access logs reached S3"; else fail "ALB access logs in S3"; fi
+# Grafana (D34, NFR-8.3): up behind the ALB at /grafana/, its CloudWatch data source works with the
+# task role, and the provisioned dashboard is there. The admin password stays in this shell.
+grafana_admin=$(awst secretsmanager get-secret-value --secret-id "$(stack_output "$STACK_GRAFANA" AdminSecretArn)" \
+  --query SecretString | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{console.log(JSON.parse(s).password)}catch{console.log("none")}})')
+grafana_api() { curl -s -u "admin:$grafana_admin" "$url/grafana/api/$1"; }
+expect "Grafana answers through the ALB (/grafana/api/health)" 200 "$(status "$url/grafana/api/health")"
+expect "Grafana refuses its API without sign-in" 401 "$(status "$url/grafana/api/dashboards/uid/siit-overview")"
+expect "Grafana's CloudWatch data source works with the task role" OK \
+  "$(grafana_api datasources/uid/cloudwatch/health | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{console.log(JSON.parse(s).status)}catch{console.log("none")}})')"
+expect "Grafana has the provisioned SIIT dashboard" "SIIT portal overview" \
+  "$(grafana_api dashboards/uid/siit-overview | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{console.log(JSON.parse(s).dashboard.title)}catch{console.log("none")}})')"
+expect "Grafana refuses Google accounts outside GRAFANA_ALLOWED_EMAILS (role_attribute_strict)" true \
+  "$(grafana_api admin/settings | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{console.log(JSON.parse(s)["auth.google"].role_attribute_strict)}catch{console.log("none")}})')"
+grafana_admin=
 # The status emails of these checks went API/provisioning -> event bus -> queue -> notification
-# Lambda, which read the mail secret (placeholders: SMTP_HOST empty, so it only logs them).
-if in_logs '"event":"mail.skipped"' --group notification; then
-  pass "status emails reached the notification Lambda through the event bus (D34)"
+# Lambda, which read the mail secret: mail.sent with a real SMTP server (the test students'
+# addresses don't exist, so the bounces go to the sender), mail.skipped with SMTP_HOST empty.
+mail_event=
+for _ in $(seq 1 24); do
+  for event in mail.sent mail.skipped; do
+    if "$SCRIPTS/find-in-logs.sh" "\"event\":\"$event\"" --since "$started_iso" --group notification >/dev/null 2>&1; then
+      mail_event=$event; break 2
+    fi
+  done
+  sleep 15
+done
+if [ -n "$mail_event" ]; then
+  pass "status emails reached the notification Lambda through the event bus ($mail_event, D34)"
 else
   fail "status emails through the event bus"
+fi
+if "$SCRIPTS/find-in-logs.sh" '"event":"mail.send_failed"' --since "$started_iso" --group notification >/dev/null 2>&1; then
+  fail "the notification Lambda could not send an email (mail.send_failed: check the SMTP settings)"
 fi
 if in_logs '"path":"/api/users/me"' --group identity; then pass "the identity service logged its request in its own log group (D34)"; else fail "identity service log"; fi
 if in_logs '"event":"worker.started"' --group provisioning; then pass "the provisioning service runs on its own (D34)"; else fail "provisioning service log"; fi

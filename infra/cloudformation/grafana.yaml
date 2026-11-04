@@ -1,0 +1,255 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  Grafana (D34, NFR-8.3): the operations dashboards at /grafana/ on the app stack's ALB, one Fargate
+  task with the CloudWatch data source (task role) and the SIIT dashboards built into its image.
+  Sign-in with Google for the listed addresses only (Viewer); the admin password is generated here. Grafana
+  keeps no state worth keeping (dashboards are code, accounts come back at sign-in), so it uses
+  its built-in SQLite file and this stack can be deleted and recreated at any time.
+
+Parameters:
+  Project:
+    Type: String
+    Default: siit
+  NetworkStack:
+    Type: String
+  PlatformStack:
+    Type: String
+  AppStack:
+    Type: String
+  LogsStack:
+    Type: String
+  ImageTag:
+    Type: String
+  ExecutionRoleArn:
+    Type: String
+  TaskRoleArn:
+    Type: String
+    Description: Needs CloudWatch and CloudWatch Logs read access (Learner Lab - LabRole, D30)
+  GoogleSecretArn:
+    Type: String
+    Description: Secret with GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET (secrets stack); add <portal>/grafana/login/google to the client's redirect URIs
+  OriginVerifySecretArn:
+    Type: String
+    Default: ''
+    Description: cloudfront mode - the app stack's origin header secret (the ALB rule checks it); direct mode - empty
+  SignInRule:
+    Type: String
+    Default: ''
+    Description: >-
+      JMESPath on the Google user's claims that gives 'Viewer' to the allowed addresses and no role
+      to everyone else (refused, role_attribute_strict); deploy.sh builds it from GRAFANA_ALLOWED_EMAILS,
+      e.g. (email == 'staff1@siit.tu.ac.th' || email == 'someone@g.siit.tu.ac.th') && 'Viewer'.
+      Empty - Google sign-in off (admin only).
+  DesiredCount:
+    Type: Number
+    Default: 1
+    AllowedValues: [0, 1]
+    Description: 0 pauses Grafana; never more than 1 (each task has its own SQLite file)
+  Cpu:
+    Type: String
+    Default: '256'
+  Memory:
+    Type: String
+    Default: '512'
+
+Conditions:
+  ViaCloudFront: !Not [!Equals [!Ref OriginVerifySecretArn, '']]
+  GoogleSignIn: !Not [!Equals [!Ref SignInRule, '']]
+
+Resources:
+  # Generated name (no Name property): a recreated stack never meets a secret still in its
+  # deletion recovery window.
+  AdminSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Description: !Sub '${Project} Grafana admin (break-glass sign-in; staff use Google)'
+      GenerateSecretString:
+        SecretStringTemplate: '{"username":"admin"}'
+        GenerateStringKey: password
+        PasswordLength: 32
+        ExcludePunctuation: true
+
+  # Its own group: only the ALB reaches Grafana, and Grafana reaches nothing inside the VPC.
+  SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Grafana task (3000 only from the ALB)
+      VpcId:
+        Fn::ImportValue: !Sub '${NetworkStack}-VpcId'
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 3000
+          ToPort: 3000
+          SourceSecurityGroupId:
+            Fn::ImportValue: !Sub '${AppStack}-AlbSecurityGroupId'
+          Description: ALB
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+          Description: CloudWatch, ECR, Secrets Manager, Google sign-in (HTTPS)
+      Tags:
+        - Key: Name
+          Value: !Sub '${Project}-grafana'
+
+  TargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      TargetType: ip
+      Protocol: HTTP
+      Port: 3000
+      VpcId:
+        Fn::ImportValue: !Sub '${NetworkStack}-VpcId'
+      HealthCheckPath: /grafana/api/health
+      HealthCheckIntervalSeconds: 30
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
+      Matcher:
+        HttpCode: '200'
+      TargetGroupAttributes:
+        - Key: deregistration_delay.timeout_seconds
+          Value: '15'
+
+  # Before the app stack's rule for /api/* (priority 5); the paths don't overlap anyway.
+  GrafanaRule:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      ListenerArn:
+        Fn::ImportValue: !Sub '${AppStack}-ListenerArn'
+      Priority: 3
+      Conditions:
+        - Field: path-pattern
+          PathPatternConfig:
+            Values: ['/grafana', '/grafana/*']
+        - !If
+          - ViaCloudFront
+          - Field: http-header
+            HttpHeaderConfig:
+              HttpHeaderName: X-Origin-Verify
+              Values:
+                - !Sub '{{resolve:secretsmanager:${OriginVerifySecretArn}:SecretString:value}}'
+          - !Ref AWS::NoValue
+      Actions:
+        - Type: forward
+          TargetGroupArn: !Ref TargetGroup
+
+  TaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub '${Project}-grafana'
+      RequiresCompatibilities: [FARGATE]
+      NetworkMode: awsvpc
+      Cpu: !Ref Cpu
+      Memory: !Ref Memory
+      ExecutionRoleArn: !Ref ExecutionRoleArn
+      TaskRoleArn: !Ref TaskRoleArn
+      ContainerDefinitions:
+        - Name: grafana
+          Image: !Sub
+            - '${Repo}:${ImageTag}'
+            - Repo:
+                Fn::ImportValue: !Sub '${PlatformStack}-GrafanaRepositoryUri'
+          Essential: true
+          PortMappings:
+            - ContainerPort: 3000
+              Protocol: tcp
+          Environment:
+            - Name: AWS_REGION
+              Value: !Ref AWS::Region
+            - Name: GF_SERVER_ROOT_URL
+              Value: !Sub
+                - '${Url}/grafana/'
+                - Url:
+                    Fn::ImportValue: !Sub '${AppStack}-PublicUrl'
+            - Name: GF_SERVER_SERVE_FROM_SUB_PATH
+              Value: 'true'
+            - Name: GF_SECURITY_ADMIN_USER
+              Value: admin
+            - Name: GF_SECURITY_COOKIE_SECURE
+              Value: 'true'
+            - Name: GF_SECURITY_COOKIE_SAMESITE
+              Value: lax
+            - Name: GF_SECURITY_DISABLE_GRAVATAR
+              Value: 'true'
+            - Name: GF_USERS_ALLOW_SIGN_UP
+              Value: 'false'
+            - Name: GF_USERS_AUTO_ASSIGN_ORG_ROLE
+              Value: Viewer
+            - Name: GF_AUTH_ANONYMOUS_ENABLED
+              Value: 'false'
+            - Name: GF_AUTH_GOOGLE_ENABLED
+              Value: !If [GoogleSignIn, 'true', 'false']
+            - Name: GF_AUTH_GOOGLE_ALLOW_SIGN_UP
+              Value: 'true'
+            # Who may sign in: the rule's exact addresses get Viewer, anyone else gets no role and
+            # is refused.
+            - Name: GF_AUTH_GOOGLE_ROLE_ATTRIBUTE_PATH
+              Value: !Ref SignInRule
+            - Name: GF_AUTH_GOOGLE_ROLE_ATTRIBUTE_STRICT
+              Value: 'true'
+            - Name: GF_AUTH_GOOGLE_SCOPES
+              Value: openid email profile
+            - Name: GF_ANALYTICS_REPORTING_ENABLED
+              Value: 'false'
+            - Name: GF_ANALYTICS_CHECK_FOR_UPDATES
+              Value: 'false'
+            - Name: GF_ANALYTICS_CHECK_FOR_PLUGIN_UPDATES
+              Value: 'false'
+            - Name: GF_NEWS_NEWS_FEED_ENABLED
+              Value: 'false'
+            - Name: GF_LOG_MODE
+              Value: console
+            - Name: GF_LOG_CONSOLE_FORMAT
+              Value: json
+          Secrets:
+            - Name: GF_SECURITY_ADMIN_PASSWORD
+              ValueFrom: !Sub '${AdminSecret}:password::'
+            - Name: GF_AUTH_GOOGLE_CLIENT_ID
+              ValueFrom: !Sub '${GoogleSecretArn}:GOOGLE_CLIENT_ID::'
+            - Name: GF_AUTH_GOOGLE_CLIENT_SECRET
+              ValueFrom: !Sub '${GoogleSecretArn}:GOOGLE_CLIENT_SECRET::'
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group:
+                Fn::ImportValue: !Sub '${LogsStack}-GrafanaLogGroup'
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: grafana
+
+  Service:
+    Type: AWS::ECS::Service
+    DependsOn: GrafanaRule
+    Properties:
+      ServiceName: grafana
+      Cluster:
+        Fn::ImportValue: !Sub '${PlatformStack}-ClusterName'
+      TaskDefinition: !Ref TaskDefinition
+      LaunchType: FARGATE
+      DesiredCount: !Ref DesiredCount
+      HealthCheckGracePeriodSeconds: 90
+      # One task at a time (its own SQLite file); a short gap during a deploy is fine here.
+      DeploymentConfiguration:
+        MinimumHealthyPercent: 0
+        MaximumPercent: 100
+        DeploymentCircuitBreaker:
+          Enable: true
+          Rollback: true
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: ENABLED
+          Subnets: !Split [',', {'Fn::ImportValue': !Sub '${NetworkStack}-PublicSubnets'}]
+          SecurityGroups: [!Ref SecurityGroup]
+      LoadBalancers:
+        - ContainerName: grafana
+          ContainerPort: 3000
+          TargetGroupArn: !Ref TargetGroup
+
+Outputs:
+  ServiceName:
+    Value: !GetAtt Service.Name
+  AdminSecretArn:
+    Description: The admin password (break-glass; read it from Secrets Manager, never print it)
+    Value: !Ref AdminSecret
+  GrafanaPath:
+    Value: /grafana/

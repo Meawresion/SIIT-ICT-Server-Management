@@ -5,7 +5,7 @@
 # The dns stack may stay between test runs (user's OK, 2026-10-28): it runs nothing.
 . "$(dirname "$0")/lib.sh"
 
-order=(edge web identity provisioning app events secrets queues data logs platform network cert dns)
+order=(edge web grafana identity provisioning app events secrets queues data logs platform network cert dns)
 [ $# -gt 0 ] || { echo "Usage: $0 <stack>...   (${order[*]})" >&2; exit 1; }
 for stack in "$@"; do
   [[ " ${order[*]} " == *" $stack "* ]] || { echo "Unknown stack: $stack" >&2; exit 1; }

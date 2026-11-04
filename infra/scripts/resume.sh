@@ -19,6 +19,11 @@ if service_exists provisioning; then
     --query 'service.[serviceName,desiredCount]' --output text
   aws ecs wait services-stable --cluster "$PROJECT" --services provisioning
 fi
+if service_exists grafana; then
+  aws ecs update-service --cluster "$PROJECT" --service grafana --desired-count "${GRAFANA_DESIRED_COUNT:-1}" \
+    --query 'service.[serviceName,desiredCount]' --output text
+  aws ecs wait services-stable --cluster "$PROJECT" --services grafana
+fi
 if service_exists frontend; then
   aws ecs update-service --cluster "$PROJECT" --service frontend --desired-count "${FRONTEND_DESIRED_COUNT:-1}" \
     --query 'service.[serviceName,desiredCount]' --output text

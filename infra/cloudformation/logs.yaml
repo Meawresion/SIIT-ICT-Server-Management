@@ -63,6 +63,12 @@ Resources:
     Properties:
       LogGroupName: !Sub '/${Project}/identity'
       RetentionInDays: !Ref AppLogDays
+  # Grafana (D34): its own sign-ins and data source errors.
+  GrafanaLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/${Project}/grafana'
+      RetentionInDays: !Ref AppLogDays
   # The provisioning service (D34: site jobs and results, scheduler, audit shipping).
   ProvisioningLogGroup:
     Type: AWS::Logs::LogGroup
@@ -296,6 +302,10 @@ Outputs:
     Value: !Ref IdentityLogGroup
     Export:
       Name: !Sub '${AWS::StackName}-IdentityLogGroup'
+  GrafanaLogGroup:
+    Value: !Ref GrafanaLogGroup
+    Export:
+      Name: !Sub '${AWS::StackName}-GrafanaLogGroup'
   ProvisioningLogGroup:
     Value: !Ref ProvisioningLogGroup
     Export:
