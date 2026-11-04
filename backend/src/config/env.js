@@ -14,6 +14,16 @@ export const servesRequests = role => ['all', 'api', 'requests'].includes(role);
 const DB_KEYS = ['DB_HOST', 'DB_NAME', 'DB_USER', 'DB_PASSWORD'];
 const MIN_SECRET_LENGTH = 32;
 
+// DB_TLS (D31): how the connection to MySQL is protected. Prisma uses no TLS unless told to.
+//   verify   TLS, the server certificate checked against the CA bundle DB_TLS_CA, host name
+//            included (RDS; the backend image holds the RDS bundle and sets DB_TLS_CA)
+//   encrypt  TLS without checking the certificate (the ECS MySQL's self-signed one, D31)
+//   empty    no TLS (docker compose: the database is on the local container network)
+const TLS_PARAMS = {
+  verify: source => `sslcert=${source.DB_TLS_CA}&sslaccept=strict`,
+  encrypt: () => 'sslaccept=accept_invalid_certs',
+};
+
 // Prisma reads DATABASE_URL. Build it from the DB_* keys, so the password is written once and may
 // hold any character. Without DB_HOST, an explicit DATABASE_URL is used (e.g. for the Prisma CLI).
 export function databaseUrl(source = process.env) {
@@ -21,7 +31,14 @@ export function databaseUrl(source = process.env) {
   const user = encodeURIComponent(source.DB_USER ?? '');
   const password = encodeURIComponent(source.DB_PASSWORD ?? '');
   const port = source.DB_PORT || 3306;
-  return `mysql://${user}:${password}@${source.DB_HOST}:${port}/${encodeURIComponent(source.DB_NAME ?? '')}`;
+  const url = `mysql://${user}:${password}@${source.DB_HOST}:${port}/${encodeURIComponent(source.DB_NAME ?? '')}`;
+  if (!source.DB_TLS) return url;
+  const tls = TLS_PARAMS[source.DB_TLS];
+  if (!tls) throw new Error('DB_TLS must be verify, encrypt or empty');
+  if (source.DB_TLS === 'verify' && !/^[\w./-]+$/.test(source.DB_TLS_CA ?? '')) {
+    throw new Error('DB_TLS=verify needs DB_TLS_CA, the path of the CA bundle');
+  }
+  return `${url}?${tls(source)}`;
 }
 
 // Called once at start (server.js, worker.js): no fallback secrets or URLs, so a missing key stops
