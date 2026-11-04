@@ -72,6 +72,9 @@ export function loadWorkerConfig(env = process.env) {
   if (!['true', 'false'].includes(env.PFSENSE_ENABLED)) throw new Error('PFSENSE_ENABLED must be true or false');
   // Optional: HUE accounts for Big Data requests, off when unset.
   if (env.HUE_ENABLED !== undefined && !['true', 'false'].includes(env.HUE_ENABLED)) throw new Error('HUE_ENABLED must be true or false');
+  // Optional: seconds between site heartbeats (src/heartbeat.js); 0 = none, unset = 300.
+  const heartbeatIntervalSec = env.HEARTBEAT_INTERVAL_SEC === undefined || env.HEARTBEAT_INTERVAL_SEC === '' ? 300 : int('HEARTBEAT_INTERVAL_SEC', 0);
+  if (heartbeatIntervalSec > 0 && heartbeatIntervalSec < 60) throw new Error('HEARTBEAT_INTERVAL_SEC must be 0 (off) or at least 60');
   return {
     transport: env.MESSAGE_TRANSPORT,
     privateKey: env.MSG_PRIVATE_KEY,
@@ -83,6 +86,7 @@ export function loadWorkerConfig(env = process.env) {
     passwordLength: int('PASSWORD_LENGTH', 14),
     pfsenseEnabled: env.PFSENSE_ENABLED === 'true',
     hueEnabled: env.HUE_ENABLED === 'true',
+    heartbeatIntervalSec,
   };
 }
 
