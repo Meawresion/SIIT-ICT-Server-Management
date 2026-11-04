@@ -247,10 +247,12 @@ export default function RequestFormModal({ mode, requestId, draft, onClose, onDo
     }
   };
 
-  // ---- student info block
+  // ---- requester info block (a student, or a staff member who isn't an approver: department only)
   const student = mode === 'review'
     ? detail?.student && {
         name: detail.student.name,
+        staff: detail.student.kind === 'staff',
+        department: detail.student.department,
         student_id: detail.student.student_id,
         email: detail.student.email,
         degree: detail.student.degree,
@@ -260,6 +262,8 @@ export default function RequestFormModal({ mode, requestId, draft, onClose, onDo
       }
     : auth.profile && {
         name: auth.profile.full_name,
+        staff: auth.profile.kind === 'staff',
+        department: auth.profile.department,
         student_id: auth.profile.student_id,
         email: auth.profile.primary_email,
         degree: auth.profile.degree,
@@ -431,8 +435,15 @@ export default function RequestFormModal({ mode, requestId, draft, onClose, onDo
           )}
 
           <fieldset>
-            <legend>Student Information</legend>
-            {student ? (
+            <legend>{student?.staff ? 'Staff Information' : 'Student Information'}</legend>
+            {student?.staff ? (
+              <dl className="info-grid">
+                <div><dt>Full Name</dt><dd>{student.name}</dd></div>
+                <div><dt>E-mail Address</dt><dd>{student.email}</dd></div>
+                <div><dt>Department/Unit</dt><dd>{student.department}</dd></div>
+                {student.phone && <div><dt>Contact Phone Number</dt><dd>{student.phone}</dd></div>}
+              </dl>
+            ) : student ? (
               <dl className="info-grid">
                 <div><dt>Full Name</dt><dd>{student.name}</dd></div>
                 <div><dt>Student ID</dt><dd>{student.student_id}</dd></div>

@@ -19,6 +19,10 @@ import { createRequest } from '../src/services/request.service.js';
 import { activateRequest, approveRequest } from '../src/services/reviewer.service.js';
 import { siteToday } from '../src/services/scheduler.service.js';
 
+// The check's approver isn't on the task's APPROVER_EMAILS: these checks test the database flow
+// with the role column (as without the list; check-identity tests the list).
+delete process.env.APPROVER_EMAILS;
+
 const TIMEOUT_MS = 4 * 60_000;
 const waitFor = async (label, fn) => {
   const end = Date.now() + TIMEOUT_MS;

@@ -51,6 +51,7 @@ services:
       STUDENT_ID_DIGITS: ${STUDENT_ID_DIGITS}
       DEGREE_EMAIL_PREFIXES: ${DEGREE_EMAIL_PREFIXES}
       STAFF_EMAIL_DOMAINS: ${STAFF_EMAIL_DOMAINS}
+      APPROVER_EMAILS: ${APPROVER_EMAILS:-}
       # Provisioning through acc-prov-vm; off while MESSAGE_TRANSPORT is empty.
       MESSAGE_TRANSPORT: ${MESSAGE_TRANSPORT:-}
       AMQP_URL: amqp://activemq:5672

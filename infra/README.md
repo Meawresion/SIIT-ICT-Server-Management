@@ -211,7 +211,11 @@ The scripts are bash (Git Bash on Windows, or Linux/WSL) and need the AWS CLI v2
     `https://APP_HOST.ZONE_NAME/api/auth/google/callback` and (Grafana)
     `https://APP_HOST.ZONE_NAME/grafana/login/google`, and the JavaScript origin
     `https://APP_HOST.ZONE_NAME`. Then `deploy.sh grafana` for the dashboards.
-11. Sign in once, then grant approver access:
+11. Approvers: put their exact addresses in `APPROVER_EMAILS` (`config.env`), then
+    `deploy.sh app identity provisioning`. Being on the list is the only way to be an approver (checked
+    on every request, so removing an address takes effect at once); staff not on it sign in as
+    requesters with a staff profile (their GPU and Big Data requests are set up by hand). With the list
+    empty, grant access by hand after their first sign-in:
     `infra/scripts/run-task.sh --identity node scripts/set-user-role.js person@siit.tu.ac.th Approver`
     (accounts belong to the identity service; the request service's database user may only read them)
 

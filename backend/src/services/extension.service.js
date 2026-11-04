@@ -7,6 +7,7 @@
 
 import prisma from '../lib/prisma.js';
 import { provisioningConfig } from '../config/provisioning.js';
+import { isApprover } from '../config/identity.js';
 import { loadSchedulerConfig } from '../config/scheduler.js';
 import { requestView } from '../utils/db-mapping.js';
 import { buildExtendJob } from './provisioning.service.js';
@@ -60,7 +61,7 @@ export async function decideExtension(request_id, reviewer_account_id, approve, 
   let event;
   const request = await prisma.$transaction(async tx => {
     const reviewer = await tx.user.findUnique({ where: { uid: reviewer_account_id } });
-    if (reviewer?.role !== 'Approver') throw httpError('Reviewer access required', 403);
+    if (!isApprover(reviewer)) throw httpError('Reviewer access required', 403);
     const row = await lockRequest(tx, request_id);
     if (!row) throw httpError('Request not found', 404);
     const { extension, ...extra_details } = row.extra_details ?? {};

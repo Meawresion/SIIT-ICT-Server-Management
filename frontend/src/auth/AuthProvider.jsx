@@ -7,8 +7,8 @@ import { AuthContext } from './context.js';
 // Works out who is signed in and what they are. /api/auth/me gives the role (from the database):
 //   reviewer                -> reviewer
 //   profile exists          -> student
-//   neither                 -> student who still needs to complete a profile,
-//                              or a staff account with no approver access yet (noAccess)
+//   neither                 -> a requester who still needs to complete a profile: a student, or a
+//                              staff member who isn't an approver (a staff profile, kind 'staff')
 async function resolveSession() {
   const me = await getCurrentUser();
   if (!me?.account_id) return { status: 'anon' };
@@ -16,7 +16,6 @@ async function resolveSession() {
   const isReviewer = me.role === 'reviewer';
   const profile = await getUserProfile().catch(() => null);
 
-  const noAccess = !isReviewer && me.kind === 'staff';
   return {
     status: 'ready',
     accountId: me.account_id,
@@ -25,8 +24,7 @@ async function resolveSession() {
     account: { full_name: me.full_name ?? '', email: me.email ?? '', kind: me.kind ?? null, student_id: me.student_id ?? '', degree: me.degree ?? '' },
     role: isReviewer ? 'reviewer' : 'student',
     profile,
-    needsProfile: !isReviewer && !profile && !noAccess,
-    noAccess,
+    needsProfile: !isReviewer && !profile,
   };
 }
 

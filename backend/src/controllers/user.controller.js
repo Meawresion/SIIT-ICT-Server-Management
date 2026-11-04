@@ -1,15 +1,19 @@
 import { getUserByAccountId, createUserProfile, updateUserProfile } from '../services/user.service.js';
 import { getAccountById, updateAccount } from '../services/auth.service.js';
-import { ApproverProfileSchema, UserProfileSchema } from '../utils/validation.js';
+import { ApproverProfileSchema, StaffProfileSchema, UserProfileSchema } from '../utils/validation.js';
 import { classifyEmail, loadIdentityRules } from '../config/identity.js';
 
-// The student ID and degree come from the account's SIIT email (D25), never from the client.
-// Returns null for an account that isn't a student address (staff have no student profile).
-function fromEmail(req) {
-  const identity = classifyEmail(req.account?.primary_email, loadIdentityRules());
-  return identity?.kind === 'student' ? { student_id: identity.studentId, degree: identity.degree } : null;
-}
-const notAStudent = (res) => res.status(403).json({ message: 'Only student accounts have a student profile' });
+// A requester's profile fields. For a student, the ID and degree come from the SIIT email (D25),
+// never from the client; a staff member has a department instead.
+const profileView = (user) => ({
+  id: user.id.toString(),
+  kind: user.kind,
+  student_id: user.student_id,
+  degree: user.degree,
+  program: user.program,
+  department: user.department,
+  advisor_name: user.advisor_name,
+});
 
 // Helper to convert BigInt
 const convertBigInt = (obj) => {
@@ -45,11 +49,7 @@ export async function getUserProfile(req, res, next) {
     }
 
     res.json({
-      id: user.id.toString(),  // ← Convert BigInt
-      student_id: user.student_id,
-      degree: user.degree,
-      program: user.program,
-      advisor_name: user.advisor_name,
+      ...profileView(user),
       primary_email: account.primary_email,
       full_name: account.full_name,
       phone_number: account.phone_number,
@@ -61,18 +61,21 @@ export async function getUserProfile(req, res, next) {
   }
 }
 
+// What a requester sends: a student the student profile (ID and degree from the address), a staff
+// member the staff one (department). -> { data } or { status, body } to answer with.
+function requesterInput(req) {
+  const identity = classifyEmail(req.account?.primary_email, loadIdentityRules());
+  if (!identity) return { status: 403, body: { message: 'This account cannot have a requester profile' } };
+  const validation = (identity.kind === 'student' ? UserProfileSchema : StaffProfileSchema).safeParse(req.body);
+  if (!validation.success) return { status: 400, body: { message: 'Validation error', errors: validation.error.errors } };
+  const derived = identity.kind === 'student' ? { student_id: identity.studentId, degree: identity.degree } : {};
+  return { data: { ...validation.data, ...derived } };
+}
+
 export async function createProfile(req, res, next) {
   try {
-    const validation = UserProfileSchema.safeParse(req.body);
-    if (!validation.success) {
-      return res.status(400).json({
-        message: 'Validation error',
-        errors: validation.error.errors,
-      });
-    }
-
-    const derived = fromEmail(req);
-    if (!derived) return notAStudent(res);
+    const input = requesterInput(req);
+    if (!input.data) return res.status(input.status).json(input.body);
     const account_id = req.auth.account_id;
 
     const existing = await getUserByAccountId(account_id);
@@ -82,15 +85,8 @@ export async function createProfile(req, res, next) {
       });
     }
 
-    const user = await createUserProfile(account_id, { ...validation.data, ...derived });
-
-    res.status(201).json({
-      id: user.id.toString(),  // ← Convert BigInt
-      student_id: user.student_id,
-      degree: user.degree,
-      program: user.program,
-      advisor_name: user.advisor_name,
-    });
+    const user = await createUserProfile(account_id, input.data);
+    res.status(201).json(profileView(user));
   } catch (err) {
     next(err);
   }
@@ -106,14 +102,6 @@ export async function updateProfile(req, res, next) {
       return res.json(approverProfile(await updateAccount(req.account.id, approver.data)));
     }
 
-    const validation = UserProfileSchema.safeParse(req.body);
-    if (!validation.success) {
-      return res.status(400).json({
-        message: 'Validation error',
-        errors: validation.error.errors,
-      });
-    }
-
     const account_id = req.auth.account_id;
     const user_id = req.auth.user_id;
 
@@ -123,17 +111,10 @@ export async function updateProfile(req, res, next) {
       });
     }
 
-    const derived = fromEmail(req);
-    if (!derived) return notAStudent(res);
-    const user = await updateUserProfile(user_id, account_id, { ...validation.data, ...derived });
-
-    res.json({
-      id: user.id.toString(),  // ← Convert BigInt
-      student_id: user.student_id,
-      degree: user.degree,
-      program: user.program,
-      advisor_name: user.advisor_name,
-    });
+    const input = requesterInput(req);
+    if (!input.data) return res.status(input.status).json(input.body);
+    const user = await updateUserProfile(user_id, account_id, input.data);
+    res.json(profileView(user));
   } catch (err) {
     next(err);
   }

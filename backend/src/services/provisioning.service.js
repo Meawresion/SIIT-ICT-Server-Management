@@ -13,6 +13,7 @@
 import { randomUUID } from 'node:crypto';
 import prisma from '../lib/prisma.js';
 import { provisioningConfig } from '../config/provisioning.js';
+import { isApprover } from '../config/identity.js';
 import { EnvelopeError, open, seal } from '../messaging/envelope.js';
 import { PoisonMessageError } from '../messaging/errors.js';
 
@@ -33,6 +34,12 @@ const day = (date) => date.toISOString().slice(0, 10);
 
 export function isAutomated(row, config = provisioningConfig()) {
   return Boolean(config) && AUTOMATED_RESOURCES.includes(row.resource_type);
+}
+
+// acc-prov-vm makes site accounts for students only (st/stm/std + student ID). A staff member's
+// GPU or Big Data request is set up by hand, like the other resources.
+export function hasSiteUsername(user) {
+  return Boolean(USERNAME_PREFIX[user?.study_degree]) && /^\d{1,12}$/.test(user?.s_id ?? '');
 }
 
 export function usernameFor(student) {
@@ -141,7 +148,7 @@ export async function retryProvisioning(request_id, reviewer_account_id) {
   if (!config) throw httpError('Automatic provisioning is off', 400);
   return prisma.$transaction(async tx => {
     const reviewer = await tx.user.findUnique({ where: { uid: reviewer_account_id } });
-    if (reviewer?.role !== 'Approver') throw httpError('Reviewer access required', 403);
+    if (!isApprover(reviewer)) throw httpError('Reviewer access required', 403);
     const row = await tx.request.findUnique({ where: { rid: request_id } });
     if (!row) throw httpError('Request not found', 404);
     const last = await tx.provision_job.findFirst({ where: { rid: request_id }, orderBy: { created_at: 'desc' } });

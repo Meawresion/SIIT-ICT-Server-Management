@@ -2,9 +2,11 @@ import { useState } from 'react';
 import { degreeLabel } from '../constants.js';
 
 // The fields each kind of account fills in (and sends). For students, ID and degree come from the
-// SIIT email and are shown only; approvers have no student fields and the phone is optional.
+// SIIT email and are shown only; staff who request resources give a department instead; approvers
+// have no student fields and the phone is optional.
 const FIELDS = {
   student: { send: ['full_name', 'program', 'advisor_name', 'phone_number'], required: ['full_name', 'program', 'advisor_name', 'phone_number'] },
+  staff: { send: ['full_name', 'department', 'phone_number'], required: ['full_name', 'department', 'phone_number'] },
   approver: { send: ['full_name', 'phone_number'], required: ['full_name'] },
 };
 
@@ -12,16 +14,18 @@ function emptyProfile(p) {
   return {
     full_name: p?.full_name ?? '',
     program: p?.program ?? '',
+    department: p?.department ?? '',
     advisor_name: p?.advisor_name ?? '',
     phone_number: p?.phone_number ?? '',
   };
 }
 
 // `email`, `studentId` and `degree` are shown read-only: they come from the Google account's
-// SIIT address and are never sent. variant: 'student' (default) or 'approver'.
+// SIIT address and are never sent. variant: 'student' (default), 'staff' or 'approver'.
 export default function ProfileForm({ initial, email, studentId, degree, variant = 'student', onSubmit, submitLabel, onCancel }) {
   const fields = FIELDS[variant];
   const isStudent = variant === 'student';
+  const phoneRequired = variant !== 'approver';
   const [form, setForm] = useState(() => emptyProfile(initial));
   const [errors, setErrors] = useState({});
   const [apiError, setApiError] = useState('');
@@ -87,8 +91,15 @@ export default function ProfileForm({ initial, email, studentId, degree, variant
           {err('advisor_name')}
         </label>
         </>)}
+        {variant === 'staff' && (
         <label className="field">
-          <span className="field-label">Contact Phone Number {isStudent && <span className="req">*</span>}</span>
+          <span className="field-label">Department/Unit <span className="req">*</span></span>
+          <input value={form.department} onChange={set('department')} maxLength={50} placeholder="e.g. School of ICT" aria-invalid={Boolean(errors.department)} />
+          {err('department')}
+        </label>
+        )}
+        <label className="field">
+          <span className="field-label">Contact Phone Number {phoneRequired && <span className="req">*</span>}</span>
           <input value={form.phone_number} onChange={set('phone_number')} inputMode="tel" maxLength={15} placeholder="e.g. 0812345678" aria-invalid={Boolean(errors.phone_number)} />
           {err('phone_number')}
         </label>
