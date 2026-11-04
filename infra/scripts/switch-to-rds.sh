@@ -34,7 +34,8 @@ writers=()
 for service in backend identity provisioning; do service_exists "$service" && writers+=("$service"); done
 
 echo "== 1/5 RDS (the portal still runs on the ECS MySQL)"
-"$SCRIPTS/deploy.sh" data
+# A new RDS database, not a restored snapshot: the copy goes only into an empty one.
+DB_RESTORE=none "$SCRIPTS/deploy.sh" data
 
 echo "== 2/5 stopping ${writers[*]} (the portal is down until step 4)"
 for service in "${writers[@]}"; do

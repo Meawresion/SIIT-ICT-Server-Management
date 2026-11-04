@@ -12,7 +12,7 @@ if [ ! -f "$CONFIG" ]; then
   exit 1
 fi
 # Values set in the environment (ENTRY_MODE=direct deploy.sh app) win over config.env.
-overrides=$(declare -p ENTRY_MODE USE_DOMAIN DATA_MODE PROVISIONING SITE_PUBLIC_KEYS GPU_NODES OVPN_PROFILE_URL MANUAL_GPU_URL MANUAL_BIGDATA_URL SCHEDULER_INTERVAL_SEC 2>/dev/null || true)
+overrides=$(declare -p ENTRY_MODE USE_DOMAIN DATA_MODE DB_RESTORE SITE_HEARTBEAT_MINUTES PROVISIONING SITE_PUBLIC_KEYS GPU_NODES OVPN_PROFILE_URL MANUAL_GPU_URL MANUAL_BIGDATA_URL SCHEDULER_INTERVAL_SEC 2>/dev/null || true)
 set -a
 # shellcheck source=/dev/null
 . "$CONFIG"
@@ -252,9 +252,21 @@ leftovers() {
   if [ "$found" = 0 ]; then echo "Nothing left behind${1:+ (kept: $*)}."; else echo "Something is left behind (above)."; return 1; fi
 }
 
+# The final snapshots of deleted rds stacks (newest first): deploy.sh data restores the newest.
+latest_rds_snapshot() {
+  awst rds describe-db-snapshots --snapshot-type manual \
+    --query "reverse(sort_by(DBSnapshots[?Status=='available' && starts_with(DBInstanceIdentifier, '$STACK_DATA_RDS-')], &SnapshotCreateTime))[0].DBSnapshotIdentifier"
+}
+
 # What the kept stacks hold, for the end of a test run.
 show_kept() {
-  local repo
+  local repo snapshots
+  snapshots=$(awst rds describe-db-snapshots --snapshot-type manual \
+    --query "DBSnapshots[?starts_with(DBInstanceIdentifier, '$STACK_DATA_RDS-')].[DBSnapshotIdentifier, SnapshotCreateTime]" 2>/dev/null || true)
+  if [ -n "$snapshots" ]; then
+    echo "  RDS final snapshots (the next deploy restores the newest; delete old ones in the RDS console):"
+    sed 's/^/    /' <<<"$snapshots"
+  fi
   for repo in backend mysql frontend notification; do
     echo "  ECR $PROJECT-$repo: $(awst ecr describe-images --repository-name "$PROJECT-$repo" \
       --query 'imageDetails[].[imageTags[0], imageSizeInBytes]' 2>/dev/null |
