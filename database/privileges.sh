@@ -10,7 +10,8 @@
 #                           request status, adds events, jobs, the scheduler lease and log cursor
 #
 # The image's entrypoint sources this after init.sql on the first start (alphabetical order), so
-# it must not call exit or set. On an existing database, run it once as root:
+# it must not call exit or set. On RDS, rds-init.sh sources it the same way. On an existing
+# database, run it once as root:
 #   docker compose exec -T mysql sh /docker-entrypoint-initdb.d/privileges.sh
 siit_db=$MYSQL_DATABASE
 
@@ -55,5 +56,10 @@ privileges_sql() {
   fi
 }
 
-privileges_sql | MYSQL_PWD="$MYSQL_ROOT_PASSWORD" mysql --protocol=socket -uroot "$siit_db"
+# The admin connection: root on the local socket in the MySQL container; rds-init.sh defines its
+# own (the RDS admin user over TLS) before it sources this file.
+if ! command -v siit_admin_mysql >/dev/null 2>&1; then
+  siit_admin_mysql() { MYSQL_PWD="$MYSQL_ROOT_PASSWORD" mysql --protocol=socket -uroot "$siit_db"; }
+fi
+privileges_sql | siit_admin_mysql
 echo "privileges.sh: least privilege set for${MYSQL_USER:+ $MYSQL_USER}${IDENTITY_DB_PASSWORD:+ ${IDENTITY_DB_USER:-siit_identity}}${REQUESTS_DB_PASSWORD:+ ${REQUESTS_DB_USER:-siit_requests}}${PROVISIONING_DB_PASSWORD:+ ${PROVISIONING_DB_USER:-siit_provisioning}}; request_event is append-only for all"

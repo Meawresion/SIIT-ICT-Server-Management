@@ -1,7 +1,8 @@
 # AWS infrastructure (CloudFormation)
 
 The portal on AWS: CloudFront in front of a private S3 bucket (the React build) and an ALB
-(`/api/*`), the backend on ECS Fargate, and for now MySQL as an ECS task with its data on EFS.
+(`/api/*`), the backend on ECS Fargate, and MySQL either as an ECS task with its data on EFS
+(`DATA_MODE=ecs`, the budget mode for testing) or on RDS Multi-AZ (`DATA_MODE=rds`, D31).
 
 ```
 Browser ─HTTPS─▶ CloudFront  APP_HOST.ZONE_NAME
@@ -9,6 +10,7 @@ Browser ─HTTPS─▶ CloudFront  APP_HOST.ZONE_NAME
                   └─ /api/*  ─▶ ALB  ORIGIN_HOST.ZONE_NAME (only CloudFront: prefix list + secret header)
                                  └─▶ ECS Fargate backend (public subnets, public IP, no NAT)
                                         └─▶ internal NLB ─▶ ECS Fargate mysql (EFS)
+                                         or ─▶ RDS MySQL Multi-AZ (private subnets, TLS checked)
 ```
 
 Without CloudFront (`ENTRY_MODE=direct`, e.g. Learner Lab) the ALB is the public entry and the
@@ -92,9 +94,10 @@ sends the end-date reminders and removes access when a request ends (FR-8.2, FR-
 | `<project>-dns` | `dns.yaml` | Route 53 hosted zone for the delegated subdomain. Keep it, also between test runs: a new zone has new name servers. |
 | `<project>-cert` | `cert.yaml` | ACM certificate for the zone and `*.zone`, validated through DNS (us-east-1, used by CloudFront and the ALB). |
 | `<project>-logs` | `logs.yaml` | The CloudWatch Logs groups of every service and the audit group, error metric filters, saved Logs Insights queries, the alert SNS topic (with `ALERT_EMAIL`), and the S3 bucket for the ALB access logs (SSE-S3, TLS only, no public access). Kept between runs; deleting it deletes the logs. |
-| `<project>-network` | `network.yaml` | VPC, 2 public subnets (ALB, tasks), 2 private subnets (EFS, RDS later). No NAT gateway. |
+| `<project>-network` | `network.yaml` | VPC, 2 public subnets (ALB, tasks), 2 private subnets (EFS, RDS). No NAT gateway. |
 | `<project>-platform` | `platform.yaml` | ECR repositories for backend, mysql, frontend, notification and grafana (emptied on delete), ECS cluster (Container Insights off unless `CONTAINER_INSIGHTS=enabled`), backend security group. |
-| `<project>-data` | `data-ecs.yaml` | MySQL 8.4 task + EFS + internal NLB (stable DB name) + generated DB passwords. Later replaced by an RDS stack with the same outputs. |
+| `<project>-data` | `data-ecs.yaml` | `DATA_MODE=ecs`: MySQL 8.4 task + EFS + internal NLB (stable DB name) + generated DB passwords. The services connect over TLS (`DB_TLS=encrypt`: MySQL's self-signed certificate, not checked). |
+| `<project>-rds` | `data-rds.yaml` | `DATA_MODE=rds`: RDS MySQL 8.4, Multi-AZ (`DB_MULTI_AZ`), private subnets, only the backend security group on 3306, TLS required (`DB_TLS=verify`: certificate and host name checked against the RDS CA bundle in the image), encrypted gp3 storage that grows by itself, automated backups (`DB_BACKUP_DAYS`, point-in-time restore; kept after a delete until they expire), storage and CPU alarms, generated passwords (admin and one user per service). The `rds-init.sh` task (mysql image) adds the schema while the database is empty and sets the service users; `deploy.sh data` runs it after each deploy. Same outputs as the data stack. |
 | `<project>-secrets` | `secrets.yaml` | The secrets you provide: the Google OAuth client and the SMTP settings, created with placeholders (no sign-in, emails off); `set-secrets.sh` puts your values. |
 | `<project>-queues` | `queues.yaml` | With `PROVISIONING=true`: the SQS request and result queues, each with a dead-letter queue (14 days, TLS only, encrypted at rest), and the backend's message keys. A small Lambda generates the key pair straight into Secrets Manager; the public half is the `BackendPublicKey` output. |
 | `<project>-events` | `events.yaml` | The event bus, the notification queue (+ dead-letter queue, alarm) and the notification Lambda, the only reader of the mail secret. |
@@ -126,7 +129,8 @@ with its placeholders: your real secrets are never used), queues, logs, events, 
 domain, provisioning on with a throwaway site key), and checks:
 - the frontend answers through the ALB, also on client-side routes;
 - the backend answers through the ALB;
-- it reaches MySQL as the request service's own database user (D34);
+- it reaches MySQL as the request service's own database user (D34), over TLS (`check-db-tls.js`:
+  `encrypt` on the ECS MySQL, `verify` on RDS);
 - the request service has the event bus and token secret but no Google client, SMTP setting, site key or queue (D34);
 - the ALB sends `/api/users` to the identity service and `/api/requests` to the request service (each answers 401, not 404), and the identity service logs into its own group;
 - it refuses unsigned and cross-site requests;
@@ -178,8 +182,8 @@ The smoke test creates them when they are missing (first run, or after a Learner
   Secrets Manager secrets and restarts the backend. The values pass through one node process
   and a private temporary file only: never a command line, log or stack parameter. The other
   scripts keep them as shell variables and don't pass them on to the programs they run.
-- Generated by CloudFormation (Secrets Manager): MySQL root and app passwords, `JWT_SECRET`, the
-  CloudFront origin header.
+- Generated by CloudFormation (Secrets Manager): MySQL root (RDS: admin) and the service users'
+  passwords, `JWT_SECRET`, the CloudFront origin header.
 - Generated by the queues stack: the backend's message key pair (the private half only in Secrets
   Manager). Give the `BackendPublicKey` output to acc-prov-vm (`MSG_PEER_PUBLIC_KEYS` in its
   `.env`), and put acc-prov-vm's public bundle into `SITE_PUBLIC_KEYS` in `config.env`. Both are
@@ -234,13 +238,15 @@ The scripts are bash (Git Bash on Windows, or Linux/WSL) and need the AWS CLI v2
 | Check the database from inside AWS (adds 4 check accounts: throwaway data only) | `run-task.sh --identity node scripts/check-identity.js <marker>`, then `run-task.sh node scripts/check-db.js <marker>` |
 | Find an incident from its reference | `find-in-logs.sh <reference>` (last 2 days; `--since "2026-11-01"` for older ones, `--group audit` for one group) |
 | Search the ALB access logs | `find-in-logs.sh <text> --alb` (`--date YYYY-MM-DD` for other days) |
-| Stop the tasks between test sessions | `pause.sh` (the ALB still costs ~$0.6/day) |
+| Stop the tasks between test sessions | `pause.sh` (the ALB still costs ~$0.6/day; on RDS it stops the instance too, storage still billed, and AWS starts it again after 7 days) |
 | Start them again | `resume.sh` |
+| Move the database to RDS with its data | `DATA_MODE=rds` in `config.env`, then `switch-to-rds.sh` (RDS is created while the portal runs; then about 5 minutes down for the copy and the restart). Check the portal, then delete the old `<project>-data` stack |
+| Test on RDS | `DATA_MODE=rds smoke-test.sh --domain --keep` (RDS adds 15-25 minutes) |
 | Long break | `destroy.sh edge web app` (keeps the zone, certificate, images and data) |
 | Remove everything (end of the course) | `teardown-all.sh` (and `--dns` for the zone) |
 
 Image tags follow the last commit that changed `backend/` (`frontend/` for the frontend,
-`database/init.sql` and `database/Dockerfile` for MySQL), so a deploy only restarts what changed. Uncommitted changes
+`database/` for MySQL and the RDS init task), so a deploy only restarts what changed. Uncommitted changes
 produce a `-dirty` tag.
 
 Logs: CloudWatch log groups `/<project>/backend`, `/<project>/frontend`, `/<project>/mysql` and `/<project>/audit` (logs stack).

@@ -12,7 +12,7 @@ if [ ! -f "$CONFIG" ]; then
   exit 1
 fi
 # Values set in the environment (ENTRY_MODE=direct deploy.sh app) win over config.env.
-overrides=$(declare -p ENTRY_MODE USE_DOMAIN PROVISIONING SITE_PUBLIC_KEYS GPU_NODES OVPN_PROFILE_URL MANUAL_GPU_URL MANUAL_BIGDATA_URL SCHEDULER_INTERVAL_SEC 2>/dev/null || true)
+overrides=$(declare -p ENTRY_MODE USE_DOMAIN DATA_MODE PROVISIONING SITE_PUBLIC_KEYS GPU_NODES OVPN_PROFILE_URL MANUAL_GPU_URL MANUAL_BIGDATA_URL SCHEDULER_INTERVAL_SEC 2>/dev/null || true)
 set -a
 # shellcheck source=/dev/null
 . "$CONFIG"
@@ -37,12 +37,21 @@ ENTRY_MODE=${ENTRY_MODE:-cloudfront}
 USE_DOMAIN=${USE_DOMAIN:-true}
 # true: the queues stack and automatic provisioning of GPU requests through acc-prov-vm.
 PROVISIONING=${PROVISIONING:-false}
+# Where the database runs (D31): ecs (MySQL as an ECS task on EFS, the data stack) or rds (RDS
+# Multi-AZ, the rds stack). switch-to-rds.sh moves the data from one to the other.
+DATA_MODE=${DATA_MODE:-ecs}
+case $DATA_MODE in
+  ecs|rds) ;;
+  *) echo "DATA_MODE must be ecs or rds (in $CONFIG)" >&2; exit 1 ;;
+esac
 
 STACK_DNS="$PROJECT-dns"
 STACK_CERT="$PROJECT-cert"
 STACK_NETWORK="$PROJECT-network"
 STACK_PLATFORM="$PROJECT-platform"
-STACK_DATA="$PROJECT-data"
+STACK_DATA_ECS="$PROJECT-data"
+STACK_DATA_RDS="$PROJECT-rds"
+if [ "$DATA_MODE" = rds ]; then STACK_DATA=$STACK_DATA_RDS; else STACK_DATA=$STACK_DATA_ECS; fi
 STACK_APP="$PROJECT-app"
 STACK_EDGE="$PROJECT-edge"
 STACK_WEB="$PROJECT-web"
@@ -85,7 +94,7 @@ image_tag() {
   echo "$tag"
 }
 backend_tag() { image_tag backend; }
-mysql_tag() { image_tag database/Dockerfile database/init.sql database/privileges.sh; }
+mysql_tag() { image_tag database/Dockerfile database/.dockerignore database/init.sql database/privileges.sh database/rds-init.sh; }
 frontend_tag() { image_tag frontend; }
 notification_tag() { image_tag notification; }
 grafana_tag() { image_tag grafana; }
@@ -164,7 +173,9 @@ delete_stacks() {
       aws ecs update-service --cluster "$PROJECT" --service "$service" --desired-count 0 >/dev/null || true
     fi
   done
-  for wave in "$STACK_EDGE $STACK_WEB $STACK_GRAFANA $STACK_PROVISIONING $STACK_IDENTITY" "$STACK_APP" "$STACK_EVENTS" "$STACK_QUEUES $STACK_DATA $STACK_SECRETS" \
+  # The rds stack imports from the data stack while switch-to-rds.sh copies, so it goes first.
+  for wave in "$STACK_EDGE $STACK_WEB $STACK_GRAFANA $STACK_PROVISIONING $STACK_IDENTITY" "$STACK_APP" "$STACK_EVENTS $STACK_DATA_RDS" \
+    "$STACK_QUEUES $STACK_DATA_ECS $STACK_SECRETS" \
     "$STACK_PLATFORM $STACK_CERT $STACK_LOGS" "$STACK_NETWORK $STACK_DNS"; do
     pids=()
     for stack in $wave; do
@@ -208,6 +219,9 @@ leftovers() {
   fi
   check "load balancers" elbv2 describe-load-balancers --query 'LoadBalancers[].LoadBalancerName'
   check "EFS file systems" efs describe-file-systems --query "FileSystems[?Name=='$PROJECT-mysql-data'].FileSystemId"
+  # (A deleted RDS instance's automated backups stay until they expire: on purpose, not listed.)
+  check "RDS instances" rds describe-db-instances \
+    --query "DBInstances[?starts_with(DBInstanceIdentifier,'$PROJECT-')].[DBInstanceIdentifier,DBInstanceStatus]"
   local kept_groups=()
   [[ $allowed == *" $STACK_QUEUES "* ]] && kept_groups+=("/$PROJECT/message-keys")
   [[ $allowed == *" $STACK_LOGS "* ]] && kept_groups+=("/$PROJECT/backend" "/$PROJECT/identity" "/$PROJECT/grafana" "/$PROJECT/provisioning" "/$PROJECT/notification" "/$PROJECT/frontend" "/$PROJECT/mysql" "/$PROJECT/audit")

@@ -1,3 +1,4 @@
 *
 !init.sql
 !privileges.sh
+!rds-init.sh
