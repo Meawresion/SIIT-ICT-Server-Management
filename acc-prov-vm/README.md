@@ -236,6 +236,11 @@ Setup, from the stack outputs:
 - this site's public bundle (`npm run keygen`) goes into `SITE_PUBLIC_KEYS` in `infra/config.env`;
 - credentials: on Learner Lab, the session's `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` and
   `AWS_SESSION_TOKEN` in `.env` each session (plan §10.1); with the full account, IAM Roles Anywhere.
+- **Heartbeat:** every `HEARTBEAT_INTERVAL_SEC` (default 300; 0 = off) the worker sends the portal
+  a signed and encrypted heartbeat on the result queue (`src/heartbeat.js`, rid 0, no job). It
+  carries a TCP check of the pfSense webGUI and each node's SSH port, with no login. The portal
+  alarms when none arrives for 15 minutes (site, network or expired keys) or when a check fails
+  twice in a row.
 - Keep `WORKER_MAX_ATTEMPTS` below `MaxReceiveCount`, so the backend always gets a failed result
   instead of a silent dead-letter.
 

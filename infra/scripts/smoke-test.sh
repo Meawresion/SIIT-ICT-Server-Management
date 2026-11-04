@@ -33,7 +33,8 @@ for arg in "$@"; do
     *) echo "Usage: $0 [--domain] [--keep | --teardown]" >&2; exit 1 ;;
   esac
 done
-export ENTRY_MODE=direct USE_DOMAIN PROVISIONING=true SITE_PUBLIC_KEYS GPU_NODES=smoke-node \
+# SITE_HEARTBEAT_MINUTES=0: no heartbeat alarm (the fake site runs only for a few minutes).
+export ENTRY_MODE=direct USE_DOMAIN PROVISIONING=true SITE_PUBLIC_KEYS GPU_NODES=smoke-node SITE_HEARTBEAT_MINUTES=0 \
   OVPN_PROFILE_URL=https://example.com/smoke-ovpn MANUAL_GPU_URL=https://example.com/smoke-manual MANUAL_BIGDATA_URL=https://example.com/smoke-bigdata SCHEDULER_INTERVAL_SEC=30
 . "$(dirname "$0")/lib.sh"
 SCRIPTS="$(dirname "$0")"
@@ -184,6 +185,7 @@ in_logs() { # in_logs <text> [find-in-logs options]: polls for a line written du
   return 1
 }
 if in_logs "$marker" --group backend; then pass "a request's access log line is in CloudWatch Logs (find-in-logs.sh, Logs Insights)"; else fail "access log line in CloudWatch Logs"; fi
+if in_logs '"event":"site.heartbeat"' --group provisioning; then pass "the site heartbeat reached the provisioning service (signed, rid 0; the fake site sends one)"; else fail "site heartbeat"; fi
 if in_logs '"action":"PROVISIONED"' --group audit; then pass "the audit trail reached its log group (request_event copied to /$PROJECT/audit)"; else fail "audit events in the audit log group"; fi
 if in_logs "$marker" --alb; then pass "the ALB access logs reached S3"; else fail "ALB access logs in S3"; fi
 # Grafana (D34, NFR-8.3): up behind the ALB at /grafana/, its CloudWatch data source works with the
@@ -224,7 +226,7 @@ if in_logs '"path":"/api/users/me"' --group identity; then pass "the identity se
 if in_logs '"event":"worker.started"' --group provisioning; then pass "the provisioning service runs on its own (D34)"; else fail "provisioning service log"; fi
 alarms=$(awst cloudwatch describe-alarms --alarm-name-prefix "$PROJECT-" --query 'length(MetricAlarms)')
 if [ "$DATA_MODE" = rds ]; then
-  expect "the alarms exist (errors x3, ALB 5xx, unhealthy targets x3, dead letters x2, RDS storage and CPU)" 11 "$alarms"
+  expect "the alarms exist (errors x3, ALB 5xx, unhealthy targets x3, dead letters x2, site not taking jobs, RDS storage and CPU)" 12 "$alarms"
 else
-  expect "the alarms exist (errors x3, ALB 5xx, unhealthy targets x3, dead letters x2)" 9 "$alarms"
+  expect "the alarms exist (errors x3, ALB 5xx, unhealthy targets x3, dead letters x2, site not taking jobs)" 10 "$alarms"
 fi

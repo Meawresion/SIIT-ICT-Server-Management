@@ -84,6 +84,18 @@ Parameters:
   MessageJobTtlSeconds:
     Type: Number
     Default: 259200
+  SiteHeartbeatMinutes:
+    Type: Number
+    Default: 15
+    MinValue: 0
+    MaxValue: 1440
+    Description: Alarm when no site heartbeat arrived for this many minutes (acc-prov-vm sends one every 5); 0 = no alarm
+  QueueWaitMinutes:
+    Type: Number
+    Default: 5
+    MinValue: 1
+    MaxValue: 1440
+    Description: Alarm when jobs wait this many minutes and the site takes none of them
 
 Rules:
   ProvisioningNeedsSettings:
@@ -99,6 +111,9 @@ Rules:
 
 Conditions:
   HasQueues: !Not [!Equals [!Ref QueuesStack, '']]
+  WatchHeartbeat: !And
+    - !Condition HasQueues
+    - !Not [!Equals [!Ref SiteHeartbeatMinutes, 0]]
 
 Resources:
   TaskDefinition:
@@ -329,6 +344,116 @@ Resources:
                 - Name: QueueName
                   Value: !Sub '${Project}-provision-results-dlq'
       EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [{'Fn::ImportValue': !Sub '${LogsStack}-AlertTopicArn'}]
+
+  # The SIIT site's health (acc-prov-vm's heartbeat, every 5 minutes through the result queue; this
+  # service logs each one as site.heartbeat). No inbound connection to the site is needed.
+  SiteHeartbeatFilter:
+    Type: AWS::Logs::MetricFilter
+    Condition: HasQueues
+    Properties:
+      LogGroupName:
+        Fn::ImportValue: !Sub '${LogsStack}-ProvisioningLogGroup'
+      FilterPattern: '{ $.event = "site.heartbeat" }'
+      MetricTransformations:
+        - MetricNamespace:
+            Fn::ImportValue: !Sub '${LogsStack}-MetricNamespace'
+          MetricName: SiteHeartbeats
+          MetricValue: '1'
+  SiteProblemsFilter:
+    Type: AWS::Logs::MetricFilter
+    Condition: HasQueues
+    Properties:
+      LogGroupName:
+        Fn::ImportValue: !Sub '${LogsStack}-ProvisioningLogGroup'
+      FilterPattern: '{ $.event = "site.heartbeat" && $.problems > 0 }'
+      MetricTransformations:
+        - MetricNamespace:
+            Fn::ImportValue: !Sub '${LogsStack}-MetricNamespace'
+          MetricName: SiteProblems
+          MetricValue: '1'
+  # One-minute periods, each without a heartbeat counts as breaching: the alarm needs every minute
+  # of the window empty, so it fires only after SiteHeartbeatMinutes without one.
+  SiteHeartbeatAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Condition: WatchHeartbeat
+    Properties:
+      AlarmName: !Sub '${Project}-site-heartbeat-missing'
+      AlarmDescription: !Sub >-
+        No heartbeat from the SIIT site (acc-prov-vm) for ${SiteHeartbeatMinutes} minutes: the
+        worker, its host or network is down, or its AWS keys expired (journalctl -u acc-prov-vm)
+      Namespace:
+        Fn::ImportValue: !Sub '${LogsStack}-MetricNamespace'
+      MetricName: SiteHeartbeats
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: !Ref SiteHeartbeatMinutes
+      DatapointsToAlarm: !Ref SiteHeartbeatMinutes
+      Threshold: 1
+      ComparisonOperator: LessThanThreshold
+      TreatMissingData: breaching
+      AlarmActions: [{'Fn::ImportValue': !Sub '${LogsStack}-AlertTopicArn'}]
+      OKActions: [{'Fn::ImportValue': !Sub '${LogsStack}-AlertTopicArn'}]
+  SiteProblemsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Condition: WatchHeartbeat
+    Properties:
+      AlarmName: !Sub '${Project}-site-check-failed'
+      AlarmDescription: >-
+        The SIIT site can't reach pfSense or a GPU/Hadoop node (two heartbeats in a row); the
+        failed names are in the site.heartbeat lines (find-in-logs.sh site.heartbeat --group provisioning)
+      Namespace:
+        Fn::ImportValue: !Sub '${LogsStack}-MetricNamespace'
+      MetricName: SiteProblems
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 2
+      DatapointsToAlarm: 2
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [{'Fn::ImportValue': !Sub '${LogsStack}-AlertTopicArn'}]
+  # Jobs wait and the site takes none: the worker is stuck, or another consumer is missing. The
+  # worker runs one job at a time and a GPU setup can take 10-15 minutes, so a job in flight
+  # doesn't count (it isn't visible); two approvals during one long setup can still trip it.
+  QueueWaitAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Condition: HasQueues
+    Properties:
+      AlarmName: !Sub '${Project}-site-not-taking-jobs'
+      AlarmDescription: !Sub 'Provisioning jobs waited ${QueueWaitMinutes} minutes and the SIIT site took none of them'
+      Metrics:
+        - Id: stuck
+          Expression: IF(waiting > 0 AND taken == 0, 1, 0)
+          Label: Jobs waiting, none taken
+          ReturnData: true
+        - Id: waiting
+          ReturnData: false
+          MetricStat:
+            Stat: Maximum
+            Period: 60
+            Metric:
+              Namespace: AWS/SQS
+              MetricName: ApproximateNumberOfMessagesVisible
+              Dimensions:
+                - Name: QueueName
+                  Value: !Sub '${Project}-provision-requests'
+        - Id: taken
+          ReturnData: false
+          MetricStat:
+            Stat: Sum
+            Period: 60
+            Metric:
+              Namespace: AWS/SQS
+              MetricName: NumberOfMessagesReceived
+              Dimensions:
+                - Name: QueueName
+                  Value: !Sub '${Project}-provision-requests'
+      EvaluationPeriods: !Ref QueueWaitMinutes
+      DatapointsToAlarm: !Ref QueueWaitMinutes
       Threshold: 1
       ComparisonOperator: GreaterThanOrEqualToThreshold
       TreatMissingData: notBreaching

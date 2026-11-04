@@ -244,6 +244,24 @@ export async function failJob({ job_id, rid, error, details = {}, log = () => {}
   return outcome;
 }
 
+// A site heartbeat (acc-prov-vm's src/heartbeat.js): a sealed result with rid 0 and no job. It
+// changes nothing; the log line is what the provisioning stack's alarms count (none for a while:
+// the site is down or its keys expired) and what its failed checks are (systems it can't reach).
+const CHECK_KINDS = ['pfsense', 'gpu', 'hadoop'];
+function siteHeartbeat(msg, log) {
+  const hb = msg.payload.heartbeat;
+  const checks = (Array.isArray(hb.checks) ? hb.checks : []).slice(0, 50)
+    .filter(c => CHECK_KINDS.includes(c?.kind) && /^[A-Za-z0-9._-]{1,40}$/.test(c?.name ?? ''))
+    .map(c => ({ name: c.name, kind: c.kind, ok: c.ok === true }));
+  const failed = checks.filter(c => !c.ok).map(c => c.name);
+  log('site.heartbeat', {
+    kid: msg.kid, version: String(hb.version ?? '').slice(0, 20),
+    uptime_sec: Number.isSafeInteger(hb.uptimeSec) ? hb.uptimeSec : null,
+    checks: checks.length, problems: failed.length, failed, sent_at: new Date(msg.iat * 1000).toISOString(),
+  });
+  return 'heartbeat';
+}
+
 // One result message from acc-prov-vm. Throws PoisonMessageError for anything forged or
 // malformed (the transport dead-letters it), and any other error to have it delivered again.
 // A result for a job that is already finished, or unknown here, is dropped (it was a redelivery,
@@ -259,6 +277,7 @@ export async function handleResult(text, { config, log = () => {}, notify = () =
     }
     throw err;
   }
+  if (msg.rid === 0 && msg.payload?.heartbeat) return siteHeartbeat(msg, log);
   const result = Object.fromEntries(RESULT_FIELDS.filter(k => msg.payload?.[k] !== undefined).map(k => [k, msg.payload[k]]));
   const ok = result.ok === true;
   const error = ok ? null : String(result.error ?? 'acc-prov-vm reported a failure').slice(0, MAX_ERROR_LENGTH);

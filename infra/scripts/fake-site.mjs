@@ -23,6 +23,12 @@ const transport = createSqsTransport(
   { client: new SQSClient({ region: process.env.AWS_REGION }), log },
 );
 
+// One site heartbeat first, like acc-prov-vm's (rid 0, no job): the provisioning service logs it.
+await transport.send(seal({ typ: 'result', jti: crypto.randomUUID(), rid: 0, ttlSec: 600,
+  payload: { heartbeat: { version: 'fake-site', uptimeSec: 0, checks: [{ name: 'smoke-node', kind: 'gpu', ok: true }] } } },
+  { me, peer: peers[0] }));
+log('site.heartbeat_sent');
+
 let handled = 0;
 let done;
 const finished = new Promise((r) => { done = r; });

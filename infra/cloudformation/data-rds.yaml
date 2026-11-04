@@ -6,6 +6,8 @@ Description: >-
   D34), so the services switch by their DataStack parameter. The schema and the service users come
   from rds-init.sh, which deploy.sh runs as a one-off task (InitTaskDefinitionArn) after each deploy.
   With CopyFromStack set (switch-to-rds.sh), that task also copies the data of the ECS MySQL.
+  Deleting the stack takes a final snapshot; with RestoreSnapshot the next create starts from it
+  (deploy.sh picks the newest one, DB_RESTORE).
 
 Parameters:
   Project:
@@ -49,27 +51,27 @@ Parameters:
     Default: 7
     MinValue: 1
     MaxValue: 35
-    Description: Days of automated backups (restore to any second in them). Kept after the stack is deleted until they expire.
+    Description: Days of automated backups (restore to any second in them while the instance exists)
   CopyFromStack:
     Type: String
     Default: ''
     Description: A data-ecs stack whose data the init task copies into this (still empty) database; empty = no copy
+  RestoreSnapshot:
+    Type: String
+    Default: ''
+    Description: >-
+      DB snapshot to create the instance from (e.g. the final snapshot of a deleted rds stack);
+      empty = a new, empty database. Only read when the instance is created - keep the value on
+      later updates (deploy.sh does), since a changed value would replace the instance.
 
 Conditions:
   Copy: !Not [!Equals [!Ref CopyFromStack, '']]
+  Restore: !Not [!Equals [!Ref RestoreSnapshot, '']]
 
 Resources:
   # Generated names (no Name property), so a recreated stack never collides with a secret that is
-  # still in its deletion recovery window. The admin is used by the init task only.
-  DbAdminSecret:
-    Type: AWS::SecretsManager::Secret
-    Properties:
-      Description: !Sub '${Project} RDS admin (schema and users only, rds-init.sh)'
-      GenerateSecretString:
-        SecretStringTemplate: !Sub '{"username":"${Project}admin"}'
-        GenerateStringKey: password
-        PasswordLength: 32
-        ExcludePunctuation: true
+  # still in its deletion recovery window. The RDS admin's password is managed by RDS itself
+  # (ManageMasterUserPassword, a secret of its own), so a restored instance gets a new one too.
   IdentityDbSecret:
     Type: AWS::SecretsManager::Secret
     Properties:
@@ -134,12 +136,14 @@ Resources:
         # then only SUPER (which RDS doesn't give) may create triggers unless this is set.
         log_bin_trust_function_creators: '1'
 
-  # Deleting the stack deletes the instance without a final snapshot, but its automated backups
-  # stay until they expire (BackupRetentionDays): restore from them in the RDS console. A change
-  # that replaces the instance takes a snapshot of the old one first.
+  # Deleting the stack (or a change that replaces the instance) first takes a final snapshot
+  # (manual, kept until you delete it; about USD 0.1 per GB-month). deploy.sh restores the newest
+  # one on the next create. The automated backups go with the instance.
+  # A restored instance keeps the snapshot's name, admin user and encryption, so those properties
+  # are left out then; rds-init.sh sets the service users' passwords from this stack's secrets.
   DbInstance:
     Type: AWS::RDS::DBInstance
-    DeletionPolicy: Delete
+    DeletionPolicy: Snapshot
     UpdateReplacePolicy: Snapshot
     Properties:
       Engine: mysql
@@ -150,16 +154,17 @@ Resources:
       AllocatedStorage: !Ref AllocatedStorage
       MaxAllocatedStorage: !Ref MaxAllocatedStorage
       StorageType: gp3
-      StorageEncrypted: true
-      DBName: !Ref DbName
-      MasterUsername: !Sub '{{resolve:secretsmanager:${DbAdminSecret}:SecretString:username}}'
-      MasterUserPassword: !Sub '{{resolve:secretsmanager:${DbAdminSecret}:SecretString:password}}'
+      DBSnapshotIdentifier: !If [Restore, !Ref RestoreSnapshot, !Ref AWS::NoValue]
+      StorageEncrypted: !If [Restore, !Ref AWS::NoValue, true]
+      DBName: !If [Restore, !Ref AWS::NoValue, !Ref DbName]
+      MasterUsername: !If [Restore, !Ref AWS::NoValue, !Sub '${Project}admin']
+      ManageMasterUserPassword: true
       DBSubnetGroupName: !Ref SubnetGroup
       VPCSecurityGroups: [!Ref DbSecurityGroup]
       DBParameterGroupName: !Ref ParameterGroup
       PubliclyAccessible: false
       BackupRetentionPeriod: !Ref BackupRetentionDays
-      DeleteAutomatedBackups: false
+      DeleteAutomatedBackups: true
       CopyTagsToSnapshot: true
       DeletionProtection: false
       Tags:
@@ -208,9 +213,9 @@ Resources:
               - !Ref AWS::NoValue
           Secrets:
             - Name: DB_ADMIN_USER
-              ValueFrom: !Sub '${DbAdminSecret}:username::'
+              ValueFrom: !Sub '${DbInstance.MasterUserSecret.SecretArn}:username::'
             - Name: DB_ADMIN_PASSWORD
-              ValueFrom: !Sub '${DbAdminSecret}:password::'
+              ValueFrom: !Sub '${DbInstance.MasterUserSecret.SecretArn}:password::'
             - Name: IDENTITY_DB_PASSWORD
               ValueFrom: !Sub '${IdentityDbSecret}:password::'
             - Name: REQUESTS_DB_PASSWORD
@@ -304,4 +309,4 @@ Outputs:
     Value: !Ref InitTaskDefinition
   DbAdminSecretArn:
     Description: The RDS admin (schema changes from a one-off task)
-    Value: !Ref DbAdminSecret
+    Value: !GetAtt DbInstance.MasterUserSecret.SecretArn

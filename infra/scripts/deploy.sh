@@ -44,15 +44,29 @@ deploy_data() {
 
 # DATA_MODE=rds (D31): RDS Multi-AZ, then rds-init.sh as a one-off task (schema when empty, service
 # users; with COPY_FROM_STACK, set by switch-to-rds.sh, the data of that data-ecs stack too).
+# On create, DB_RESTORE picks the starting data: latest (default) = the newest final snapshot of a
+# deleted rds stack, none = an empty database, or a snapshot name. Updates keep the stack's value
+# (not passed), because a changed RestoreSnapshot would replace the instance.
 deploy_rds() {
-  local copy_from=${COPY_FROM_STACK:-}
+  local copy_from=${COPY_FROM_STACK:-} restore=() snapshot=''
   if ! aws cloudformation describe-stacks --stack-name "$STACK_DATA_RDS" >/dev/null 2>&1; then
+    case ${DB_RESTORE:-latest} in
+      none) ;;
+      latest) snapshot=$(latest_rds_snapshot); [ "$snapshot" != None ] || snapshot='' ;;
+      *) snapshot=$DB_RESTORE ;;
+    esac
+    restore=("RestoreSnapshot=$snapshot")
+    if [ -n "$snapshot" ]; then
+      echo "(restoring the database from the snapshot $snapshot; DB_RESTORE=none for an empty one)"
+    else
+      echo "(a new, empty database)"
+    fi
     echo "(creating RDS takes 15-25 minutes, longer with Multi-AZ: the standby is built in the second AZ)"
   fi
   deploy "$STACK_DATA_RDS" data-rds.yaml "Project=$PROJECT" "NetworkStack=$STACK_NETWORK" \
     "PlatformStack=$STACK_PLATFORM" "LogsStack=$STACK_LOGS" "ImageTag=$1" "ExecutionRoleArn=$2" "TaskRoleArn=$2" \
     "InstanceClass=${DB_INSTANCE_CLASS:-db.t3.micro}" "MultiAz=${DB_MULTI_AZ:-true}" \
-    "BackupRetentionDays=${DB_BACKUP_DAYS:-7}" "CopyFromStack=$copy_from"
+    "BackupRetentionDays=${DB_BACKUP_DAYS:-7}" "CopyFromStack=$copy_from" "${restore[@]}"
   echo "== preparing the database (rds-init.sh${copy_from:+, copy from $copy_from})"
   "$(dirname "$0")/run-task.sh" --db-init
 }
@@ -93,7 +107,8 @@ deploy_provisioning() {
   if [ "$PROVISIONING" = true ]; then
     provisioning=("QueuesStack=$STACK_QUEUES" "SitePublicKeys=$SITE_PUBLIC_KEYS" "GpuNodes=$GPU_NODES"
       "OvpnProfileUrl=$OVPN_PROFILE_URL" "ManualGpuUrl=$MANUAL_GPU_URL"
-      "ManualBigDataUrl=$MANUAL_BIGDATA_URL" "MessageJobTtlSeconds=${MSG_JOB_TTL_SEC:-259200}")
+      "ManualBigDataUrl=$MANUAL_BIGDATA_URL" "MessageJobTtlSeconds=${MSG_JOB_TTL_SEC:-259200}"
+      "SiteHeartbeatMinutes=${SITE_HEARTBEAT_MINUTES:-15}" "QueueWaitMinutes=${SITE_QUEUE_WAIT_MINUTES:-5}")
   else
     provisioning=("QueuesStack=")
   fi

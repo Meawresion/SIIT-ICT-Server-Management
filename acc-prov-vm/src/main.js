@@ -12,6 +12,7 @@ import { withHue } from './hue.js';
 import { JobStore } from './jobstore.js';
 import { createJobHandlers } from './jobs.js';
 import { createMailer, sendProvisionEmails } from './mail.js';
+import { siteTargets, startHeartbeat } from './heartbeat.js';
 import { generatePassword } from './password.js';
 import { renderPasswordImage } from './password-image.js';
 import { withPfSense } from './pfsense.js';
@@ -78,14 +79,23 @@ const worker = createWorker({
   log,
 });
 worker.start();
+// Tells the portal this site is alive (and which of its systems answer), every few minutes.
+const heartbeat = cfg.heartbeatIntervalSec > 0
+  ? startHeartbeat({
+    intervalSec: cfg.heartbeatIntervalSec, send: (text) => transport.send(queues.resultQueue, text),
+    me, peer: peers[0], targets: siteTargets({ pfsense, gpu, bigData }), log,
+  })
+  : null;
 log('acc-prov-vm.ready', {
   transport: cfg.transport, kid: me.kid, pfsenseEnabled: cfg.pfsenseEnabled, hueEnabled: cfg.hueEnabled,
+  heartbeatIntervalSec: cfg.heartbeatIntervalSec,
   gpuNodes: gpu.nodes.map((n) => n.name), hadoopNodes: bigData?.nodes.map((n) => n.name) ?? [],
 });
 
 for (const sig of ['SIGINT', 'SIGTERM']) {
   process.on(sig, () => {
     log('acc-prov-vm.stopping', { signal: sig });
+    heartbeat?.stop();
     worker.stop();
     transport.close();
     mailer.close();
