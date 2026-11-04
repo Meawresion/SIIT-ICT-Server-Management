@@ -223,4 +223,8 @@ fi
 if in_logs '"path":"/api/users/me"' --group identity; then pass "the identity service logged its request in its own log group (D34)"; else fail "identity service log"; fi
 if in_logs '"event":"worker.started"' --group provisioning; then pass "the provisioning service runs on its own (D34)"; else fail "provisioning service log"; fi
 alarms=$(awst cloudwatch describe-alarms --alarm-name-prefix "$PROJECT-" --query 'length(MetricAlarms)')
-expect "the alarms exist (errors x3, ALB 5xx, unhealthy targets x3, dead letters x2)" 9 "$alarms"
+if [ "$DATA_MODE" = rds ]; then
+  expect "the alarms exist (errors x3, ALB 5xx, unhealthy targets x3, dead letters x2, RDS storage and CPU)" 11 "$alarms"
+else
+  expect "the alarms exist (errors x3, ALB 5xx, unhealthy targets x3, dead letters x2)" 9 "$alarms"
+fi
