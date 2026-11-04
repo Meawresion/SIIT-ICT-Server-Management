@@ -52,6 +52,7 @@ STACK_LOGS="$PROJECT-logs"
 STACK_EVENTS="$PROJECT-events"
 STACK_PROVISIONING="$PROJECT-provisioning"
 STACK_IDENTITY="$PROJECT-identity"
+STACK_GRAFANA="$PROJECT-grafana"
 
 # aws with text output and without the Windows carriage returns
 awst() { aws --output text "$@" | tr -d '\r'; }
@@ -87,6 +88,7 @@ backend_tag() { image_tag backend; }
 mysql_tag() { image_tag database/Dockerfile database/init.sql database/privileges.sh; }
 frontend_tag() { image_tag frontend; }
 notification_tag() { image_tag notification; }
+grafana_tag() { image_tag grafana; }
 
 # The portal's address: CloudFront (edge stack) or the ALB itself (direct mode).
 portal_url() {
@@ -157,12 +159,12 @@ delete_one() {
 # a stack goes only after the stacks that import from it, and the stacks of one wave go in parallel.
 delete_stacks() {
   local wanted=" $* " wave stack failed=0 pids p service
-  for service in frontend identity backend provisioning mysql; do
+  for service in frontend grafana identity backend provisioning mysql; do
     if service_exists "$service"; then
       aws ecs update-service --cluster "$PROJECT" --service "$service" --desired-count 0 >/dev/null || true
     fi
   done
-  for wave in "$STACK_EDGE $STACK_WEB $STACK_PROVISIONING $STACK_IDENTITY" "$STACK_APP" "$STACK_EVENTS" "$STACK_QUEUES $STACK_DATA $STACK_SECRETS" \
+  for wave in "$STACK_EDGE $STACK_WEB $STACK_GRAFANA $STACK_PROVISIONING $STACK_IDENTITY" "$STACK_APP" "$STACK_EVENTS" "$STACK_QUEUES $STACK_DATA $STACK_SECRETS" \
     "$STACK_PLATFORM $STACK_CERT $STACK_LOGS" "$STACK_NETWORK $STACK_DNS"; do
     pids=()
     for stack in $wave; do
@@ -208,7 +210,7 @@ leftovers() {
   check "EFS file systems" efs describe-file-systems --query "FileSystems[?Name=='$PROJECT-mysql-data'].FileSystemId"
   local kept_groups=()
   [[ $allowed == *" $STACK_QUEUES "* ]] && kept_groups+=("/$PROJECT/message-keys")
-  [[ $allowed == *" $STACK_LOGS "* ]] && kept_groups+=("/$PROJECT/backend" "/$PROJECT/identity" "/$PROJECT/provisioning" "/$PROJECT/notification" "/$PROJECT/frontend" "/$PROJECT/mysql" "/$PROJECT/audit")
+  [[ $allowed == *" $STACK_LOGS "* ]] && kept_groups+=("/$PROJECT/backend" "/$PROJECT/identity" "/$PROJECT/grafana" "/$PROJECT/provisioning" "/$PROJECT/notification" "/$PROJECT/frontend" "/$PROJECT/mysql" "/$PROJECT/audit")
   check "log groups" logs describe-log-groups --log-group-name-prefix "/$PROJECT/" \
     --query "logGroups[?!contains([$(printf "'%s'," "${kept_groups[@]}" | sed 's/,$//')], logGroupName)].logGroupName"
   # The queues stack's provisioning queues and key Lambda may stay; the events stack's never do.

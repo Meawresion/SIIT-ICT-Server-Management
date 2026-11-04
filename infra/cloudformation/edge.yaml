@@ -155,6 +155,15 @@ Resources:
             Compress: true
             CachePolicyId: !FindInMap [ManagedPolicies, Cache, Disabled]
             OriginRequestPolicyId: !FindInMap [ManagedPolicies, OriginRequest, AllViewerExceptHostHeader]
+          # Grafana (grafana stack) behind the same ALB: /grafana and everything under it.
+          - PathPattern: /grafana*
+            TargetOriginId: api
+            ViewerProtocolPolicy: redirect-to-https
+            AllowedMethods: [GET, HEAD, OPTIONS, PUT, PATCH, POST, DELETE]
+            CachedMethods: [GET, HEAD]
+            Compress: true
+            CachePolicyId: !FindInMap [ManagedPolicies, Cache, Disabled]
+            OriginRequestPolicyId: !FindInMap [ManagedPolicies, OriginRequest, AllViewerExceptHostHeader]
 
   AppRecordA:
     Type: AWS::Route53::RecordSet

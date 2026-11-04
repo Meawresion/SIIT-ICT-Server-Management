@@ -1,0 +1,10 @@
+# The dashboards in /var/lib/grafana/dashboards (from grafana/dashboards in the repo), read-only.
+apiVersion: 1
+providers:
+  - name: siit
+    folder: SIIT
+    type: file
+    disableDeletion: true
+    allowUiUpdates: false
+    options:
+      path: /var/lib/grafana/dashboards

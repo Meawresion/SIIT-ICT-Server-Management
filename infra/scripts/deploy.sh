@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Deploys stacks in order. Usage: deploy.sh all | <stack>...   (dns cert network platform logs data secrets queues events app identity provisioning edge web)
+# Deploys stacks in order. Usage: deploy.sh all | <stack>...   (dns cert network platform logs data secrets queues events app identity provisioning grafana edge web)
 # First time: dns, then the NS records at the parent domain, then the rest (see infra/README.md).
 # The frontend comes from edge (CloudFront + S3) or web (ECS behind the ALB, direct mode).
 . "$(dirname "$0")/lib.sh"
@@ -17,7 +17,11 @@ deploy_cert() {
 
 deploy_network() { deploy "$STACK_NETWORK" network.yaml "Project=$PROJECT"; }
 
-deploy_platform() { deploy "$STACK_PLATFORM" platform.yaml "Project=$PROJECT" "NetworkStack=$STACK_NETWORK"; }
+# CONTAINER_INSIGHTS=enabled turns on per-task metrics (billed; demo days only, D34).
+deploy_platform() {
+  deploy "$STACK_PLATFORM" platform.yaml "Project=$PROJECT" "NetworkStack=$STACK_NETWORK" \
+    "ContainerInsights=${CONTAINER_INSIGHTS:-disabled}"
+}
 
 deploy_logs() {
   deploy "$STACK_LOGS" logs.yaml "Project=$PROJECT" "AppLogDays=${APP_LOG_DAYS:-90}" \
@@ -151,6 +155,45 @@ deploy_app() {
   echo "Backend: $(stack_output "$STACK_APP" PublicUrl)"
 }
 
+# Grafana's sign-in rule (JMESPath, role_attribute_path) from GRAFANA_ALLOWED_EMAILS: only these
+# exact addresses get Viewer, anyone else gets no role and is refused (no whole domains). Empty
+# list = empty rule = Google sign-in off (admin only).
+grafana_sign_in_rule() {
+  local entry rule='' entries address='^[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]+$'
+  IFS=',' read -ra entries <<< "${GRAFANA_ALLOWED_EMAILS:-}"
+  for entry in "${entries[@]}"; do
+    entry=$(printf '%s' "$entry" | tr -d ' \r' | tr 'A-Z' 'a-z')
+    [ -n "$entry" ] || continue
+    if ! [[ $entry =~ $address ]]; then
+      echo "GRAFANA_ALLOWED_EMAILS: '$entry' is not a full email address (whole domains aren't allowed)." >&2
+      return 1
+    fi
+    rule="${rule:+$rule || }email == '$entry'"
+  done
+  [ -z "$rule" ] || echo "($rule) && 'Viewer'"
+}
+
+# Grafana (D34, NFR-8.3): dashboards at /grafana/ on the app stack's ALB.
+deploy_grafana() {
+  local tag google origin='' rule
+  rule=$(grafana_sign_in_rule) || exit 1
+  require_logs_stack
+  tag=$(grafana_tag)
+  require_image "$PROJECT-grafana" "$tag"
+  google=$(stack_output "$STACK_SECRETS" GoogleSecretArn 2>/dev/null) || true
+  if [ -z "$google" ] || [ "$google" = None ]; then
+    echo "The $STACK_SECRETS stack is missing: run deploy.sh secrets, then set-secrets.sh." >&2
+    exit 1
+  fi
+  if [ "$ENTRY_MODE" = cloudfront ]; then origin=$(stack_output "$STACK_APP" OriginVerifySecretArn); fi
+  deploy "$STACK_GRAFANA" grafana.yaml "Project=$PROJECT" "NetworkStack=$STACK_NETWORK" \
+    "PlatformStack=$STACK_PLATFORM" "AppStack=$STACK_APP" "LogsStack=$STACK_LOGS" "ImageTag=$tag" \
+    "ExecutionRoleArn=$(role_arn)" "TaskRoleArn=$(role_arn)" "GoogleSecretArn=$google" \
+    "OriginVerifySecretArn=$origin" "SignInRule=$rule" \
+    "DesiredCount=${GRAFANA_DESIRED_COUNT:-1}"
+  echo "Grafana: $(stack_output "$STACK_APP" PublicUrl)/grafana/ (Google sign-in: ${GRAFANA_ALLOWED_EMAILS:-off, admin only})"
+}
+
 deploy_web() {
   local tag
   if [ "$ENTRY_MODE" != direct ]; then
@@ -176,17 +219,17 @@ deploy_edge() {
   echo "Portal: $(stack_output "$STACK_EDGE" AppUrl) (publish the frontend with publish-frontend.sh)"
 }
 
-[ $# -gt 0 ] || { echo "Usage: $0 all | dns cert network platform logs data secrets queues events app identity provisioning edge web" >&2; exit 1; }
+[ $# -gt 0 ] || { echo "Usage: $0 all | dns cert network platform logs data secrets queues events app identity provisioning grafana edge web" >&2; exit 1; }
 if [ "$1" = all ]; then
   set -- network platform logs data secrets
   if [ "$PROVISIONING" = true ]; then set -- "$@" queues; fi
-  set -- "$@" events app identity provisioning
+  set -- "$@" events app identity provisioning grafana
   if [ "$USE_DOMAIN" = true ]; then set -- dns cert "$@"; fi
   if [ "$ENTRY_MODE" = cloudfront ]; then set -- "$@" edge; else set -- "$@" web; fi
 fi
 for stack in "$@"; do
   case $stack in
-    dns|cert|network|platform|logs|data|secrets|queues|events|app|identity|provisioning|edge|web) "deploy_$stack" ;;
+    dns|cert|network|platform|logs|data|secrets|queues|events|app|identity|provisioning|grafana|edge|web) "deploy_$stack" ;;
     *) echo "Unknown stack: $stack" >&2; exit 1 ;;
   esac
 done

@@ -33,6 +33,7 @@ provisioning; the portal keeps working and the jobs wait in the outbox).
 | requests (`backend`) | `app` | `/api/requests`, `/api/reviewer`, `/health` behind the ALB (ECS, `SERVICE_ROLE=requests`): requests, review, extensions, export; queues jobs in the outbox | `JWT_SECRET` (checks the token only), DB user |
 | provisioning | `provisioning` | `node src/worker.js` (ECS, no load balancer): sends the outbox's jobs, applies the results, scheduler, audit shipping | the backend message key, the site queues, DB user |
 | notification | `events` | a Lambda (container image) fed by the event bus through its own SQS queue | the SMTP settings (mail secret) |
+| grafana | `grafana` | Grafana at `/grafana/` behind the ALB (ECS): the operations dashboards, CloudWatch as its data source | the Google client (staff sign-in), its admin password |
 | acc-prov-vm | on-site | creates the accounts at SIIT | the site key, pfSense and SSH access |
 
 ```
@@ -66,6 +67,20 @@ backend audit shipper ─PutLogEvents─▶ /<project>/audit (400 days)
 ALB ─access logs─▶ S3 alb/AWSLogs/…        ECS "task stopped" ─EventBridge─▶ SNS
 ```
 
+**Dashboards** (`grafana` stack, NFR-8.3): Grafana at `<portal>/grafana/`. The addresses
+in `GRAFANA_ALLOWED_EMAILS` (exact addresses only, no whole domains) sign in with Google and get the
+Viewer role; any other account is refused, whatever its portal role. Empty: Google sign-in is off
+and only the admin account (password in Secrets Manager) gets in. The
+image (`grafana/`) has the CloudWatch data source (task role) and the `SIIT portal overview`
+dashboard built in: ALB traffic, 5xx and p95 response time, healthy tasks, CPU and memory per
+service, queue depth and age (dead-letter queues included), the notification Lambda, error lines
+per service and the latest error lines (Logs Insights). Dashboards are code: change
+`grafana/dashboards/*.json`, commit, `push-images.sh grafana`, `deploy.sh grafana`. Grafana keeps
+no state of its own, so the stack can be deleted and recreated at any time. The admin password
+(break-glass) is in the stack's `AdminSecretArn` secret. Container Insights (per-task metrics,
+billed) stays off; set `CONTAINER_INSIGHTS=enabled` and run `deploy.sh platform` for a demo day,
+then turn it off the same way.
+
 The backend's scheduler (every `SCHEDULER_INTERVAL_SEC`, in one task at a time) reads both
 dead-letter queues and fails the jobs it finds there, so the approvers are told (FR-6.7). It also
 sends the end-date reminders and removes access when a request ends (FR-8.2, FR-8.4).
@@ -78,7 +93,7 @@ sends the end-date reminders and removes access when a request ends (FR-8.2, FR-
 | `<project>-cert` | `cert.yaml` | ACM certificate for the zone and `*.zone`, validated through DNS (us-east-1, used by CloudFront and the ALB). |
 | `<project>-logs` | `logs.yaml` | The CloudWatch Logs groups of every service and the audit group, error metric filters, saved Logs Insights queries, the alert SNS topic (with `ALERT_EMAIL`), and the S3 bucket for the ALB access logs (SSE-S3, TLS only, no public access). Kept between runs; deleting it deletes the logs. |
 | `<project>-network` | `network.yaml` | VPC, 2 public subnets (ALB, tasks), 2 private subnets (EFS, RDS later). No NAT gateway. |
-| `<project>-platform` | `platform.yaml` | ECR repositories for backend, mysql, frontend and notification (emptied on delete), ECS cluster, backend security group. |
+| `<project>-platform` | `platform.yaml` | ECR repositories for backend, mysql, frontend, notification and grafana (emptied on delete), ECS cluster (Container Insights off unless `CONTAINER_INSIGHTS=enabled`), backend security group. |
 | `<project>-data` | `data-ecs.yaml` | MySQL 8.4 task + EFS + internal NLB (stable DB name) + generated DB passwords. Later replaced by an RDS stack with the same outputs. |
 | `<project>-secrets` | `secrets.yaml` | The secrets you provide: the Google OAuth client and the SMTP settings, created with placeholders (no sign-in, emails off); `set-secrets.sh` puts your values. |
 | `<project>-queues` | `queues.yaml` | With `PROVISIONING=true`: the SQS request and result queues, each with a dead-letter queue (14 days, TLS only, encrypted at rest), and the backend's message keys. A small Lambda generates the key pair straight into Secrets Manager; the public half is the `BackendPublicKey` output. |
@@ -86,7 +101,8 @@ sends the end-date reminders and removes access when a request ends (FR-8.2, FR-
 | `<project>-app` | `app.yaml` | ALB (with a certificate in direct mode: HTTPS on 443, and 80 only redirects to HTTPS), the API service, generated `JWT_SECRET` and origin header, ALB access logs, alarms, the task-stopped rule. |
 | `<project>-identity` | `identity.yaml` | The identity service, its target group and the ALB rule for `/api/auth/*` and `/api/users` (priority 2, before the app stack's `/api/*`), its unhealthy alarm. The only reader of the Google secret. |
 | `<project>-provisioning` | `provisioning.yaml` | The provisioning service (no load balancer): the site queues and the backend message key when provisioning is on, the scheduler, audit shipping; its error and dead-letter alarms. |
-| `<project>-edge` | `edge.yaml` | CloudFront mode: S3 bucket, CloudFront (SPA rewrite function), DNS records for the portal. |
+| `<project>-grafana` | `grafana.yaml` | Grafana: its service (1 task, own security group: only the ALB reaches it), target group and the ALB rule for `/grafana` and `/grafana/*` (priority 3), the generated admin password. |
+| `<project>-edge` | `edge.yaml` | CloudFront mode: S3 bucket, CloudFront (SPA rewrite function; `/api/*` and `/grafana*` go to the ALB), DNS records for the portal. |
 | `<project>-web` | `web.yaml` | Direct mode: the frontend service (nginx, `frontend/Dockerfile` `prod` stage) and its ALB rule for every path the backend doesn't take. |
 
 On AWS Learner Lab, IAM roles can't be created, so every task uses `LabRole` (`ROLE_NAME`).
@@ -106,7 +122,7 @@ name. That is enough for smoke tests, but not for signing in: the sign-in cookie
 ## Smoke test (deploy, check, delete)
 
 `infra/scripts/smoke-test.sh` deploys network, platform, the images, data, secrets (left
-with its placeholders: your real secrets are never used), queues, logs, events, app, identity, provisioning and web (direct mode, no
+with its placeholders: your real secrets are never used), queues, logs, events, app, identity, provisioning, grafana and web (direct mode, no
 domain, provisioning on with a throwaway site key), and checks:
 - the frontend answers through the ALB, also on client-side routes;
 - the backend answers through the ALB;
@@ -127,11 +143,13 @@ domain, provisioning on with a throwaway site key), and checks:
   a job put into the request dead-letter queue is failed;
 - the logs: that 404's access log line is found in CloudWatch Logs (`find-in-logs.sh`, Logs
   Insights), the audit events reach `/<project>/audit`, the ALB access logs reach S3;
+- Grafana answers at `/grafana/`, refuses its API without sign-in, its CloudWatch data source works
+  with the task role, and the SIIT dashboard is provisioned;
 - the status emails of these checks reach the notification Lambda through the event bus (it reads
-  the mail secret; with the placeholders it only logs them), the provisioning service logs its
-  start, and the 9 alarms exist.
+  the mail secret and sends them, or only logs them with the placeholders; a failed send fails the
+  check), the provisioning service logs its start, and the 9 alarms exist.
 
-Then it deletes the test stacks (`web`, `identity`, `provisioning`, `app`, `events`, `data`, `secrets`), even after a
+Then it deletes the test stacks (`web`, `grafana`, `identity`, `provisioning`, `app`, `events`, `data`, `secrets`), even after a
 failure or Ctrl+C, and lists anything left behind (stacks, ECS services and tasks, load
 balancers, EFS, SQS, Lambda, log groups, secrets). The teardown is fast: every ECS task is
 stopped at once, then the stacks go in dependency order, independent ones in parallel.
@@ -189,9 +207,10 @@ The scripts are bash (Git Bash on Windows, or Linux/WSL) and need the AWS CLI v2
    `PROVISIONING=true`: `data queues app ...`, after setting `SITE_PUBLIC_KEYS`, `GPU_NODES` and
    the two links in `config.env`.
 9. `infra/scripts/publish-frontend.sh`
-10. Google Cloud Console → the OAuth client: add the redirect URI
-    `https://APP_HOST.ZONE_NAME/api/auth/google/callback` and the JavaScript origin
-    `https://APP_HOST.ZONE_NAME`.
+10. Google Cloud Console → the OAuth client: add the redirect URIs
+    `https://APP_HOST.ZONE_NAME/api/auth/google/callback` and (Grafana)
+    `https://APP_HOST.ZONE_NAME/grafana/login/google`, and the JavaScript origin
+    `https://APP_HOST.ZONE_NAME`. Then `deploy.sh grafana` for the dashboards.
 11. Sign in once, then grant approver access:
     `infra/scripts/run-task.sh --identity node scripts/set-user-role.js person@siit.tu.ac.th Approver`
     (accounts belong to the identity service; the request service's database user may only read them)
@@ -202,6 +221,8 @@ The scripts are bash (Git Bash on Windows, or Linux/WSL) and need the AWS CLI v2
 |---|---|
 | New backend version | commit, `push-images.sh backend`, `deploy.sh app identity provisioning` |
 | New notification version | commit, `push-images.sh notification`, `deploy.sh events` |
+| New dashboard or Grafana version | change `grafana/`, commit, `push-images.sh grafana`, `deploy.sh grafana` |
+| Container Insights for a demo day | `CONTAINER_INSIGHTS=enabled` in `config.env`, `deploy.sh platform`; afterwards `disabled` and again `deploy.sh platform` |
 | Check a service's database rights | `run-task.sh [--identity|--provisioning] node scripts/check-grants.js` |
 | New frontend version | `publish-frontend.sh` (direct mode: commit, `push-images.sh frontend`, `deploy.sh web`) |
 | Check the database from inside AWS (adds 4 check accounts: throwaway data only) | `run-task.sh --identity node scripts/check-identity.js <marker>`, then `run-task.sh node scripts/check-db.js <marker>` |
