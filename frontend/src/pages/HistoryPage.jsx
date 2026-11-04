@@ -71,7 +71,7 @@ export default function HistoryPage() {
     { key: 'id', label: 'ID', render: (r) => <span className="mono">{formatId(r.id)}</span> },
     { key: 'created_at', label: 'Request Date', render: (r) => formatLocalDate(r.created_at) },
     ...(isReviewer
-      ? [{ key: 'student', label: 'Student', render: (r) => (<span className="stack"><span>{r.student_name}</span><small className="muted">{r.student_id}</small></span>) }]
+      ? [{ key: 'student', label: 'Student', render: (r) => (<span className="stack"><span>{r.student_name}</span><small className="muted">{r.requester_kind === 'staff' ? 'Staff' : r.student_id}</small></span>) }]
       : []),
     { key: 'purpose', label: 'Project', className: 'col-wide' },
     { key: 'resource_type', label: 'Resource Type', render: (r) => resourceShort(r.resource_type) },

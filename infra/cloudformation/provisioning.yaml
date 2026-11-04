@@ -50,6 +50,10 @@ Parameters:
     Type: String
   StaffEmailDomains:
     Type: String
+  ApproverEmails:
+    Type: String
+    Default: ''
+    Description: The approvers, exact addresses (comma-separated); when set, the only approvers. Empty - the role column (set-user-role.js)
   SchedulerIntervalSeconds:
     Type: Number
     Default: 300
@@ -142,6 +146,8 @@ Resources:
               Value: !Ref DegreeEmailPrefixes
             - Name: STAFF_EMAIL_DOMAINS
               Value: !Ref StaffEmailDomains
+            - Name: APPROVER_EMAILS
+              Value: !Ref ApproverEmails
             - Name: SCHEDULER_INTERVAL_SEC
               Value: !Ref SchedulerIntervalSeconds
             - Name: EXPIRY_REMINDER_DAYS

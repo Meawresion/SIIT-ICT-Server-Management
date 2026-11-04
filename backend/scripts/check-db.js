@@ -10,6 +10,10 @@ import { createRequest, updateRequest, getUserRequests, getRequestById } from '.
 import { approveRequest, activateRequest, completeRequest, getAllRequests, getRequestForReview } from '../src/services/reviewer.service.js';
 import { checkGrants } from './check-grants.js';
 
+// The check's approver isn't on the task's APPROVER_EMAILS: these checks test the database flow
+// with the role column (as without the list; check-identity tests the list).
+delete process.env.APPROVER_EMAILS;
+
 const marker = process.argv[2];
 // The accounts check-identity.js added, found by the marker in their name.
 const account = (name) => prisma.user.findFirstOrThrow({ where: { fullname: `Check ${name} ${marker}` } });

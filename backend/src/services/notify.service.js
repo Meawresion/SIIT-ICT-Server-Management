@@ -16,6 +16,7 @@ import { loadMailConfig, mailRecipientDomains } from '../config/mail.js';
 import { createEventPublisher, EMAIL_REQUESTED } from '../lib/events.js';
 import { AUTOMATED_RESOURCES } from './provisioning.service.js';
 import { log } from '../lib/log.js';
+import { approverEmails } from '../config/identity.js';
 
 // Plain addresses only: quotes, ; < > ( ) and spaces are rejected, so a recipient can never be
 // re-parsed into extra recipients (nodemailer addressparser advisories, fixed in 10.1.4).
@@ -27,6 +28,12 @@ const RESOURCE_LABEL = {
 const FAILURE_KIND = { PROVISION_FAILED: 'Setup', REVOKE_FAILED: 'Removing access', EXTEND_FAILED: 'Extending access' };
 const STATUS_ACTIONS = new Set(['APPROVED', 'REJECTED', 'ACTIVATED', 'COMPLETED', 'PROVISIONED', 'REVOKED']);
 
+// The approvers who get the approver emails: the APPROVER_EMAILS accounts (once they've signed
+// in), or without that list the Approver role column.
+const approvers = () => {
+  const list = approverEmails();
+  return prisma.user.findMany({ where: list ? { siitemail: { in: [...list] } } : { role: 'Approver' } });
+};
 const formatId = (id) => `#${String(id).padStart(7, '0')}`;
 const day = (date) => date.toISOString().slice(0, 10);
 const escapeHtml = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
@@ -130,9 +137,9 @@ export function createNotifier(config, { transport, events, allowedRecipientDoma
     if (mail) await send({ to: student.siitemail, fullName: student.fullname, ...mail, path: '/history' });
     if (FAILURE_KIND[action]) {
       // FR-6.7: tell the approvers, with the site's error.
-      const approvers = await prisma.user.findMany({ where: { role: 'Approver' } });
+      const recipients = await approvers();
       const kind = FAILURE_KIND[action];
-      for (const a of approvers) {
+      for (const a of recipients) {
         await send({ to: a.siitemail, fullName: a.fullname, subject: `${kind} failed for request ${formatId(rid)}`, path: '/history', lines: [
           `${kind} failed for ${student.fullname}'s request ${formatId(rid)} (${RESOURCE_LABEL[request.resource_type]}).`,
           `Error: ${comment ?? 'not given'}`,
@@ -141,8 +148,8 @@ export function createNotifier(config, { transport, events, allowedRecipientDoma
       }
     }
     if (action === 'EXTENSION_REQUESTED') {
-      const approvers = await prisma.user.findMany({ where: { role: 'Approver' } });
-      for (const a of approvers) {
+      const recipients = await approvers();
+      for (const a of recipients) {
         await send({ to: a.siitemail, fullName: a.fullname, subject: `Request ${formatId(rid)}: more time asked`, path: '/history', lines: [
           `${student.fullname} asks to keep request ${formatId(rid)} (${RESOURCE_LABEL[request.resource_type]}) until ${details?.end_date} instead of ${day(request.end_date)}.`,
           `Reason: ${comment}`,
@@ -152,8 +159,8 @@ export function createNotifier(config, { transport, events, allowedRecipientDoma
     }
     if (action === 'EXPIRED' && details?.by_hand) {
       // D7 for a request set up by hand (S8): the system can't turn it off.
-      const approvers = await prisma.user.findMany({ where: { role: 'Approver' } });
-      for (const a of approvers) {
+      const recipients = await approvers();
+      for (const a of recipients) {
         await send({ to: a.siitemail, fullName: a.fullname, subject: `Request ${formatId(rid)} ended: turn off the access`, path: '/history', lines: [
           `${student.fullname}'s request ${formatId(rid)} (${RESOURCE_LABEL[request.resource_type]}) ended on ${day(request.end_date)}.`,
           'It was set up by hand: turn off the access, then mark the request Completed.',

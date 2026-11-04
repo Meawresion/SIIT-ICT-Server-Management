@@ -8,6 +8,13 @@ export const UserProfileSchema = z.object({
   phone_number: z.string().trim().min(1, 'Phone number is required').max(15),
 });
 
+// Staff who request resources (not approvers): no student ID, degree or advisor.
+export const StaffProfileSchema = z.object({
+  full_name: z.string().trim().min(1, 'Full name is required').max(100),
+  department: z.string().trim().min(1, 'Department is required').max(50),
+  phone_number: z.string().trim().min(1, 'Phone number is required').max(15),
+});
+
 // Approvers have no student fields: their name (pre-filled from Google) and a contact phone.
 export const ApproverProfileSchema = z.object({
   full_name: z.string().trim().min(1, 'Full name is required').max(100),

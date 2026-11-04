@@ -87,6 +87,7 @@ deploy_provisioning() {
     "DesiredCount=${PROVISIONING_DESIRED_COUNT:-1}" \
     "StudentEmailDomain=$STUDENT_EMAIL_DOMAIN" "StudentIdDigits=$STUDENT_ID_DIGITS" \
     "DegreeEmailPrefixes=$DEGREE_EMAIL_PREFIXES" "StaffEmailDomains=$STAFF_EMAIL_DOMAINS" \
+    "ApproverEmails=${APPROVER_EMAILS:-}" \
     "SchedulerIntervalSeconds=${SCHEDULER_INTERVAL_SEC:-300}" "ExpiryReminderDays=${EXPIRY_REMINDER_DAYS:-3}" \
     "SiteTimeZone=${SITE_TIME_ZONE:-Asia/Bangkok}" "${provisioning[@]}"
 }
@@ -110,7 +111,9 @@ deploy_identity() {
     "OriginVerifySecretArn=$origin" "DesiredCount=${IDENTITY_DESIRED_COUNT:-1}" \
     "StudentEmailDomain=$STUDENT_EMAIL_DOMAIN" "StudentIdDigits=$STUDENT_ID_DIGITS" \
     "DegreeEmailPrefixes=$DEGREE_EMAIL_PREFIXES" "StaffEmailDomains=$STAFF_EMAIL_DOMAINS" \
+    "ApproverEmails=${APPROVER_EMAILS:-}" \
     "SessionIdleMinutes=${SESSION_IDLE_MINUTES:-30}" "SessionMaxHours=${SESSION_MAX_HOURS:-12}"
+  [ -n "${APPROVER_EMAILS:-}" ] || echo "Note: APPROVER_EMAILS is empty, so the approvers are whoever set-user-role.js made one."
 }
 
 deploy_app() {
@@ -149,6 +152,7 @@ deploy_app() {
     "DesiredCount=${BACKEND_DESIRED_COUNT:-1}" \
     "StudentEmailDomain=$STUDENT_EMAIL_DOMAIN" "StudentIdDigits=$STUDENT_ID_DIGITS" \
     "DegreeEmailPrefixes=$DEGREE_EMAIL_PREFIXES" "StaffEmailDomains=$STAFF_EMAIL_DOMAINS" \
+    "ApproverEmails=${APPROVER_EMAILS:-}" \
     "SessionIdleMinutes=${SESSION_IDLE_MINUTES:-30}" "SessionMaxHours=${SESSION_MAX_HOURS:-12}" \
     "SchedulerIntervalSeconds=${SCHEDULER_INTERVAL_SEC:-300}" "ExpiryReminderDays=${EXPIRY_REMINDER_DAYS:-3}" \
     "SiteTimeZone=${SITE_TIME_ZONE:-Asia/Bangkok}" "LogsStack=$STACK_LOGS" "${provisioning[@]}"

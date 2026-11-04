@@ -1,6 +1,7 @@
 // Integration check of the identity service's database work, in an identity task (D34):
 //   run-task.sh --identity node scripts/check-identity.js [<marker>]
-// 1. Sign-in, profile and role change on one rollback-only transaction (nothing stays).
+// 1. Sign-in, profile and role change on one rollback-only transaction (nothing stays): by hand
+//    (set-user-role), and from APPROVER_EMAILS (promoted, then removed); a staff member's profile.
 // 2. The identity database user has exactly its rights (check-grants.js).
 // 3. With a marker: adds the accounts the other checks use (check-db, check-provisioning and
 //    check-scheduler run in the request service, whose user may only read accounts), named
@@ -14,7 +15,7 @@ import { randomInt } from 'node:crypto';
 import prisma from '../src/lib/prisma.js';
 import { loadIdentityRules } from '../src/config/identity.js';
 import { setUserRoleByEmail } from '../src/services/role.service.js';
-import { findOrCreateAccount } from '../src/services/auth.service.js';
+import { findOrCreateAccount, getAccountById } from '../src/services/auth.service.js';
 import { createUserProfile, getUserByAccountId } from '../src/services/user.service.js';
 import { checkGrants } from './check-grants.js';
 
@@ -26,6 +27,9 @@ const rules = loadIdentityRules();
 const prefixes = JSON.parse(process.env.DEGREE_EMAIL_PREFIXES);
 const prefix = prefixes.UNDERGRADUATE ?? Object.values(prefixes)[0];
 const email = `${prefix}${String(randomInt(10 ** 6)).padStart(rules.digits, '0')}@${rules.studentDomain}`;
+const staffEmail = `check-${randomInt(10 ** 6)}@${rules.staffDomains[0]}`;
+// The task's APPROVER_EMAILS doesn't list the check accounts: start by hand, set it per step below.
+delete process.env.APPROVER_EMAILS;
 const rollback = new Error('Intentional test rollback');
 const originalTransaction = prisma.$transaction.bind(prisma);
 const restores = [];
@@ -46,6 +50,22 @@ try {
     assert.equal((await tx.user.findUnique({ where: { uid: account.id } })).role, 'Approver');
     await setUserRoleByEmail(email, 'Student', tx);
     assert.equal((await tx.user.findUnique({ where: { uid: account.id } })).role, 'Student');
+    // APPROVER_EMAILS decides: on it, the account is an approver and the column follows; off it, not.
+    process.env.APPROVER_EMAILS = email;
+    assert.equal((await getAccountById(account.id)).role, 'Approver');
+    assert.equal((await tx.user.findUnique({ where: { uid: account.id } })).role, 'Approver');
+    process.env.APPROVER_EMAILS = staffEmail;
+    assert.equal((await getAccountById(account.id)).role, 'Student');
+    assert.equal((await tx.user.findUnique({ where: { uid: account.id } })).role, 'Student');
+    delete process.env.APPROVER_EMAILS;
+    // A staff member who isn't an approver requests resources with a staff profile.
+    const staff = await findOrCreateAccount({ email: staffEmail, hd: rules.staffDomains[0], name: 'Integration check staff' });
+    assert.equal(staff.role, 'Student');
+    await createUserProfile(staff.id, { full_name: 'Integration check staff', department: 'ICT', phone_number: '0000000000' });
+    const staffProfile = await getUserByAccountId(staff.id);
+    assert.equal(staffProfile.kind, 'staff');
+    assert.equal(staffProfile.department, 'ICT');
+    assert.equal(staffProfile.student_id, null);
     throw rollback;
   }, { timeout: 30000 });
 } catch (err) {
@@ -56,9 +76,10 @@ try {
 try {
   if (!process.exitCode) {
     assert.equal(await prisma.user.findUnique({ where: { siitemail: email } }), null);
+    assert.equal(await prisma.user.findUnique({ where: { siitemail: staffEmail } }), null);
     const problems = await checkGrants(prisma, process.env.SERVICE_ROLE ?? 'all');
     if (problems.length) throw new Error(`Grants: ${problems.join('; ')}`);
-    console.log(`Identity integration passed: sign-in, profile, role change, all rolled back; its database user (${process.env.DB_USER}) has exactly its rights.`);
+    console.log(`Identity integration passed: sign-in, profile, role change by hand and from APPROVER_EMAILS, a staff profile, all rolled back; its database user (${process.env.DB_USER}) has exactly its rights.`);
     if (marker) {
       for (const name of CHECK_STUDENTS) {
         const sid = String(randomInt(10 ** 6)).padStart(rules.digits, '0');

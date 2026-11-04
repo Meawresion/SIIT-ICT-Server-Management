@@ -32,6 +32,8 @@ export async function listRequests(req, res, next) {
       status: r.status,
       student_name: r.user.account.full_name,
       student_id: r.user.student_id,
+      // 'student' or 'staff' (staff requesters have no student ID)
+      requester_kind: r.user.kind,
       extension_asked: Boolean(r.extension),
       // FR-9.2: the Active Requests view shows the period and the GPU node.
       estimated_start_date: r.estimated_start_date,
@@ -81,7 +83,9 @@ export async function getRequestDetail(req, res, next) {
         id: request.user.id,
         name: request.user.account.full_name,
         email: request.user.account.primary_email,
+        kind: request.user.kind,
         student_id: request.user.student_id,
+        department: request.user.department,
         degree: request.user.degree,
         program: request.user.program,
         advisor_name: request.project_supervisor_name,

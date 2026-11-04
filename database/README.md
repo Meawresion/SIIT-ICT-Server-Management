@@ -451,8 +451,18 @@ The approver home page is `/admin`; requests are reviewed there and on
 `Approver` grants reviewer access; there is no separate admin role. After
 Google sign-in, `/dashboard` sends approvers to `/admin`.
 
-The person must sign in with Google once to create their account. Then run this
-command in the backend container, which has the same database settings as the application:
+**From a list (AWS, recommended):** set `APPROVER_EMAILS` to the approvers' exact addresses,
+comma-separated (`infra/config.env`, or the root `.env` for docker compose). Then being on the
+list is the only way to be an approver: the backend checks it on every request, so removing an
+address takes effect at once, and the identity service keeps the `role` column in step (the
+approver emails and the request service read it). An address that couldn't sign in stops the
+backend at start. Staff who aren't on the list sign in as requesters with a staff profile
+(department instead of student ID, degree and advisor); their GPU and Big Data requests are set
+up by hand, since acc-prov-vm makes site accounts for students only.
+
+**By hand (local development, `APPROVER_EMAILS` empty):** the person must sign in with Google once
+to create their account. Then run this command in the backend container, which has the same
+database settings as the application:
 
 ```bash
 docker compose exec backend npm run user:role -- person@siit.tu.ac.th Approver

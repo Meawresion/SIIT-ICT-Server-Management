@@ -1,7 +1,8 @@
 import prisma from '../lib/prisma.js';
 import { resourceToDb, statusToDb, requestInclude, requestView, eventInclude, eventView, overlapView } from '../utils/db-mapping.js';
 import { provisioningConfig } from '../config/provisioning.js';
-import { assertManualActivationAllowed, buildCreateJob, buildRevokeJob, isAutomated, jobsFor } from './provisioning.service.js';
+import { isApprover } from '../config/identity.js';
+import { assertManualActivationAllowed, buildCreateJob, buildRevokeJob, hasSiteUsername, isAutomated, jobsFor } from './provisioning.service.js';
 import { notifyRequestEvent } from './notify.service.js';
 import { DEFAULT_LIMIT } from '../utils/paging.js';
 
@@ -43,7 +44,7 @@ export async function getRequestForReview(request_id) {
     jobsFor(prisma, request_id),
   ]);
   return { ...requestView(row), overlaps, events: events.map(e => eventView(e, { names: true })),
-    provisioning: { automated: isAutomated(row), gpu_node: row.extra_details?.gpu_node ?? null, jobs } };
+    provisioning: { automated: isAutomated(row) && hasSiteUsername(row.user_request_student_uidTouser), gpu_node: row.extra_details?.gpu_node ?? null, jobs } };
 }
 
 // Every decision changes the status and appends its event in one transaction (FR-5.5, FR-9.1).
@@ -58,7 +59,7 @@ async function transition(request_id, reviewer_account_id, from, to, action, rev
 async function applyTransition(request_id, reviewer_account_id, from, to, action, review_comment, { confirm_overlap = false } = {}) {
   return prisma.$transaction(async tx => {
     const reviewer = await tx.user.findUnique({ where: { uid: reviewer_account_id } });
-    if (reviewer?.role !== 'Approver') throw Object.assign(new Error('Reviewer access required'), { statusCode: 403 });
+    if (!isApprover(reviewer)) throw Object.assign(new Error('Reviewer access required'), { statusCode: 403 });
     const row = await tx.request.findUnique({ where: { rid: request_id } });
     if (!row) throw Object.assign(new Error('Request not found'), { statusCode: 404 });
     if (row.status !== from) throw Object.assign(new Error('Invalid state transition'), { statusCode: 400 });
@@ -67,7 +68,8 @@ async function applyTransition(request_id, reviewer_account_id, from, to, action
       throw Object.assign(new Error('This student has overlapping requests for the same resource'), { statusCode: 409, overlaps });
     }
     const config = provisioningConfig();
-    const automated = isAutomated(row, config);
+    const automated = isAutomated(row, config)
+      && hasSiteUsername(await tx.user.findUnique({ where: { uid: row.student_uid } }));
     let job = null, gpu_node;
     if (automated && to === 'Approved') ({ job, gpu_node } = await buildCreateJob(tx, row, config));
     if (automated && to === 'On_Use') await assertManualActivationAllowed(tx, row);

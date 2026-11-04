@@ -131,7 +131,7 @@ expect "the identity service answers /api/users/me and the request service /api/
 # check also adds the accounts of the request service's checks (that user may only read accounts).
 accounts="chk$(date +%s)"
 if "$SCRIPTS/run-task.sh" --identity node scripts/check-identity.js "$accounts"; then
-  pass "identity database check: sign-in, profile, role; its database user has exactly its rights (run-task.sh --identity check-identity)"
+  pass "identity database check: sign-in, profile, role by hand and from APPROVER_EMAILS, a staff profile; its database user has exactly its rights (run-task.sh --identity check-identity)"
 else
   fail "identity database check"
 fi

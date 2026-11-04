@@ -13,6 +13,7 @@ export default function AccountPage() {
   const [saved, setSaved] = useState(false);
   const p = auth.profile;
   const isApprover = auth.role === 'reviewer';
+  const isStaff = !isApprover && p?.kind === 'staff';
 
   const save = async (data) => {
     await updateUserProfile(data);
@@ -28,7 +29,7 @@ export default function AccountPage() {
           <div className="profile-side">
             <div className="avatar-xl" aria-hidden="true">{initials(auth.name)}</div>
             <p className="profile-name">{auth.name}</p>
-            <p className="muted small">{auth.role === 'reviewer' ? 'Resource Approver' : 'Student'}</p>
+            <p className="muted small">{isApprover ? 'Resource Approver' : isStaff ? 'Staff' : 'Student'}</p>
           </div>
 
           <div className="profile-main">
@@ -47,7 +48,7 @@ export default function AccountPage() {
               <p className="muted">Profile unavailable. Try signing in again.</p>
             ) : editing ? (
               <ProfileForm
-                variant={isApprover ? 'approver' : 'student'}
+                variant={isApprover ? 'approver' : isStaff ? 'staff' : 'student'}
                 initial={p}
                 email={p.primary_email}
                 studentId={p.student_id}
@@ -62,6 +63,14 @@ export default function AccountPage() {
                 <div><dt>E-mail</dt><dd>{p.primary_email}</dd></div>
                 <div><dt>Contact Phone</dt><dd>{p.phone_number || '—'}</dd></div>
                 <div><dt>Role</dt><dd>Resource Approver (granted by SIIT ICT)</dd></div>
+              </dl>
+            ) : isStaff ? (
+              <dl className="info-grid">
+                <div><dt>Name</dt><dd>{p.full_name}</dd></div>
+                <div><dt>E-mail</dt><dd>{p.primary_email}</dd></div>
+                <div><dt>Department/Unit</dt><dd>{p.department}</dd></div>
+                <div><dt>Contact Phone</dt><dd>{p.phone_number || '—'}</dd></div>
+                <div><dt>Role</dt><dd>Staff (requests resources)</dd></div>
               </dl>
             ) : (
               <dl className="info-grid">

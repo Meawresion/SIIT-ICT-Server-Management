@@ -4,6 +4,7 @@
 //   STUDENT_ID_DIGITS      e.g. 10
 //   DEGREE_EMAIL_PREFIXES  JSON, degree -> letters before the ID, e.g. {"UNDERGRADUATE":"","MASTER":"m","DOCTORAL":"d"}
 //   STAFF_EMAIL_DOMAINS    comma-separated, e.g. siit.tu.ac.th
+//   APPROVER_EMAILS        optional, comma-separated exact addresses: when set, the only approvers
 // A student address is <prefix><ID>@<student domain>; a staff address is <name>@<staff domain>.
 
 const DEGREES = ['UNDERGRADUATE', 'MASTER', 'DOCTORAL'];
@@ -44,8 +45,31 @@ export function loadIdentityRules(source = process.env) {
   const degreePatterns = entries
     .sort(([, a], [, b]) => b.length - a.length)
     .map(([degree, prefix]) => ({ degree, re: new RegExp(`^${escapeRe(prefix)}(\\d{${digits}})$`) }));
-  return { studentDomain, digits, staffDomains, degreePatterns };
+  const rules = { studentDomain, digits, staffDomains, degreePatterns };
+
+  // Every approver must be able to sign in; a typo here would otherwise leave nobody to approve.
+  // (Checked here, which server.js and worker.js call at start; roleFor only reads the list.)
+  const approvers = approverEmails(source);
+  const unusable = [...(approvers ?? [])].filter((e) => !classifyEmail(e, rules));
+  if (unusable.length) throw new Error(`Sign-in settings: APPROVER_EMAILS lists addresses that can't sign in: ${unusable.join(', ')}`);
+  return { ...rules, approvers };
 }
+
+// APPROVER_EMAILS as a set of lowercase addresses, or null when it is empty.
+export function approverEmails(source = process.env) {
+  const list = String(source.APPROVER_EMAILS ?? '').split(',').map((e) => e.trim().toLowerCase()).filter(Boolean);
+  return list.length ? new Set(list) : null;
+}
+
+// The role that counts. With APPROVER_EMAILS set, being on it is the only way to be an approver
+// (whatever the role column says); without it (local development), the role column, which
+// scripts/set-user-role.js sets. user: a user row (siitemail, role). -> 'Approver' | 'Student' | null
+export function roleFor(user, approvers = approverEmails()) {
+  if (!user) return null;
+  if (!approvers) return user.role;
+  return approvers.has(String(user.siitemail ?? '').toLowerCase()) ? 'Approver' : 'Student';
+}
+export const isApprover = (user, approvers) => roleFor(user, approvers) === 'Approver';
 
 // -> { kind: 'student', studentId, degree, domain } | { kind: 'staff', domain } | null (not allowed)
 export function classifyEmail(email, rules) {

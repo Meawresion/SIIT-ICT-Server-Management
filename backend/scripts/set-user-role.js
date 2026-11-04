@@ -1,5 +1,6 @@
 import prisma from '../src/lib/prisma.js';
 import { setUserRoleByEmail } from '../src/services/role.service.js';
+import { approverEmails } from '../src/config/identity.js';
 
 try {
   const [email, role, ...extra] = process.argv.slice(2);
@@ -8,6 +9,10 @@ try {
   }
   const result = await setUserRoleByEmail(email, role);
   console.log(`Set ${result.email} to ${result.role}. Access updates on their next request.`);
+  // With APPROVER_EMAILS set, the list decides (config/identity.js roleFor); this column follows it.
+  if (approverEmails()) {
+    console.warn('APPROVER_EMAILS is set, so it decides who is an approver: this change is undone at their next sign-in. Edit APPROVER_EMAILS instead.');
+  }
 } catch (err) {
   console.error(err.name === 'ZodError'
     ? 'Provide a valid email and one of these roles: Approver, Student.'

@@ -6,12 +6,15 @@ const reverse = (mapping, value) => Object.keys(mapping).find(key => mapping[key
 export function accountView(row) {
   return row && { ...row, id: row.uid, primary_email: row.siitemail, full_name: row.fullname };
 }
+// A requester's profile: a student's (ID, degree, program) or a staff member's (department only;
+// only a staff address can save one, see user.controller).
 export function profileComplete(row) {
-  return row && row.role === 'Student' && Boolean(row.s_id && row.study_degree && row.s_program && row.phone_number);
+  return row && row.role === 'Student' && Boolean(row.s_program && row.phone_number && (row.s_id ? row.study_degree : true));
 }
 export function userView(row) {
-  return row && { ...row, id: row.uid, student_id: row.s_id, degree: reverse(degreeToDb, row.study_degree), program: row.s_program,
-    advisor_name: row.advisor_name ?? '', account: accountView(row) };
+  const kind = row?.s_id ? 'student' : 'staff';
+  return row && { ...row, id: row.uid, kind, student_id: row.s_id, degree: reverse(degreeToDb, row.study_degree), program: row.s_program,
+    department: kind === 'staff' ? row.s_program : null, advisor_name: row.advisor_name ?? '', account: accountView(row) };
 }
 export const requestInclude = { user_request_student_uidTouser: true, user_request_approver_uidTouser: true };
 export function requestView(row) {

@@ -77,6 +77,10 @@ Parameters:
     Description: JSON, e.g. {"UNDERGRADUATE":"","MASTER":"m","DOCTORAL":"d"}
   StaffEmailDomains:
     Type: String
+  ApproverEmails:
+    Type: String
+    Default: ''
+    Description: The approvers, exact addresses (comma-separated); when set, the only approvers. Empty - the role column (set-user-role.js)
   SessionIdleMinutes:
     Type: Number
     Default: 30
@@ -474,6 +478,8 @@ Resources:
               Value: !Ref DegreeEmailPrefixes
             - Name: STAFF_EMAIL_DOMAINS
               Value: !Ref StaffEmailDomains
+            - Name: APPROVER_EMAILS
+              Value: !Ref ApproverEmails
             - Name: SESSION_IDLE_MINUTES
               Value: !Ref SessionIdleMinutes
             - Name: SESSION_MAX_HOURS
