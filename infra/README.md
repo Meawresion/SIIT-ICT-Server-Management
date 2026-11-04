@@ -226,6 +226,8 @@ The scripts are bash (Git Bash on Windows, or Linux/WSL) and need the AWS CLI v2
 | New backend version | commit, `push-images.sh backend`, `deploy.sh app identity provisioning` |
 | New notification version | commit, `push-images.sh notification`, `deploy.sh events` |
 | New dashboard or Grafana version | change `grafana/`, commit, `push-images.sh grafana`, `deploy.sh grafana` |
+| Change the approvers | edit `APPROVER_EMAILS` in `config.env`, `deploy.sh app identity provisioning` |
+| Swap roles in a demo | empty `APPROVER_EMAILS`, `deploy.sh app identity provisioning`; then `set-role.sh <email> Approver` or `Student` (about a minute each); afterwards the list back and deploy again |
 | Container Insights for a demo day | `CONTAINER_INSIGHTS=enabled` in `config.env`, `deploy.sh platform`; afterwards `disabled` and again `deploy.sh platform` |
 | Check a service's database rights | `run-task.sh [--identity|--provisioning] node scripts/check-grants.js` |
 | New frontend version | `publish-frontend.sh` (direct mode: commit, `push-images.sh frontend`, `deploy.sh web`) |
