@@ -154,7 +154,7 @@ Resources:
       AllocatedStorage: !Ref AllocatedStorage
       MaxAllocatedStorage: !Ref MaxAllocatedStorage
       StorageType: gp3
-      SnapshotIdentifier: !If [Restore, !Ref RestoreSnapshot, !Ref AWS::NoValue]
+      DBSnapshotIdentifier: !If [Restore, !Ref RestoreSnapshot, !Ref AWS::NoValue]
       StorageEncrypted: !If [Restore, !Ref AWS::NoValue, true]
       DBName: !If [Restore, !Ref AWS::NoValue, !Ref DbName]
       MasterUsername: !If [Restore, !Ref AWS::NoValue, !Sub '${Project}admin']
