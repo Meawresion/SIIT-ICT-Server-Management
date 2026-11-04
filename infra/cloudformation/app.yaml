@@ -525,12 +525,12 @@ Resources:
               ValueFrom: !Sub
                 - '${Arn}:username::'
                 - Arn:
-                    Fn::ImportValue: !Sub '${DataStack}-DbSecretArn'
+                    Fn::ImportValue: !Sub '${DataStack}-RequestsDbSecretArn'
             - Name: DB_PASSWORD
               ValueFrom: !Sub
                 - '${Arn}:password::'
                 - Arn:
-                    Fn::ImportValue: !Sub '${DataStack}-DbSecretArn'
+                    Fn::ImportValue: !Sub '${DataStack}-RequestsDbSecretArn'
             - Name: JWT_SECRET
               ValueFrom: !Sub '${AppSecret}:JWT_SECRET::'
           LogConfiguration:

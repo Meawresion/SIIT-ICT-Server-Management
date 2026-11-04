@@ -5,7 +5,8 @@ Description: >-
   isn't allowed on Learner Lab). The first start on an empty EFS runs database/init.sql (baked
   into the image).
   To move to RDS, deploy data-rds instead and point the app stack at it: both export DbHost,
-  DbPort, DbName and DbSecretArn. Pause with DesiredCount 0; deleting this stack deletes the data
+  DbPort, DbName and one database user secret per service (IdentityDbSecretArn, RequestsDbSecretArn,
+  ProvisioningDbSecretArn; D34). Pause with DesiredCount 0; deleting this stack deletes the data
   and its passwords together.
 
 Parameters:
@@ -31,9 +32,6 @@ Parameters:
   DbName:
     Type: String
     Default: siit_resource
-  DbAppUser:
-    Type: String
-    Default: siit_app
   DesiredCount:
     Type: Number
     Default: 1
@@ -47,15 +45,34 @@ Parameters:
     Default: '1024'
 
 Resources:
-  # The backend connects as the app user; root only creates the schema on the first start.
+  # Each service connects as its own user with rights on its own tables only (D34,
+  # database/privileges.sh); root only creates the schema and the users on the first start.
   # Generated names (no Name property), so a recreated stack never collides with a secret that
   # is still in its deletion recovery window.
-  DbSecret:
+  IdentityDbSecret:
     Type: AWS::SecretsManager::Secret
     Properties:
-      Description: !Sub '${Project} MySQL app user (username, password)'
+      Description: !Sub '${Project} MySQL user of the identity service (username, password)'
       GenerateSecretString:
-        SecretStringTemplate: !Sub '{"username":"${DbAppUser}"}'
+        SecretStringTemplate: !Sub '{"username":"${Project}_identity"}'
+        GenerateStringKey: password
+        PasswordLength: 32
+        ExcludePunctuation: true
+  RequestsDbSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Description: !Sub '${Project} MySQL user of the requests service (username, password)'
+      GenerateSecretString:
+        SecretStringTemplate: !Sub '{"username":"${Project}_requests"}'
+        GenerateStringKey: password
+        PasswordLength: 32
+        ExcludePunctuation: true
+  ProvisioningDbSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Description: !Sub '${Project} MySQL user of the provisioning service (username, password)'
+      GenerateSecretString:
+        SecretStringTemplate: !Sub '{"username":"${Project}_provisioning"}'
         GenerateStringKey: password
         PasswordLength: 32
         ExcludePunctuation: true
@@ -220,13 +237,21 @@ Resources:
           Environment:
             - Name: MYSQL_DATABASE
               Value: !Ref DbName
-            - Name: MYSQL_USER
-              Value: !Ref DbAppUser
+            - Name: IDENTITY_DB_USER
+              Value: !Sub '${Project}_identity'
+            - Name: REQUESTS_DB_USER
+              Value: !Sub '${Project}_requests'
+            - Name: PROVISIONING_DB_USER
+              Value: !Sub '${Project}_provisioning'
           Secrets:
             - Name: MYSQL_ROOT_PASSWORD
               ValueFrom: !Sub '${DbRootSecret}:password::'
-            - Name: MYSQL_PASSWORD
-              ValueFrom: !Sub '${DbSecret}:password::'
+            - Name: IDENTITY_DB_PASSWORD
+              ValueFrom: !Sub '${IdentityDbSecret}:password::'
+            - Name: REQUESTS_DB_PASSWORD
+              ValueFrom: !Sub '${RequestsDbSecret}:password::'
+            - Name: PROVISIONING_DB_PASSWORD
+              ValueFrom: !Sub '${ProvisioningDbSecret}:password::'
           MountPoints:
             - SourceVolume: data
               ContainerPath: /var/lib/mysql
@@ -284,10 +309,18 @@ Outputs:
     Value: !Ref DbName
     Export:
       Name: !Sub '${AWS::StackName}-DbName'
-  DbSecretArn:
-    Value: !Ref DbSecret
+  IdentityDbSecretArn:
+    Value: !Ref IdentityDbSecret
     Export:
-      Name: !Sub '${AWS::StackName}-DbSecretArn'
+      Name: !Sub '${AWS::StackName}-IdentityDbSecretArn'
+  RequestsDbSecretArn:
+    Value: !Ref RequestsDbSecret
+    Export:
+      Name: !Sub '${AWS::StackName}-RequestsDbSecretArn'
+  ProvisioningDbSecretArn:
+    Value: !Ref ProvisioningDbSecret
+    Export:
+      Name: !Sub '${AWS::StackName}-ProvisioningDbSecretArn'
   ServiceName:
     Value: !GetAtt Service.Name
   FileSystemId:
