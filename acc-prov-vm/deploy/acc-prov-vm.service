@@ -1,0 +1,49 @@
+# systemd unit for the acc-prov-vm worker at the SIIT site. Install steps: README.md, "Running at
+# the site". Layout:
+#   /opt/siit                         the repository (root-owned; the service can't change code)
+#   /etc/acc-prov-vm/acc-prov-vm.env  settings and credentials (root:accprov 0640)
+#   /etc/acc-prov-vm/*.json           gpu-nodes.json, bigdata.json (root:accprov 0640)
+#   /etc/acc-prov-vm/aws.env          Learner Lab session keys (root 0600, set-aws-creds.sh)
+#   /var/lib/acc-prov-vm              the job store and Playwright's Chromium (the service's home)
+[Unit]
+Description=acc-prov-vm: creates and revokes SIIT resource accounts for the portal
+Documentation=https://github.com/Meawresion/SIIT-ICT-Server-Management/tree/main/acc-prov-vm
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=accprov
+Group=accprov
+WorkingDirectory=/opt/siit/acc-prov-vm
+# Values set here win over the env file (node --env-file never overrides the environment).
+# Learner Lab session keys; optional (with the full AWS account: IAM Roles Anywhere instead).
+EnvironmentFile=-/etc/acc-prov-vm/aws.env
+Environment=PLAYWRIGHT_BROWSERS_PATH=/var/lib/acc-prov-vm/ms-playwright
+Environment=JOB_STORE_FILE=/var/lib/acc-prov-vm/jobs.json
+# Node.js 22 or later; adjust the path if `command -v node` shows another one.
+ExecStart=/usr/bin/node --env-file=/etc/acc-prov-vm/acc-prov-vm.env src/main.js
+# A crash restarts after a minute. pfSense is only logged into when a job runs, and a failed
+# login is never retried, so restarts can't trip its login protection.
+Restart=on-failure
+RestartSec=60
+# One job at a time. Stopping mid-job is safe: the job returns from the queue and a CREATE retry
+# sets one fresh password on every account (README, "Worker").
+TimeoutStopSec=15
+StateDirectory=acc-prov-vm
+StateDirectoryMode=0750
+UMask=0077
+# Hardening. Not MemoryDenyWriteExecute (Node's JIT needs it) and not RestrictNamespaces
+# (Chromium).
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target
