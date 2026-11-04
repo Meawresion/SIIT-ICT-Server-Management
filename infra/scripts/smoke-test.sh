@@ -94,7 +94,7 @@ wait_for_200 "$url/health"
 wait_for_200 "$url/health/ready"
 wait_for_200 "$url/"
 expect "backend answers through the ALB (/health)" 200 "$(status "$url/health")"
-expect "backend reaches MySQL through the internal NLB as the app user (/health/ready)" 200 "$(status "$url/health/ready")"
+expect "backend reaches MySQL through the internal NLB as its own database user (/health/ready)" 200 "$(status "$url/health/ready")"
 has_root() { curl -s "$1" | grep -c '<div id="root">'; }
 expect "frontend answers through the ALB (/)" 1 "$(has_root "$url/")"
 expect "a client-side route gets index.html (/requests)" 1 "$(has_root "$url/requests")"
@@ -125,10 +125,23 @@ fi
 # service: each answers only its own paths, so a wrong rule shows up as a 404.
 expect "the identity service answers /api/users/me and the request service /api/requests/me (401, not 404)" "401 401" \
   "$(status "$url/api/users/me") $(status "$url/api/requests/me")"
-if "$SCRIPTS/run-task.sh" node scripts/check-db.js; then
-  pass "database integration check in a one-off task (run-task.sh check-db)"
+# D34: each service has its own database user with rights on its own tables only. The identity
+# check also adds the accounts of the request service's checks (that user may only read accounts).
+accounts="chk$(date +%s)"
+if "$SCRIPTS/run-task.sh" --identity node scripts/check-identity.js "$accounts"; then
+  pass "identity database check: sign-in, profile, role; its database user has exactly its rights (run-task.sh --identity check-identity)"
 else
-  fail "database integration check in a one-off task"
+  fail "identity database check"
+fi
+if "$SCRIPTS/run-task.sh" node scripts/check-db.js "$accounts"; then
+  pass "request database check: requests, review, history; its database user has exactly its rights, the audit log is append-only (run-task.sh check-db)"
+else
+  fail "request database check"
+fi
+if "$SCRIPTS/run-task.sh" --provisioning node scripts/check-grants.js; then
+  pass "the provisioning database user has exactly its rights, and the scheduler holds its lease (run-task.sh --provisioning check-grants)"
+else
+  fail "provisioning database user"
 fi
 
 # Provisioning through the real queues: a one-off task approves a GPU request, the backend service
@@ -138,12 +151,13 @@ REQUEST_QUEUE_URL=$(stack_output "$STACK_QUEUES" RequestQueueUrl) RESULT_QUEUE_U
   BACKEND_PUBLIC_KEY=$(stack_output "$STACK_QUEUES" BackendPublicKey) SITE_PRIVATE_KEY=$SITE_PRIVATE_KEY \
   node "$SCRIPTS/fake-site.mjs" 4 900 &
 site_pid=$!
-if "$SCRIPTS/run-task.sh" node scripts/check-provisioning.js; then
+if "$SCRIPTS/run-task.sh" node scripts/check-provisioning.js "$accounts"; then
   pass "GPU request set up and revoked through SQS by the provisioning service (run-task.sh check-provisioning)"
 else
   fail "provisioning through SQS"
 fi
-if "$SCRIPTS/run-task.sh" --provisioning node scripts/check-scheduler.js; then
+# In a request service task, which gets the request dead-letter queue for this check only.
+if "$SCRIPTS/run-task.sh" --env "SQS_REQUEST_DLQ_URL=$(stack_output "$STACK_QUEUES" RequestDeadLetterQueueUrl)" node scripts/check-scheduler.js "$accounts"; then
   pass "the service's scheduler: expiry REVOKE, reminder, notice by hand, dead letter (run-task.sh check-scheduler)"
 else
   fail "scheduler"

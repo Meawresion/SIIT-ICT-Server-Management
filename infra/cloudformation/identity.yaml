@@ -166,12 +166,12 @@ Resources:
               ValueFrom: !Sub
                 - '${Arn}:username::'
                 - Arn:
-                    Fn::ImportValue: !Sub '${DataStack}-DbSecretArn'
+                    Fn::ImportValue: !Sub '${DataStack}-IdentityDbSecretArn'
             - Name: DB_PASSWORD
               ValueFrom: !Sub
                 - '${Arn}:password::'
                 - Arn:
-                    Fn::ImportValue: !Sub '${DataStack}-DbSecretArn'
+                    Fn::ImportValue: !Sub '${DataStack}-IdentityDbSecretArn'
             - Name: JWT_SECRET
               ValueFrom: !Sub
                 - '${Arn}:JWT_SECRET::'

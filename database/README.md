@@ -4,9 +4,20 @@ This directory contains the MySQL initialization script for the SIIT ICT Resourc
 Request System.
 
 - `init.sql` creates the application tables.
-- `privileges.sh` runs after it and limits the backend's database user (`MYSQL_USER`) to the
-  application tables, with only `SELECT` and `INSERT` on the `request_event` audit log (FR-9.1).
-  Root (the admin user) owns the schema.
+- `privileges.sh` runs after it and gives each database user data rights on the tables it uses
+  only, with just `SELECT` and `INSERT` on the `request_event` audit log for all of them
+  (FR-9.1). Root (the admin user) owns the schema.
+  - docker compose: one user (`MYSQL_USER`) for the single backend process (`SERVICE_ROLE=all`).
+  - AWS (D34): one user per service, made when its password is set (the data stack generates
+    them):
+
+    | User | Service | Rights |
+    |---|---|---|
+    | `siit_identity` | sign-in, profiles | `user`: select, insert, update |
+    | `siit_requests` | requests, review | `user`: select; `request`: select, insert, update; `draft`: all four; `request_event`, `provision_job`: select, insert |
+    | `siit_provisioning` | site jobs and results, scheduler, audit shipping | `user`: select; `request`: select, update; `request_event`: select, insert; `provision_job`: select, insert, update; `scheduler_lease`, `log_cursor`: select, update |
+
+    `backend/scripts/check-grants.js` checks that a user has exactly these rights.
 - `init.sql` also creates stored procedures for direct SQL access to student,
   approver, request, and draft workflows. The HTTP backend uses Prisma with the same tables and workflow rules.
 - `docker-compose.yml` mounts `database/init.sql` into the MySQL container at
@@ -389,8 +400,10 @@ npm run test:db
 ```
 
 `test:db` exercises the real services against the configured database (`DB_*` keys) inside
-one transaction, then rolls back all test records. Run it as the app user: it also checks that
-this user can't update or delete `request_event`.
+rollback-only transactions (`check-identity.js`, then `check-db.js`), so no test record stays.
+Run it as the app user: it also checks that this user has exactly its rights, e.g. that it can't
+update or delete `request_event`. On AWS the smoke test runs each check in its own service with
+that service's user.
 
 Google sign-in finds users by their verified email. New sign-ins create a
 `Student` row; completing the profile updates that same row. Reviewer access

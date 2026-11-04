@@ -1,20 +1,33 @@
 #!/usr/bin/env bash
-# Runs a one-off command in a backend task (same image, settings and secrets) and prints its log.
-# --provisioning: in a provisioning service task instead (the site queues, keys and scheduler settings).
+# Runs a one-off command in a request service task (same image, settings, secrets and database
+# user) and prints its log.
+# --identity: in an identity service task instead (Google client, the identity database user).
+# --provisioning: in a provisioning service task (site queues, keys, scheduler settings, its user).
+# --env NAME=VALUE (repeatable): adds a setting to this task only, e.g. a queue URL for a check.
 # Examples:
-#   run-task.sh node scripts/set-user-role.js person@siit.tu.ac.th Approver
-#   run-task.sh node scripts/check-db.js
-#   run-task.sh --provisioning node scripts/check-scheduler.js
+#   run-task.sh --identity node scripts/set-user-role.js person@siit.tu.ac.th Approver
+#   run-task.sh node scripts/check-db.js <marker>
+#   run-task.sh --provisioning node scripts/check-grants.js
 . "$(dirname "$0")/lib.sh"
 
-stack=$STACK_APP container=backend
-if [ "${1:-}" = --provisioning ]; then stack=$STACK_PROVISIONING container=provisioning; shift; fi
-[ $# -gt 0 ] || { echo "Usage: $0 [--provisioning] <command> [args...]" >&2; exit 1; }
+stack=$STACK_APP container=backend env=()
+while [ $# -gt 0 ]; do
+  case $1 in
+    --identity) stack=$STACK_IDENTITY container=identity; shift ;;
+    --provisioning) stack=$STACK_PROVISIONING container=provisioning; shift ;;
+    --env) env+=("$2"); shift 2 ;;
+    *) break ;;
+  esac
+done
+[ $# -gt 0 ] || { echo "Usage: $0 [--identity|--provisioning] [--env NAME=VALUE]... <command> [args...]" >&2; exit 1; }
 
 task_definition=$(stack_output "$stack" TaskDefinitionArn)
 subnets=$(stack_output "$STACK_NETWORK" PublicSubnets)
 security_group=$(stack_output "$STACK_PLATFORM" BackendSecurityGroupId)
-overrides=$(node -e 'console.log(JSON.stringify({ containerOverrides: [{ name: process.argv[1], command: process.argv.slice(2) }] }))' -- "$container" "$@")
+overrides=$(node -e '
+  const [name, env, ...command] = process.argv.slice(1);
+  const environment = env ? env.split("\n").map((e) => ({ name: e.slice(0, e.indexOf("=")), value: e.slice(e.indexOf("=") + 1) })) : [];
+  console.log(JSON.stringify({ containerOverrides: [{ name, command, environment }] }));' -- "$container" "$(printf '%s\n' "${env[@]}" | sed '/^$/d')" "$@")
 
 # A task that never starts (e.g. a timeout pulling the image from ECR) ran nothing, so it is tried
 # once more.
