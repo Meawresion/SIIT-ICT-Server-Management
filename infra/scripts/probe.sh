@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Read-only check of what this account (e.g. AWS Learner Lab) allows, before deploying anything.
+# Read-only check of what this account allows, before deploying anything. It creates nothing.
 . "$(dirname "$0")/lib.sh"
 set +e
 
@@ -17,7 +17,10 @@ check() {
 
 echo "Profile $AWS_PROFILE, region $AWS_REGION"
 check "credentials (sts)" aws sts get-caller-identity
-check "role $ROLE_NAME exists (iam:GetRole)" aws iam get-role --role-name "$ROLE_NAME"
+check "IAM (the stacks create their own roles)" aws iam list-roles --max-items 1
+check "IAM Roles Anywhere" aws rolesanywhere list-trust-anchors
+check "SSM Parameter Store" aws ssm describe-parameters --max-results 1
+check "RDS" aws rds describe-db-instances --max-records 20
 check "CloudFormation" aws cloudformation list-stacks --max-items 1
 check "ECR" aws ecr describe-repositories --max-items 1
 check "ECS" aws ecs list-clusters --max-items 1
@@ -31,5 +34,8 @@ check "SQS" aws sqs list-queues --max-results 1
 check "CloudWatch Logs" aws logs describe-log-groups --limit 1
 check "CloudFront prefix list" aws ec2 describe-managed-prefix-lists \
   --filters Name=prefix-list-name,Values=com.amazonaws.global.cloudfront.origin-facing
+# Names already taken by someone else in a shared account (should be none).
+taken=$(awst cloudformation list-stacks --query "length(StackSummaries[?starts_with(StackName,'$PROJECT-') && StackStatus!='DELETE_COMPLETE'])")
+echo "info  stacks named $PROJECT-*: $taken"
 echo "$failures check(s) failed."
 [ "$failures" = 0 ]

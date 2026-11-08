@@ -1,10 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: >-
-  Logs and alerts that outlive the app stacks: one CloudWatch Logs group per service (searched with
-  Logs Insights), the audit trail group kept for the audit period (NFR-7.1), saved queries, the
-  error metric filters, the alert topic, and an S3 bucket for the ALB access logs (the ALB can only
-  write to S3). Kept between test runs like dns: deleting it deletes the logs. teardown-all.sh
-  empties the bucket first.
+Description: 'Log groups, audit trail, metric filters, alert topic and the ALB log bucket.'
 
 Parameters:
   Project:
@@ -14,27 +9,26 @@ Parameters:
     Type: Number
     Default: 90
     AllowedValues: [1, 3, 5, 7, 14, 30, 60, 90, 120, 150, 180, 365, 400, 545, 731]
-    Description: Days the service log groups keep a line
+    Description: Service log retention days
   AuditLogDays:
     Type: Number
     Default: 400
     AllowedValues: [365, 400, 545, 731, 1096, 1827]
-    Description: Days the audit trail group keeps an event (at least one academic year, NFR-7.1)
+    Description: Audit log retention days
   AlbLogDays:
     Type: Number
     Default: 400
     MinValue: 1
-    Description: Days an ALB access log file is kept in S3
+    Description: ALB access log retention days
   AlertEmail:
     Type: String
     Default: ''
-    Description: Empty = no email; else alarms are mailed here (AWS sends a confirmation link first)
+    Description: Alert email; empty = none
 
 Conditions:
   HasAlertEmail: !Not [!Equals [!Ref AlertEmail, '']]
 
 Mappings:
-  # The account that writes ALB access logs in regions older than August 2022.
   ElbLogAccount:
     us-east-1: {Account: '127311923021'}
     us-east-2: {Account: '033677994240'}
@@ -46,7 +40,6 @@ Mappings:
     eu-central-1: {Account: '054676820928'}
 
 Resources:
-  # Each container writes one JSON line per event to stdout; ECS sends it to its group.
   BackendLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
@@ -57,25 +50,21 @@ Resources:
     Properties:
       LogGroupName: !Sub '/${Project}/frontend'
       RetentionInDays: !Ref AppLogDays
-  # The identity service (D34: sign-in, profiles).
   IdentityLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
       LogGroupName: !Sub '/${Project}/identity'
       RetentionInDays: !Ref AppLogDays
-  # Grafana (D34): its own sign-ins and data source errors.
   GrafanaLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
       LogGroupName: !Sub '/${Project}/grafana'
       RetentionInDays: !Ref AppLogDays
-  # The provisioning service (D34: site jobs and results, scheduler, audit shipping).
   ProvisioningLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
       LogGroupName: !Sub '/${Project}/provisioning'
       RetentionInDays: !Ref AppLogDays
-  # The notification service (Lambda).
   NotificationLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
@@ -86,16 +75,12 @@ Resources:
     Properties:
       LogGroupName: !Sub '/${Project}/mysql'
       RetentionInDays: !Ref AppLogDays
-  # The backend copies every request_event row here (one JSON line per event), so the trail
-  # outlives the database.
   AuditLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
       LogGroupName: !Sub '/${Project}/audit'
       RetentionInDays: !Ref AuditLogDays
 
-  # Metric filters cost nothing; the alarms on these metrics live in the app and web stacks, so
-  # they are billed only while the app runs.
   BackendErrorFilter:
     Type: AWS::Logs::MetricFilter
     Properties:
@@ -106,7 +91,6 @@ Resources:
           MetricName: BackendErrors
           MetricValue: '1'
           DefaultValue: 0
-  # Same metric as the request service's errors, so one alarm covers both API services.
   IdentityErrorFilter:
     Type: AWS::Logs::MetricFilter
     Properties:
@@ -148,8 +132,6 @@ Resources:
           MetricValue: '1'
           DefaultValue: 0
 
-  # Saved Logs Insights queries (CloudWatch > Logs Insights > Saved queries). Replace the
-  # placeholder in quotes before running.
   FindReferenceQuery:
     Type: AWS::Logs::QueryDefinition
     Properties:
@@ -200,8 +182,6 @@ Resources:
         | sort ms desc
         | limit 100
 
-  # Alarms and the "task stopped" rule publish here. An idle topic costs nothing; email is free up
-  # to 1,000 a month.
   AlertTopic:
     Type: AWS::SNS::Topic
     Properties:
@@ -232,7 +212,6 @@ Resources:
   Bucket:
     Type: AWS::S3::Bucket
     Properties:
-      # ALB access logs need SSE-S3 (not KMS).
       BucketEncryption:
         ServerSideEncryptionConfiguration:
           - ServerSideEncryptionByDefault:

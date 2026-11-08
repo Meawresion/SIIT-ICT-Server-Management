@@ -1,10 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: >-
-  The provisioning service (D34): the backend image started as `node src/worker.js`, without HTTP
-  or a load balancer. It sends the outbox's jobs to the site, applies the results, runs the
-  scheduler (reminders, expiry, dead letters, jobs without an answer) and copies the audit trail
-  to its log group. Only this service holds the backend's message key and reads the site queues;
-  the API service just queues jobs. Deleted with the app between test runs.
+Description: 'Provisioning service: site jobs over SQS, scheduler, audit shipping, site alarms.'
 
 Parameters:
   Project:
@@ -25,17 +20,13 @@ Parameters:
   QueuesStack:
     Type: String
     Default: ''
-    Description: Empty = automatic provisioning off (only the scheduler and audit shipping run)
+    Description: Queues stack; empty = provisioning off
   ImageTag:
-    Type: String
-  ExecutionRoleArn:
-    Type: String
-  TaskRoleArn:
     Type: String
   DesiredCount:
     Type: Number
     Default: 1
-    Description: Several tasks are safe (SKIP LOCKED, the scheduler lease); one is enough
+    Description: Task count
   Cpu:
     Type: String
     Default: '256'
@@ -53,7 +44,7 @@ Parameters:
   ApproverEmails:
     Type: String
     Default: ''
-    Description: The approvers, exact addresses (comma-separated); when set, the only approvers. Empty - the role column (set-user-role.js)
+    Description: Approver email addresses (comma-separated)
   SchedulerIntervalSeconds:
     Type: Number
     Default: 300
@@ -69,6 +60,12 @@ Parameters:
   SitePublicKeys:
     Type: String
     Default: ''
+    Description: Site public keys as text; empty = SSM parameter
+  SiteKeysParameter:
+    Type: String
+    Default: ''
+    AllowedPattern: '^(/[A-Za-z0-9_.-]+)*$'
+    Description: SSM parameter with the site public keys
   GpuNodes:
     Type: String
     Default: ''
@@ -89,33 +86,118 @@ Parameters:
     Default: 15
     MinValue: 0
     MaxValue: 1440
-    Description: Alarm when no site heartbeat arrived for this many minutes (acc-prov-vm sends one every 5); 0 = no alarm
+    Description: Heartbeat alarm minutes; 0 = off
   QueueWaitMinutes:
     Type: Number
     Default: 5
     MinValue: 1
     MaxValue: 1440
-    Description: Alarm when jobs wait this many minutes and the site takes none of them
+    Description: Queue wait alarm minutes
 
 Rules:
   ProvisioningNeedsSettings:
     RuleCondition: !Not [!Equals [!Ref QueuesStack, '']]
     Assertions:
       - Assert: !And
-          - !Not [!Equals [!Ref SitePublicKeys, '']]
+          - !Or
+            - !Not [!Equals [!Ref SitePublicKeys, '']]
+            - !Not [!Equals [!Ref SiteKeysParameter, '']]
           - !Not [!Equals [!Ref GpuNodes, '']]
           - !Not [!Equals [!Ref OvpnProfileUrl, '']]
           - !Not [!Equals [!Ref ManualGpuUrl, '']]
           - !Not [!Equals [!Ref ManualBigDataUrl, '']]
-        AssertDescription: provisioning needs SitePublicKeys, GpuNodes, OvpnProfileUrl, ManualGpuUrl and ManualBigDataUrl
+        AssertDescription: provisioning needs SitePublicKeys or SiteKeysParameter, GpuNodes, OvpnProfileUrl, ManualGpuUrl and ManualBigDataUrl
 
 Conditions:
   HasQueues: !Not [!Equals [!Ref QueuesStack, '']]
+  KeysAsText: !And
+    - !Condition HasQueues
+    - !Not [!Equals [!Ref SitePublicKeys, '']]
+  KeysFromSsm: !And
+    - !Condition HasQueues
+    - !Equals [!Ref SitePublicKeys, '']
   WatchHeartbeat: !And
     - !Condition HasQueues
     - !Not [!Equals [!Ref SiteHeartbeatMinutes, 0]]
 
 Resources:
+  ExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${Project}-provisioning-exec'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: {Service: ecs-tasks.amazonaws.com}
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: start-task
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: ecr:GetAuthorizationToken
+                Resource: '*'
+              - Effect: Allow
+                Action: [ecr:BatchGetImage, ecr:GetDownloadUrlForLayer, ecr:BatchCheckLayerAvailability]
+                Resource: !Sub 'arn:${AWS::Partition}:ecr:${AWS::Region}:${AWS::AccountId}:repository/${Project}-backend'
+              - Effect: Allow
+                Action: [logs:CreateLogStream, logs:PutLogEvents]
+                Resource: !Sub 'arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/${Project}/provisioning:*'
+              - Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource:
+                  - Fn::ImportValue: !Sub '${DataStack}-ProvisioningDbSecretArn'
+                  - !If
+                    - HasQueues
+                    - Fn::ImportValue: !Sub '${QueuesStack}-BackendKeysSecretArn'
+                    - !Ref AWS::NoValue
+              - !If
+                - KeysFromSsm
+                - Effect: Allow
+                  Action: ssm:GetParameters
+                  Resource: !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${SiteKeysParameter}'
+                - !Ref AWS::NoValue
+  TaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${Project}-provisioning-task'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: {Service: ecs-tasks.amazonaws.com}
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: run
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: events:PutEvents
+                Resource:
+                  Fn::ImportValue: !Sub '${EventsStack}-EventBusArn'
+              - Effect: Allow
+                Action: [logs:CreateLogStream, logs:PutLogEvents]
+                Resource: !Sub 'arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/${Project}/audit:*'
+              - !If
+                - HasQueues
+                - Effect: Allow
+                  Action: sqs:SendMessage
+                  Resource:
+                    Fn::ImportValue: !Sub '${QueuesStack}-RequestQueueArn'
+                - !Ref AWS::NoValue
+              - !If
+                - HasQueues
+                - Effect: Allow
+                  Action: [sqs:ReceiveMessage, sqs:DeleteMessage, sqs:ChangeMessageVisibility]
+                  Resource:
+                    - Fn::ImportValue: !Sub '${QueuesStack}-ResultQueueArn'
+                    - Fn::ImportValue: !Sub '${QueuesStack}-RequestDeadLetterQueueArn'
+                    - Fn::ImportValue: !Sub '${QueuesStack}-ResultDeadLetterQueueArn'
+                - !Ref AWS::NoValue
+
   TaskDefinition:
     Type: AWS::ECS::TaskDefinition
     Properties:
@@ -124,8 +206,8 @@ Resources:
       NetworkMode: awsvpc
       Cpu: !Ref Cpu
       Memory: !Ref Memory
-      ExecutionRoleArn: !Ref ExecutionRoleArn
-      TaskRoleArn: !Ref TaskRoleArn
+      ExecutionRoleArn: !GetAtt ExecutionRole.Arn
+      TaskRoleArn: !GetAtt TaskRole.Arn
       ContainerDefinitions:
         - Name: provisioning
           Image: !Sub
@@ -148,15 +230,12 @@ Resources:
             - Name: DB_NAME
               Value:
                 Fn::ImportValue: !Sub '${DataStack}-DbName'
-            # TLS to the database (D31): verify on RDS, encrypt on the ECS MySQL.
             - Name: DB_TLS
               Value:
                 Fn::ImportValue: !Sub '${DataStack}-DbTls'
-            # The portal link in the status emails.
             - Name: FRONTEND_URL
               Value:
                 Fn::ImportValue: !Sub '${AppStack}-PublicUrl'
-            # The sign-in domains: status emails go only there.
             - Name: STUDENT_EMAIL_DOMAIN
               Value: !Ref StudentEmailDomain
             - Name: STUDENT_ID_DIGITS
@@ -211,7 +290,7 @@ Resources:
                   Fn::ImportValue: !Sub '${QueuesStack}-ResultDeadLetterQueueUrl'
               - !Ref AWS::NoValue
             - !If
-              - HasQueues
+              - KeysAsText
               - Name: MSG_PEER_PUBLIC_KEYS
                 Value: !Ref SitePublicKeys
               - !Ref AWS::NoValue
@@ -264,6 +343,11 @@ Resources:
                   - Arn:
                       Fn::ImportValue: !Sub '${QueuesStack}-BackendKeysSecretArn'
               - !Ref AWS::NoValue
+            - !If
+              - KeysFromSsm
+              - Name: MSG_PEER_PUBLIC_KEYS
+                ValueFrom: !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${SiteKeysParameter}'
+              - !Ref AWS::NoValue
           LogConfiguration:
             LogDriver: awslogs
             Options:
@@ -272,7 +356,6 @@ Resources:
               awslogs-region: !Ref AWS::Region
               awslogs-stream-prefix: provisioning
 
-  # No load balancer: it only talks to the database, SQS, EventBridge and CloudWatch Logs.
   Service:
     Type: AWS::ECS::Service
     Properties:
@@ -299,7 +382,7 @@ Resources:
     Type: AWS::CloudWatch::Alarm
     Properties:
       AlarmName: !Sub '${Project}-provisioning-errors'
-      AlarmDescription: The provisioning service logged an error (find it with find-in-logs.sh --group provisioning)
+      AlarmDescription: Provisioning service logged an error
       Namespace:
         Fn::ImportValue: !Sub '${LogsStack}-MetricNamespace'
       MetricName: ProvisioningErrors
@@ -310,7 +393,6 @@ Resources:
       ComparisonOperator: GreaterThanOrEqualToThreshold
       TreatMissingData: notBreaching
       AlarmActions: [{'Fn::ImportValue': !Sub '${LogsStack}-AlertTopicArn'}]
-  # A job or result the other side could not process (the scheduler also fails the request).
   DeadLetterAlarm:
     Type: AWS::CloudWatch::Alarm
     Condition: HasQueues
@@ -349,8 +431,6 @@ Resources:
       TreatMissingData: notBreaching
       AlarmActions: [{'Fn::ImportValue': !Sub '${LogsStack}-AlertTopicArn'}]
 
-  # The SIIT site's health (acc-prov-vm's heartbeat, every 5 minutes through the result queue; this
-  # service logs each one as site.heartbeat). No inbound connection to the site is needed.
   SiteHeartbeatFilter:
     Type: AWS::Logs::MetricFilter
     Condition: HasQueues
@@ -375,16 +455,12 @@ Resources:
             Fn::ImportValue: !Sub '${LogsStack}-MetricNamespace'
           MetricName: SiteProblems
           MetricValue: '1'
-  # One-minute periods, each without a heartbeat counts as breaching: the alarm needs every minute
-  # of the window empty, so it fires only after SiteHeartbeatMinutes without one.
   SiteHeartbeatAlarm:
     Type: AWS::CloudWatch::Alarm
     Condition: WatchHeartbeat
     Properties:
       AlarmName: !Sub '${Project}-site-heartbeat-missing'
-      AlarmDescription: !Sub >-
-        No heartbeat from the SIIT site (acc-prov-vm) for ${SiteHeartbeatMinutes} minutes: the
-        worker, its host or network is down, or its AWS keys expired (journalctl -u acc-prov-vm)
+      AlarmDescription: !Sub 'No site heartbeat for ${SiteHeartbeatMinutes} minutes'
       Namespace:
         Fn::ImportValue: !Sub '${LogsStack}-MetricNamespace'
       MetricName: SiteHeartbeats
@@ -402,9 +478,7 @@ Resources:
     Condition: WatchHeartbeat
     Properties:
       AlarmName: !Sub '${Project}-site-check-failed'
-      AlarmDescription: >-
-        The SIIT site can't reach pfSense or a GPU/Hadoop node (two heartbeats in a row); the
-        failed names are in the site.heartbeat lines (find-in-logs.sh site.heartbeat --group provisioning)
+      AlarmDescription: Site cannot reach pfSense or a node
       Namespace:
         Fn::ImportValue: !Sub '${LogsStack}-MetricNamespace'
       MetricName: SiteProblems
@@ -416,15 +490,12 @@ Resources:
       ComparisonOperator: GreaterThanOrEqualToThreshold
       TreatMissingData: notBreaching
       AlarmActions: [{'Fn::ImportValue': !Sub '${LogsStack}-AlertTopicArn'}]
-  # Jobs wait and the site takes none: the worker is stuck, or another consumer is missing. The
-  # worker runs one job at a time and a GPU setup can take 10-15 minutes, so a job in flight
-  # doesn't count (it isn't visible); two approvals during one long setup can still trip it.
   QueueWaitAlarm:
     Type: AWS::CloudWatch::Alarm
     Condition: HasQueues
     Properties:
       AlarmName: !Sub '${Project}-site-not-taking-jobs'
-      AlarmDescription: !Sub 'Provisioning jobs waited ${QueueWaitMinutes} minutes and the SIIT site took none of them'
+      AlarmDescription: !Sub 'Jobs waited ${QueueWaitMinutes} minutes with none taken'
       Metrics:
         - Id: stuck
           Expression: IF(waiting > 0 AND taken == 0, 1, 0)
@@ -463,5 +534,5 @@ Outputs:
   ServiceName:
     Value: !GetAtt Service.Name
   TaskDefinitionArn:
-    Description: For one-off tasks (run-task.sh --provisioning)
+    Description: Provisioning task definition
     Value: !Ref TaskDefinition

@@ -99,7 +99,8 @@ sends the end-date reminders and removes access when a request ends (FR-8.2, FR-
 | `<project>-data` | `data-ecs.yaml` | `DATA_MODE=ecs`: MySQL 8.4 task + EFS + internal NLB (stable DB name) + generated DB passwords. The services connect over TLS (`DB_TLS=encrypt`: MySQL's self-signed certificate, not checked). |
 | `<project>-rds` | `data-rds.yaml` | `DATA_MODE=rds`: RDS MySQL 8.4, Multi-AZ (`DB_MULTI_AZ`), private subnets, only the backend security group on 3306, TLS required (`DB_TLS=verify`: certificate and host name checked against the RDS CA bundle in the image), encrypted gp3 storage that grows by itself, automated backups (`DB_BACKUP_DAYS`, point-in-time restore while it exists), a final snapshot when the stack is deleted (the next create restores the newest one: `DB_RESTORE`), storage and CPU alarms, generated passwords (one user per service; the admin's is managed by RDS). The `rds-init.sh` task (mysql image) adds the schema while the database is empty and sets the service users; `deploy.sh data` runs it after each deploy. Same outputs as the data stack. |
 | `<project>-secrets` | `secrets.yaml` | The secrets you provide: the Google OAuth client and the SMTP settings, created with placeholders (no sign-in, emails off); `set-secrets.sh` puts your values. |
-| `<project>-queues` | `queues.yaml` | With `PROVISIONING=true`: the SQS request and result queues, each with a dead-letter queue (14 days, TLS only, encrypted at rest), and the backend's message keys. A small Lambda generates the key pair straight into Secrets Manager; the public half is the `BackendPublicKey` output. |
+| `<project>-queues` | `queues.yaml` | With `PROVISIONING=true`: the SQS request and result queues, each with a dead-letter queue (14 days, TLS only, encrypted at rest), and the backend's message keys. A small Lambda generates the key pair straight into Secrets Manager; the public half goes to the SSM parameter `/<project>/backend-public-key`, which acc-prov-vm reads at start. |
+| `<project>-site` | `site.yaml` | With `PROVISIONING=true`: acc-prov-vm's AWS access through IAM Roles Anywhere. The trust anchor is the project's own CA (`site-ca.sh`, OpenSSL, no AWS Private CA fee); only a certificate with CN `<project>-site` gets the site role, which may only take jobs, send results and read the backend's public key. The site's public key is the SSM parameter `/<project>/site-public-keys`, written by `set-site-key.sh` only. Kept between runs. |
 | `<project>-events` | `events.yaml` | The event bus, the notification queue (+ dead-letter queue, alarm) and the notification Lambda, the only reader of the mail secret. |
 | `<project>-app` | `app.yaml` | ALB (with a certificate in direct mode: HTTPS on 443, and 80 only redirects to HTTPS), the API service, generated `JWT_SECRET` and origin header, ALB access logs, alarms, the task-stopped rule. |
 | `<project>-identity` | `identity.yaml` | The identity service, its target group and the ALB rule for `/api/auth/*` and `/api/users` (priority 2, before the app stack's `/api/*`), its unhealthy alarm. The only reader of the Google secret. |
@@ -108,15 +109,17 @@ sends the end-date reminders and removes access when a request ends (FR-8.2, FR-
 | `<project>-edge` | `edge.yaml` | CloudFront mode: S3 bucket, CloudFront (SPA rewrite function; `/api/*` and `/grafana*` go to the ALB), DNS records for the portal. |
 | `<project>-web` | `web.yaml` | Direct mode: the frontend service (nginx, `frontend/Dockerfile` `prod` stage) and its ALB rule for every path the backend doesn't take. |
 
-On AWS Learner Lab, IAM roles can't be created, so every task uses `LabRole` (`ROLE_NAME`).
+**IAM (least privilege).** Each stack creates the roles of what it runs, named `<project>-<service>-exec` (ECS pulls that one image, writes that one log group, reads only that service's secrets) and `<project>-<service>-task` (what the running code calls: the backend only puts events on the bus; provisioning only its queues, the audit log group and the bus; Grafana reads CloudWatch and only the project's log groups). Identity, the database tasks and nginx call no AWS API and have no task role. The Lambdas have `<project>-notification-fn` and `<project>-message-keys-fn`, the site `<project>-site`. Deploys need `CAPABILITY_NAMED_IAM`, and every stack is tagged `Project=<project>`. Learner Lab can't create roles, so these templates no longer run there (D30 is replaced).
 
-## AWS Learner Lab limits (checked 2026-10-27)
+**A shared account** (e.g. the course account, every group in one account): set `PROJECT` to the group's prefix. Every name starts with it, and the scripts only list, check or delete resources with that prefix. A second settings file can reuse `config.env` and change a few values: `CONFIG=infra/config.<name>.env infra/scripts/<script>.sh` (git-ignored; it starts with `. "$INFRA_DIR/config.env"`).
+
+## AWS Learner Lab limits (checked 2026-10-27, no longer supported)
 
 | Service | Learner Lab | What we do |
 |---|---|---|
 | CloudFront | Denied (list and create) | `ENTRY_MODE=direct`: the ALB is the public entry; the `web` stack serves the frontend instead of `edge`. |
 | Cloud Map (create namespace) | Denied | MySQL is reached through an internal Network Load Balancer. |
-| IAM (create roles) | Denied | Every role is `LabRole`. |
+| IAM (create roles) | Denied | The stacks now create their own roles, so they no longer deploy there. |
 | ECS, ECR, ELB, EFS, Secrets Manager, Route 53, ACM, SQS, Lambda, Logs (incl. metric filters, saved queries), S3, CloudWatch alarms, SNS, EventBridge (custom buses too, probe 2026-11-03) | Allowed | |
 
 With `USE_DOMAIN=false` there are no `dns`/`cert` stacks and the ALB answers over HTTP on its AWS
@@ -142,7 +145,7 @@ domain, provisioning on with a throwaway site key), and checks:
 - provisioning through the real queues: a one-off task (`check-provisioning.js`) approves a GPU
   request, the provisioning service sends the job, `fake-site.mjs` plays acc-prov-vm and answers, the
   request becomes On Use; then the same for the removal;
-- the provisioning service's scheduler (every 30 s here; `check-scheduler.js` sets up its requests in a request service task given the dead-letter queue URL): a GPU request that ended gets
+- the provisioning service's scheduler (every 30 s here; `check-scheduler.js` sets up its requests in a request service task; the smoke test itself puts the dead letter in the queue, since no service role may write there): a GPU request that ended gets
   its removal and is completed, a VM request gets its reminder and then the approvers' notice, and
   a job put into the request dead-letter queue is failed;
 - the logs: that 404's access log line is found in CloudWatch Logs (`find-in-logs.sh`, Logs
@@ -170,6 +173,7 @@ The smoke test creates them when they are missing (first run, or after a Learner
 | Command | What it does |
 |---|---|
 | `smoke-test.sh` | Deploy, check, delete the test stacks; keep network, platform, queues, logs, dns, cert |
+| `smoke-test.sh --cloudfront` | The same through CloudFront and S3 (edge stack, `publish-frontend.sh`) instead of the web stack; needs the dns and cert stacks |
 | `smoke-test.sh --keep` | Leave the test stacks running |
 | `smoke-test.sh --teardown` | Only delete the test stacks and check (e.g. after a run was killed hard) |
 | `teardown-all.sh` | Delete everything, including network, platform, queues and logs with its log groups and S3 bucket (asks first); `--dns` also deletes the zone |
@@ -185,9 +189,13 @@ The smoke test creates them when they are missing (first run, or after a Learner
 - Generated by CloudFormation (Secrets Manager): MySQL root (RDS: admin) and the service users'
   passwords, `JWT_SECRET`, the CloudFront origin header.
 - Generated by the queues stack: the backend's message key pair (the private half only in Secrets
-  Manager). Give the `BackendPublicKey` output to acc-prov-vm (`MSG_PEER_PUBLIC_KEYS` in its
-  `.env`), and put acc-prov-vm's public bundle into `SITE_PUBLIC_KEYS` in `config.env`. Both are
-  public. A new key pair: raise `MESSAGE_KEY_GENERATION` and redeploy queues and app.
+  Manager, the public half in SSM, which acc-prov-vm reads with `MSG_PEER_PUBLIC_KEYS_PARAM`).
+  acc-prov-vm's public bundle goes into SSM with `set-site-key.sh <bundle>` (it restarts the
+  provisioning service); `SITE_PUBLIC_KEYS` in `config.env` stays empty (the smoke test sets
+  its own). Both are public. A new backend key pair: raise `MESSAGE_KEY_GENERATION` and
+  `deploy.sh queues`, then restart acc-prov-vm.
+- The site's AWS access: `site-ca.sh init` (once: the CA, kept on your laptop), `deploy.sh site`,
+  `site-ca.sh issue` (the site's certificate, 1 year); then acc-prov-vm's README, "Roles Anywhere".
 - Scheduler: `SCHEDULER_INTERVAL_SEC`, `EXPIRY_REMINDER_DAYS` and `SITE_TIME_ZONE` in `config.env`.
 - The backend gets plain values from the task definition and secret ones from Secrets Manager;
   ECS reads them when a task starts.
@@ -207,9 +215,10 @@ The scripts are bash (Git Bash on Windows, or Linux/WSL) and need the AWS CLI v2
 6. `infra/scripts/push-images.sh`
 7. `infra/scripts/deploy.sh secrets`, then `infra/scripts/set-secrets.sh` (after filling the
    secrets at the end of `config.env`)
-8. `infra/scripts/deploy.sh data app edge` (direct mode: `data app web`; skip step 9). With
-   `PROVISIONING=true`: `data queues app ...`, after setting `SITE_PUBLIC_KEYS`, `GPU_NODES` and
-   the two links in `config.env`.
+8. `infra/scripts/deploy.sh data events app identity edge` (direct mode: `... web`; skip step 9).
+   With `PROVISIONING=true`: first `deploy.sh queues`, `site-ca.sh init`, `deploy.sh site`,
+   `set-site-key.sh <acc-prov-vm public key>`, and `GPU_NODES` and the links in `config.env`; then
+   `... provisioning` too.
 9. `infra/scripts/publish-frontend.sh`
 10. Google Cloud Console → the OAuth client: add the redirect URIs
     `https://APP_HOST.ZONE_NAME/api/auth/google/callback` and (Grafana)
@@ -242,6 +251,8 @@ The scripts are bash (Git Bash on Windows, or Linux/WSL) and need the AWS CLI v2
 | Start them again | `resume.sh` |
 | Move the database to RDS with its data | `DATA_MODE=rds` in `config.env`, then `switch-to-rds.sh` (RDS is created while the portal runs; then about 5 minutes down for the copy and the restart). Check the portal, then delete the old `<project>-data` stack |
 | Test on RDS | `DATA_MODE=rds smoke-test.sh --domain --keep` (RDS adds 15-25 minutes) |
+| Rotate the site key | `npm run keygen` at the site, `set-site-key.sh <new>,<old>`, switch the site to the new private key, then `set-site-key.sh <new>` |
+| Renew the site certificate (yearly) | `site-ca.sh issue`, copy `site.key` and `site.pem` to the site, restart acc-prov-vm (no AWS change) |
 | Long break | `destroy.sh edge web app` (keeps the zone, certificate, images and data) |
 | Remove everything (end of the course) | `teardown-all.sh` (and `--dns` for the zone) |
 

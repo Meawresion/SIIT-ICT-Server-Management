@@ -22,9 +22,14 @@ eval "$overrides"
 # programs it runs (aws, docker, node). set-secrets.sh hands them to one node process.
 SECRET_KEYS=(GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET SMTP_HOST SMTP_PORT SMTP_SECURE SMTP_USER SMTP_APP_PASSWORD MAIL_FROM MAIL_REPLY_TO)
 export -n "${SECRET_KEYS[@]}" 2>/dev/null || true
-for key in AWS_PROFILE AWS_REGION PROJECT ZONE_NAME APP_HOST ORIGIN_HOST ROLE_NAME DOCKER; do
+for key in AWS_PROFILE AWS_REGION PROJECT ZONE_NAME APP_HOST ORIGIN_HOST DOCKER; do
   if [ -z "${!key:-}" ]; then echo "Missing $key in $CONFIG" >&2; exit 1; fi
 done
+# Every name starts with PROJECT (in a shared account the scripts only touch what has the prefix).
+if ! [[ $PROJECT =~ ^[a-z][a-z0-9-]{1,18}[a-z0-9]$ ]]; then
+  echo "PROJECT must be 3-20 lowercase letters, digits or hyphens (it prefixes every name; ALB names max 32)" >&2
+  exit 1
+fi
 export AWS_DEFAULT_REGION="$AWS_REGION"
 # A config.env written for Git Bash (DOCKER="wsl.exe -d <distro> -- docker") also works from a WSL
 # shell, where Docker runs right here.
@@ -62,18 +67,19 @@ STACK_EVENTS="$PROJECT-events"
 STACK_PROVISIONING="$PROJECT-provisioning"
 STACK_IDENTITY="$PROJECT-identity"
 STACK_GRAFANA="$PROJECT-grafana"
+STACK_SITE="$PROJECT-site"
 
 # aws with text output and without the Windows carriage returns
 awst() { aws --output text "$@" | tr -d '\r'; }
 
 account_id() { awst sts get-caller-identity --query Account; }
-role_arn() { echo "arn:aws:iam::$(account_id):role/$ROLE_NAME"; }
 
 stack_output() {
   awst cloudformation describe-stacks --stack-name "$1" --query "Stacks[0].Outputs[?OutputKey=='$2'].OutputValue"
 }
 
-# deploy <stack> <template> [Key=Value ...]
+# deploy <stack> <template> [Key=Value ...]. The stacks make their own least-privilege roles,
+# named <project>-... (hence CAPABILITY_NAMED_IAM); the Project tag goes on every resource.
 deploy() {
   local stack=$1 template=$2
   shift 2
@@ -81,6 +87,7 @@ deploy() {
   if [ $# -gt 0 ]; then params=(--parameter-overrides "$@"); fi
   echo "== $stack ($template)"
   aws cloudformation deploy --stack-name "$stack" --template-file "$TEMPLATES/$template" \
+    --capabilities CAPABILITY_NAMED_IAM --tags "Project=$PROJECT" \
     --no-fail-on-empty-changeset "${params[@]}"
 }
 
@@ -131,8 +138,8 @@ docker_() { MSYS_NO_PATHCONV=1 $DOCKER "$@"; }
 # Kept between test runs: they run nothing and cost little or nothing while idle. platform holds the
 # ECR images (a run only uploads what changed); queues keeps the backend key and queue URLs that
 # acc-prov-vm is set up with (D33); logs holds the log groups, the audit trail and the alert topic.
-# Only teardown-all.sh deletes them.
-KEPT_STACKS=("$STACK_NETWORK" "$STACK_PLATFORM" "$STACK_QUEUES" "$STACK_LOGS")
+# site holds the site's Roles Anywhere access and public key. Only teardown-all.sh deletes them.
+KEPT_STACKS=("$STACK_NETWORK" "$STACK_PLATFORM" "$STACK_QUEUES" "$STACK_LOGS" "$STACK_SITE")
 
 # The data, app and web stacks write to the logs stack's log groups, so it must exist first.
 require_logs_stack() {
@@ -174,7 +181,7 @@ delete_stacks() {
     fi
   done
   # The rds stack imports from the data stack while switch-to-rds.sh copies, so it goes first.
-  for wave in "$STACK_EDGE $STACK_WEB $STACK_GRAFANA $STACK_PROVISIONING $STACK_IDENTITY" "$STACK_APP" "$STACK_EVENTS $STACK_DATA_RDS" \
+  for wave in "$STACK_EDGE $STACK_WEB $STACK_GRAFANA $STACK_PROVISIONING $STACK_IDENTITY" "$STACK_APP" "$STACK_EVENTS $STACK_DATA_RDS $STACK_SITE" \
     "$STACK_QUEUES $STACK_DATA_ECS $STACK_SECRETS" \
     "$STACK_PLATFORM $STACK_CERT $STACK_LOGS" "$STACK_NETWORK $STACK_DNS"; do
     pids=()
@@ -217,7 +224,7 @@ leftovers() {
   if [[ $allowed != *" $STACK_NETWORK "* ]]; then
     check "VPCs" ec2 describe-vpcs --filters "Name=tag:Name,Values=$PROJECT-vpc" --query 'Vpcs[].VpcId'
   fi
-  check "load balancers" elbv2 describe-load-balancers --query 'LoadBalancers[].LoadBalancerName'
+  check "load balancers" elbv2 describe-load-balancers --query "LoadBalancers[?starts_with(LoadBalancerName,'$PROJECT-')].LoadBalancerName"
   check "EFS file systems" efs describe-file-systems --query "FileSystems[?Name=='$PROJECT-mysql-data'].FileSystemId"
   # (A deleted RDS instance's automated backups stay until they expire: on purpose, not listed.)
   check "RDS instances" rds describe-db-instances \
@@ -249,6 +256,18 @@ leftovers() {
   # Secrets of the kept stacks (the queues stack holds the backend message key) are allowed.
   check "secrets (incl. pending deletion)" secretsmanager list-secrets --include-planned-deletion \
     --query "SecretList[?starts_with(Description,'$PROJECT ') && !contains([${skip%,}], Tags[?Key=='aws:cloudformation:stack-name'] | [0].Value || '')].[Name,DeletedDate]"
+  # The roles and parameters of the kept stacks (queues: key generator, backend key; site) may stay.
+  local kept_roles="''" kept_params="''"
+  [[ $allowed == *" $STACK_QUEUES "* ]] && kept_roles+=",'$PROJECT-message-keys-fn'" && kept_params+=",'/$PROJECT/backend-public-key'"
+  [[ $allowed == *" $STACK_SITE "* ]] && kept_roles+=",'$PROJECT-site'" && kept_params+=",'/$PROJECT/site-public-keys'"
+  check "IAM roles" iam list-roles --query "Roles[?starts_with(RoleName,'$PROJECT-') && !contains([$kept_roles], RoleName)].RoleName"
+  check "SSM parameters" ssm describe-parameters --parameter-filters "Key=Name,Option=BeginsWith,Values=/$PROJECT/" \
+    --query "Parameters[?!contains([$kept_params], Name)].Name"
+  if [[ $allowed != *" $STACK_SITE "* ]]; then
+    check "Roles Anywhere trust anchors" rolesanywhere list-trust-anchors --query "trustAnchors[?starts_with(name,'$PROJECT-')].name"
+  fi
+  check "CloudFront distributions" cloudfront list-distributions \
+    --query "DistributionList.Items[?Comment=='$PROJECT resource portal'].Id"
   if [ "$found" = 0 ]; then echo "Nothing left behind${1:+ (kept: $*)}."; else echo "Something is left behind (above)."; return 1; fi
 }
 

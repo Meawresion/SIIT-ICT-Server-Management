@@ -1,8 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: >-
-  VPC across two Availability Zones. Public subnets hold the ALB and the ECS tasks (public IPs,
-  egress through the internet gateway, no NAT gateway, S7). Private subnets have no route to the
-  internet; they hold the EFS mount targets now and RDS later.
+Description: 'VPC in two AZs: public subnets (ALB, tasks; no NAT) and private subnets (database).'
 
 Parameters:
   Project:
@@ -23,7 +20,6 @@ Resources:
     Type: AWS::EC2::VPC
     Properties:
       CidrBlock: !Ref VpcCidr
-      # EFS mount target and load balancer names resolve through the VPC DNS.
       EnableDnsSupport: true
       EnableDnsHostnames: true
       Tags:
@@ -103,7 +99,6 @@ Resources:
       Tags:
         - Key: Name
           Value: !Sub '${Project}-private-b'
-  # Only the local VPC route: nothing in the private subnets reaches the internet.
   PrivateRouteTable:
     Type: AWS::EC2::RouteTable
     Properties:

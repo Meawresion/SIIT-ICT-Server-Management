@@ -44,3 +44,6 @@ Thumbs.db
 
 # Infra settings for this machine (infra/config.example.env is the template)
 infra/config.env
+# Another account: CONFIG=infra/config.<name>.env (it can source config.env and override values)
+infra/config.*.env
+!infra/config.example.env

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Deploys stacks in order. Usage: deploy.sh all | <stack>...   (dns cert network platform logs data secrets queues events app identity provisioning grafana edge web)
+# Deploys stacks in order. Usage: deploy.sh all | <stack>...   (dns cert network platform logs data secrets queues site events app identity provisioning grafana edge web)
 # First time: dns, then the NS records at the parent domain, then the rest (see infra/README.md).
 # The frontend comes from edge (CloudFront + S3) or web (ECS behind the ALB, direct mode).
 . "$(dirname "$0")/lib.sh"
@@ -31,14 +31,13 @@ deploy_logs() {
 }
 
 deploy_data() {
-  local tag role
+  local tag
   require_logs_stack
   tag=$(mysql_tag)
-  role=$(role_arn)
   require_image "$PROJECT-mysql" "$tag"
-  if [ "$DATA_MODE" = rds ]; then deploy_rds "$tag" "$role"; return; fi
+  if [ "$DATA_MODE" = rds ]; then deploy_rds "$tag"; return; fi
   deploy "$STACK_DATA" data-ecs.yaml "Project=$PROJECT" "NetworkStack=$STACK_NETWORK" \
-    "PlatformStack=$STACK_PLATFORM" "ImageTag=$tag" "ExecutionRoleArn=$role" "TaskRoleArn=$role" \
+    "PlatformStack=$STACK_PLATFORM" "ImageTag=$tag" \
     "DesiredCount=${DB_DESIRED_COUNT:-1}" "LogsStack=$STACK_LOGS"
 }
 
@@ -64,7 +63,7 @@ deploy_rds() {
     echo "(creating RDS takes 15-25 minutes, longer with Multi-AZ: the standby is built in the second AZ)"
   fi
   deploy "$STACK_DATA_RDS" data-rds.yaml "Project=$PROJECT" "NetworkStack=$STACK_NETWORK" \
-    "PlatformStack=$STACK_PLATFORM" "LogsStack=$STACK_LOGS" "ImageTag=$1" "ExecutionRoleArn=$2" "TaskRoleArn=$2" \
+    "PlatformStack=$STACK_PLATFORM" "LogsStack=$STACK_LOGS" "ImageTag=$1" \
     "InstanceClass=${DB_INSTANCE_CLASS:-db.t3.micro}" "MultiAz=${DB_MULTI_AZ:-true}" \
     "BackupRetentionDays=${DB_BACKUP_DAYS:-7}" "CopyFromStack=$copy_from" "${restore[@]}"
   echo "== preparing the database (rds-init.sh${copy_from:+, copy from $copy_from})"
@@ -72,8 +71,42 @@ deploy_rds() {
 }
 
 deploy_queues() {
-  deploy "$STACK_QUEUES" queues.yaml "Project=$PROJECT" "LambdaRoleArn=$(role_arn)" "KeyGeneration=${MESSAGE_KEY_GENERATION:-1}"
-  echo "Backend public key (acc-prov-vm's MSG_PEER_PUBLIC_KEYS): $(stack_output "$STACK_QUEUES" BackendPublicKey)"
+  deploy "$STACK_QUEUES" queues.yaml "Project=$PROJECT" "KeyGeneration=${MESSAGE_KEY_GENERATION:-1}"
+  echo "Backend public key: SSM $(stack_output "$STACK_QUEUES" BackendPublicKeyParameter) (acc-prov-vm's MSG_PEER_PUBLIC_KEYS_PARAM)"
+}
+
+# acc-prov-vm's access (IAM Roles Anywhere with the project's own CA, site-ca.sh) and its public key
+# (SSM, set-site-key.sh). Kept between test runs.
+deploy_site() {
+  local dir=${SITE_CA_DIR:-$HOME/.siit-site-ca/$PROJECT}
+  if [ ! -f "$dir/ca.pem" ]; then echo "No site CA in $dir: run site-ca.sh init first." >&2; exit 1; fi
+  if ! aws cloudformation describe-stacks --stack-name "$STACK_QUEUES" >/dev/null 2>&1; then
+    echo "The $STACK_QUEUES stack is missing: run deploy.sh queues first." >&2
+    exit 1
+  fi
+  deploy "$STACK_SITE" site.yaml "Project=$PROJECT" "QueuesStack=$STACK_QUEUES" "CaCertificate=$(cat "$dir/ca.pem")"
+  echo "For acc-prov-vm (its README, Roles Anywhere):"
+  for key in TrustAnchorArn ProfileArn RoleArn; do echo "  $key=$(stack_output "$STACK_SITE" "$key")"; done
+  echo "  MSG_PEER_PUBLIC_KEYS_PARAM=$(stack_output "$STACK_QUEUES" BackendPublicKeyParameter)"
+  echo "  SQS_REQUEST_QUEUE_URL=$(stack_output "$STACK_QUEUES" RequestQueueUrl)"
+  echo "  SQS_RESULT_QUEUE_URL=$(stack_output "$STACK_QUEUES" ResultQueueUrl)"
+}
+
+# The provisioning service reads acc-prov-vm's public keys from SITE_PUBLIC_KEYS (text: smoke tests)
+# or else from the site stack's SSM parameter (set-site-key.sh). Prints the parameter's name.
+site_keys_parameter() {
+  local name value
+  name=$(stack_output "$STACK_SITE" SiteKeysParameter 2>/dev/null) || true
+  if [ -z "$name" ] || [ "$name" = None ]; then
+    echo "PROVISIONING=true needs SITE_PUBLIC_KEYS or the $STACK_SITE stack (deploy.sh site, set-site-key.sh)." >&2
+    return 1
+  fi
+  value=$(MSYS_NO_PATHCONV=1 awst ssm get-parameter --name "$name" --query Parameter.Value)
+  if [ "$value" = not-set ]; then
+    echo "The site's public key isn't set yet: set-site-key.sh <the public line of acc-prov-vm's npm run keygen>." >&2
+    return 1
+  fi
+  echo "$name"
 }
 
 deploy_secrets() {
@@ -93,19 +126,20 @@ deploy_events() {
     exit 1
   fi
   deploy "$STACK_EVENTS" events.yaml "Project=$PROJECT" "PlatformStack=$STACK_PLATFORM" "LogsStack=$STACK_LOGS" \
-    "NotificationImageTag=$tag" "LambdaRoleArn=$(role_arn)" "MailSecretArn=$mail" \
+    "NotificationImageTag=$tag" "MailSecretArn=$mail" \
     "AllowedRecipientDomains=$STUDENT_EMAIL_DOMAIN,$STAFF_EMAIL_DOMAINS"
 }
 
 # The provisioning service (D34): site jobs and results, scheduler, audit shipping.
 deploy_provisioning() {
-  local tag role provisioning=()
+  local tag provisioning=()
   require_logs_stack
   tag=$(backend_tag)
-  role=$(role_arn)
   require_image "$PROJECT-backend" "$tag"
   if [ "$PROVISIONING" = true ]; then
-    provisioning=("QueuesStack=$STACK_QUEUES" "SitePublicKeys=$SITE_PUBLIC_KEYS" "GpuNodes=$GPU_NODES"
+    local keys_parameter=''
+    if [ -z "${SITE_PUBLIC_KEYS:-}" ]; then keys_parameter=$(site_keys_parameter) || exit 1; fi
+    provisioning=("QueuesStack=$STACK_QUEUES" "SitePublicKeys=${SITE_PUBLIC_KEYS:-}" "SiteKeysParameter=$keys_parameter" "GpuNodes=$GPU_NODES"
       "OvpnProfileUrl=$OVPN_PROFILE_URL" "ManualGpuUrl=$MANUAL_GPU_URL"
       "ManualBigDataUrl=$MANUAL_BIGDATA_URL" "MessageJobTtlSeconds=${MSG_JOB_TTL_SEC:-259200}"
       "SiteHeartbeatMinutes=${SITE_HEARTBEAT_MINUTES:-15}" "QueueWaitMinutes=${SITE_QUEUE_WAIT_MINUTES:-5}")
@@ -114,7 +148,7 @@ deploy_provisioning() {
   fi
   deploy "$STACK_PROVISIONING" provisioning.yaml "Project=$PROJECT" "NetworkStack=$STACK_NETWORK" \
     "PlatformStack=$STACK_PLATFORM" "DataStack=$STACK_DATA" "AppStack=$STACK_APP" "LogsStack=$STACK_LOGS" \
-    "EventsStack=$STACK_EVENTS" "ImageTag=$tag" "ExecutionRoleArn=$role" "TaskRoleArn=$role" \
+    "EventsStack=$STACK_EVENTS" "ImageTag=$tag" \
     "DesiredCount=${PROVISIONING_DESIRED_COUNT:-1}" \
     "StudentEmailDomain=$STUDENT_EMAIL_DOMAIN" "StudentIdDigits=$STUDENT_ID_DIGITS" \
     "DegreeEmailPrefixes=$DEGREE_EMAIL_PREFIXES" "StaffEmailDomains=$STAFF_EMAIL_DOMAINS" \
@@ -125,10 +159,9 @@ deploy_provisioning() {
 
 # The identity service (D34): sign-in and profiles, behind the app stack's ALB.
 deploy_identity() {
-  local tag role google origin=''
+  local tag google origin=''
   require_logs_stack
   tag=$(backend_tag)
-  role=$(role_arn)
   require_image "$PROJECT-backend" "$tag"
   google=$(stack_output "$STACK_SECRETS" GoogleSecretArn 2>/dev/null) || true
   if [ -z "$google" ] || [ "$google" = None ]; then
@@ -138,7 +171,7 @@ deploy_identity() {
   if [ "$ENTRY_MODE" = cloudfront ]; then origin=$(stack_output "$STACK_APP" OriginVerifySecretArn); fi
   deploy "$STACK_IDENTITY" identity.yaml "Project=$PROJECT" "NetworkStack=$STACK_NETWORK" \
     "PlatformStack=$STACK_PLATFORM" "DataStack=$STACK_DATA" "AppStack=$STACK_APP" "LogsStack=$STACK_LOGS" \
-    "ImageTag=$tag" "ExecutionRoleArn=$role" "TaskRoleArn=$role" "GoogleSecretArn=$google" \
+    "ImageTag=$tag" "GoogleSecretArn=$google" \
     "OriginVerifySecretArn=$origin" "DesiredCount=${IDENTITY_DESIRED_COUNT:-1}" \
     "StudentEmailDomain=$STUDENT_EMAIL_DOMAIN" "StudentIdDigits=$STUDENT_ID_DIGITS" \
     "DegreeEmailPrefixes=$DEGREE_EMAIL_PREFIXES" "StaffEmailDomains=$STAFF_EMAIL_DOMAINS" \
@@ -148,10 +181,9 @@ deploy_identity() {
 }
 
 deploy_app() {
-  local tag role prefix_list='' dns_stack='' cert_stack='' provisioning=()
+  local tag prefix_list='' dns_stack='' cert_stack='' provisioning=()
   require_logs_stack
   tag=$(backend_tag)
-  role=$(role_arn)
   require_image "$PROJECT-backend" "$tag"
   if ! aws cloudformation describe-stacks --stack-name "$STACK_EVENTS" >/dev/null 2>&1; then
     echo "The $STACK_EVENTS stack is missing: run deploy.sh events first." >&2
@@ -167,7 +199,7 @@ deploy_app() {
       --query 'PrefixLists[0].PrefixListId')
   fi
   if [ "$PROVISIONING" = true ]; then
-    for key in SITE_PUBLIC_KEYS GPU_NODES OVPN_PROFILE_URL MANUAL_GPU_URL MANUAL_BIGDATA_URL; do
+    for key in GPU_NODES OVPN_PROFILE_URL MANUAL_GPU_URL MANUAL_BIGDATA_URL; do
       if [ -z "${!key:-}" ]; then echo "PROVISIONING=true needs $key in $CONFIG" >&2; exit 1; fi
     done
     provisioning=("QueuesStack=$STACK_QUEUES" "GpuNodes=$GPU_NODES" "OvpnProfileUrl=$OVPN_PROFILE_URL"
@@ -178,7 +210,7 @@ deploy_app() {
   deploy "$STACK_APP" app.yaml "Project=$PROJECT" "NetworkStack=$STACK_NETWORK" \
     "PlatformStack=$STACK_PLATFORM" "DataStack=$STACK_DATA" "EntryMode=$ENTRY_MODE" \
     "DnsStack=$dns_stack" "CertStack=$cert_stack" \
-    "ImageTag=$tag" "ExecutionRoleArn=$role" "TaskRoleArn=$role" "EventsStack=$STACK_EVENTS" \
+    "ImageTag=$tag" "EventsStack=$STACK_EVENTS" \
     "CloudFrontPrefixListId=$prefix_list" "AppHost=$APP_HOST" "OriginHost=$ORIGIN_HOST" \
     "DesiredCount=${BACKEND_DESIRED_COUNT:-1}" \
     "StudentEmailDomain=$STUDENT_EMAIL_DOMAIN" "StudentIdDigits=$STUDENT_ID_DIGITS" \
@@ -223,7 +255,7 @@ deploy_grafana() {
   if [ "$ENTRY_MODE" = cloudfront ]; then origin=$(stack_output "$STACK_APP" OriginVerifySecretArn); fi
   deploy "$STACK_GRAFANA" grafana.yaml "Project=$PROJECT" "NetworkStack=$STACK_NETWORK" \
     "PlatformStack=$STACK_PLATFORM" "AppStack=$STACK_APP" "LogsStack=$STACK_LOGS" "ImageTag=$tag" \
-    "ExecutionRoleArn=$(role_arn)" "TaskRoleArn=$(role_arn)" "GoogleSecretArn=$google" \
+    "GoogleSecretArn=$google" \
     "OriginVerifySecretArn=$origin" "SignInRule=$rule" \
     "DesiredCount=${GRAFANA_DESIRED_COUNT:-1}"
   echo "Grafana: $(stack_output "$STACK_APP" PublicUrl)/grafana/ (Google sign-in: ${GRAFANA_ALLOWED_EMAILS:-off, admin only})"
@@ -240,7 +272,7 @@ deploy_web() {
   require_image "$PROJECT-frontend" "$tag"
   deploy "$STACK_WEB" web.yaml "Project=$PROJECT" "NetworkStack=$STACK_NETWORK" \
     "PlatformStack=$STACK_PLATFORM" "AppStack=$STACK_APP" "ImageTag=$tag" \
-    "ExecutionRoleArn=$(role_arn)" "DesiredCount=${FRONTEND_DESIRED_COUNT:-1}" "LogsStack=$STACK_LOGS"
+    "DesiredCount=${FRONTEND_DESIRED_COUNT:-1}" "LogsStack=$STACK_LOGS"
   echo "Portal: $(stack_output "$STACK_APP" PublicUrl)"
 }
 
@@ -254,17 +286,17 @@ deploy_edge() {
   echo "Portal: $(stack_output "$STACK_EDGE" AppUrl) (publish the frontend with publish-frontend.sh)"
 }
 
-[ $# -gt 0 ] || { echo "Usage: $0 all | dns cert network platform logs data secrets queues events app identity provisioning grafana edge web" >&2; exit 1; }
+[ $# -gt 0 ] || { echo "Usage: $0 all | dns cert network platform logs data secrets queues site events app identity provisioning grafana edge web" >&2; exit 1; }
 if [ "$1" = all ]; then
   set -- network platform logs data secrets
-  if [ "$PROVISIONING" = true ]; then set -- "$@" queues; fi
+  if [ "$PROVISIONING" = true ]; then set -- "$@" queues site; fi
   set -- "$@" events app identity provisioning grafana
   if [ "$USE_DOMAIN" = true ]; then set -- dns cert "$@"; fi
   if [ "$ENTRY_MODE" = cloudfront ]; then set -- "$@" edge; else set -- "$@" web; fi
 fi
 for stack in "$@"; do
   case $stack in
-    dns|cert|network|platform|logs|data|secrets|queues|events|app|identity|provisioning|grafana|edge|web) "deploy_$stack" ;;
+    dns|cert|network|platform|logs|data|secrets|queues|site|events|app|identity|provisioning|grafana|edge|web) "deploy_$stack" ;;
     *) echo "Unknown stack: $stack" >&2; exit 1 ;;
   esac
 done
