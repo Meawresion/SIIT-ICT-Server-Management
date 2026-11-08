@@ -302,24 +302,27 @@ store and Chromium live in `/var/lib/acc-prov-vm`.
    sudo npx playwright install-deps chromium
    sudo -u accprov env PLAYWRIGHT_BROWSERS_PATH=/var/lib/acc-prov-vm/ms-playwright npx playwright install chromium
    ```
-3. Settings. Fill them in as in [Setup](#setup):
+3. Settings. Run these from `/opt/siit/acc-prov-vm`, then fill them in as in [Setup](#setup):
    ```bash
+   cd /opt/siit/acc-prov-vm
    sudo cp .env.example /etc/acc-prov-vm/acc-prov-vm.env
    sudo cp gpu-nodes.example.json /etc/acc-prov-vm/gpu-nodes.json
    sudo cp bigdata.example.json /etc/acc-prov-vm/bigdata.json
-   sudo chown root:accprov /etc/acc-prov-vm/*
-   sudo chmod 640 /etc/acc-prov-vm/*
+   # The example has paths relative to the code folder; at the site the files are in /etc/acc-prov-vm.
+   sudo sed -i -e 's|^GPU_NODES_FILE=.*|GPU_NODES_FILE=/etc/acc-prov-vm/gpu-nodes.json|' \
+     -e 's|^BIGDATA_FILE=.*|BIGDATA_FILE=/etc/acc-prov-vm/bigdata.json|' /etc/acc-prov-vm/acc-prov-vm.env
+   # Files only: a folder in here (ssh/, site/) must keep mode 750, or accprov can't enter it.
+   sudo find /etc/acc-prov-vm -maxdepth 1 -type f -exec chown root:accprov {} + -exec chmod 640 {} +
+   # The npm scripts read .env in the code folder.
+   sudo ln -sf /etc/acc-prov-vm/acc-prov-vm.env /opt/siit/acc-prov-vm/.env
    sudoedit /etc/acc-prov-vm/acc-prov-vm.env
    ```
-   - Paths in the settings file must be absolute: `GPU_NODES_FILE=/etc/acc-prov-vm/gpu-nodes.json`
-     and `BIGDATA_FILE=/etc/acc-prov-vm/bigdata.json`.
-   - An SSH key goes in `/etc/acc-prov-vm/ssh/`, owned `root:accprov`, mode 640.
+   - `GPU_NODES_FILE` and `BIGDATA_FILE` must stay absolute paths: a relative one is looked up in
+     the folder the command runs in (`cannot read GPU_NODES_FILE /opt/siit/acc-prov-vm/...`).
+   - An SSH key goes in `/etc/acc-prov-vm/ssh/`: the folder `root:accprov` mode 750, the key 640.
    - `JOB_STORE_FILE` is set by the unit (`/var/lib/acc-prov-vm/jobs.json`).
    - Leave the `AWS_*` keys out of this file (step 6 sets up the AWS access); `AWS_REGION` stays.
-   - The npm scripts read `.env` in the code folder, so link it there:
-     ```bash
-     sudo ln -s /etc/acc-prov-vm/acc-prov-vm.env /opt/siit/acc-prov-vm/.env
-     ```
+   - `node: .env: not found` from an npm script means the link above is missing.
 4. Message keys and queues:
    - `sudo -u accprov npm run keygen -- site-YYYY-MM`. The private line goes in the settings file
      (`MSG_PRIVATE_KEY`). The public line goes to the portal admin, who runs
@@ -327,11 +330,12 @@ store and Chromium live in `/var/lib/acc-prov-vm`.
    - Set `MESSAGE_TRANSPORT=sqs`, the two queue URLs and `MSG_PEER_PUBLIC_KEYS_PARAM` (the backend's
      public key in SSM, read at start) as `deploy.sh site` prints them. Leave `MSG_PEER_PUBLIC_KEYS`
      empty (it would win over the parameter).
-5. Check the settings:
+5. Check the settings (from the code folder):
    ```bash
+   cd /opt/siit/acc-prov-vm
    sudo -u accprov env PLAYWRIGHT_BROWSERS_PATH=/var/lib/acc-prov-vm/ms-playwright npm run check:config
    ```
-   It lists the GPU and Hadoop nodes.
+   It prints `config OK` with the GPU and Hadoop nodes.
 6. AWS access with IAM Roles Anywhere (no keys to paste or renew). The portal admin runs
    `site-ca.sh issue` and gives you `site.key` and `site.pem` (over SSH, never by email), and the
    three ARNs that `deploy.sh site` prints:
