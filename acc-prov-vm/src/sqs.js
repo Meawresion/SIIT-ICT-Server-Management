@@ -10,7 +10,18 @@
 // Message bodies are envelope strings (src/envelope.js); this layer never sees plaintext payloads.
 
 import { ChangeMessageVisibilityCommand, DeleteMessageCommand, ReceiveMessageCommand, SendMessageCommand, SQSClient } from '@aws-sdk/client-sqs';
+import { GetParameterCommand, SSMClient } from '@aws-sdk/client-ssm';
 import { PoisonMessageError } from './errors.js';
+
+// The backend's public key bundles from SSM (the queues stack writes them; the site role may read
+// only that parameter). client: an SSMClient (tests pass a stub).
+export async function readPeerPublicKeys({ region }, name, { log = () => {}, client = new SSMClient({ region }) } = {}) {
+  const { Parameter } = await client.send(new GetParameterCommand({ Name: name }));
+  const value = Parameter?.Value ?? '';
+  if (!value) throw new Error(`SSM parameter ${name} is empty`);
+  log('peer_keys.loaded', { parameter: name, kids: value.split(',').map((b) => b.trim().split('.')[0]) });
+  return value;
+}
 
 export class SqsConnection {
   #client;

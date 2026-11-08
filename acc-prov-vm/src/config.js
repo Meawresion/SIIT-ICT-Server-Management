@@ -60,10 +60,17 @@ export function loadMailConfig(env = process.env) {
 // Worker behaviour and message keys (D22).
 export function loadWorkerConfig(env = process.env) {
   requireEnv(env, [
-    'MESSAGE_TRANSPORT', 'MSG_PRIVATE_KEY', 'MSG_PEER_PUBLIC_KEYS', 'MSG_MAX_TTL_SEC', 'MSG_RESULT_TTL_SEC',
+    'MESSAGE_TRANSPORT', 'MSG_PRIVATE_KEY', 'MSG_MAX_TTL_SEC', 'MSG_RESULT_TTL_SEC',
     'WORKER_MAX_ATTEMPTS', 'JOB_STORE_FILE', 'PASSWORD_LENGTH', 'PFSENSE_ENABLED',
   ]);
   if (!['amqp', 'sqs'].includes(env.MESSAGE_TRANSPORT)) throw new Error('MESSAGE_TRANSPORT must be amqp or sqs');
+  // The backend's public keys: as text, or (sqs) the queues stack's SSM parameter, read at start.
+  const peerPublicKeysParam = env.MSG_PEER_PUBLIC_KEYS ? '' : (env.MSG_PEER_PUBLIC_KEYS_PARAM ?? '');
+  if (!env.MSG_PEER_PUBLIC_KEYS && !peerPublicKeysParam) throw new Error('MSG_PEER_PUBLIC_KEYS or MSG_PEER_PUBLIC_KEYS_PARAM is required');
+  if (peerPublicKeysParam) {
+    if (env.MESSAGE_TRANSPORT !== 'sqs') throw new Error('MSG_PEER_PUBLIC_KEYS_PARAM needs MESSAGE_TRANSPORT=sqs (AWS)');
+    if (!/^(\/[A-Za-z0-9_.-]+)+$/.test(peerPublicKeysParam)) throw new Error('MSG_PEER_PUBLIC_KEYS_PARAM must be an SSM parameter name like /project/backend-public-key');
+  }
   const int = (k, min) => {
     const n = Number(env[k]);
     if (!Number.isInteger(n) || n < min) throw new Error(`${k} must be an integer >= ${min}`);
@@ -78,7 +85,8 @@ export function loadWorkerConfig(env = process.env) {
   return {
     transport: env.MESSAGE_TRANSPORT,
     privateKey: env.MSG_PRIVATE_KEY,
-    peerPublicKeys: env.MSG_PEER_PUBLIC_KEYS,
+    peerPublicKeys: env.MSG_PEER_PUBLIC_KEYS ?? '',
+    peerPublicKeysParam,
     maxTtlSec: int('MSG_MAX_TTL_SEC', 60),
     resultTtlSec: int('MSG_RESULT_TTL_SEC', 60),
     maxAttempts: int('WORKER_MAX_ATTEMPTS', 1),

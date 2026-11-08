@@ -3,7 +3,9 @@
 #   /opt/siit                         the repository (root-owned; the service can't change code)
 #   /etc/acc-prov-vm/acc-prov-vm.env  settings and credentials (root:accprov 0640)
 #   /etc/acc-prov-vm/*.json           gpu-nodes.json, bigdata.json (root:accprov 0640)
-#   /etc/acc-prov-vm/aws.env          Learner Lab session keys (root 0600, set-aws-creds.sh)
+#   /etc/acc-prov-vm/aws-config       AWS access: IAM Roles Anywhere (credential_process, README)
+#   /etc/acc-prov-vm/site/            the site certificate and key for it (root:accprov 0640)
+#   /etc/acc-prov-vm/aws.env          only on Learner Lab: session keys (root 0600, set-aws-creds.sh)
 #   /var/lib/acc-prov-vm              the job store and Playwright's Chromium (the service's home)
 [Unit]
 Description=acc-prov-vm: creates and revokes SIIT resource accounts for the portal
@@ -17,7 +19,9 @@ User=accprov
 Group=accprov
 WorkingDirectory=/opt/siit/acc-prov-vm
 # Values set here win over the env file (node --env-file never overrides the environment).
-# Learner Lab session keys; optional (with the full AWS account: IAM Roles Anywhere instead).
+# AWS access: aws-config runs aws_signing_helper (IAM Roles Anywhere), which renews the
+# credentials by itself. Learner Lab session keys (aws.env) would win over it; leave it out.
+Environment=AWS_CONFIG_FILE=/etc/acc-prov-vm/aws-config
 EnvironmentFile=-/etc/acc-prov-vm/aws.env
 Environment=PLAYWRIGHT_BROWSERS_PATH=/var/lib/acc-prov-vm/ms-playwright
 Environment=JOB_STORE_FILE=/var/lib/acc-prov-vm/jobs.json

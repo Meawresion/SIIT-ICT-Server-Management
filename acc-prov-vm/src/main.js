@@ -16,7 +16,7 @@ import { siteTargets, startHeartbeat } from './heartbeat.js';
 import { generatePassword } from './password.js';
 import { renderPasswordImage } from './password-image.js';
 import { withPfSense } from './pfsense.js';
-import { SqsConnection } from './sqs.js';
+import { readPeerPublicKeys, SqsConnection } from './sqs.js';
 import { createWorker } from './worker.js';
 
 const log = (event, fields = {}) => console.log(JSON.stringify({ ts: new Date().toISOString(), event, ...fields }));
@@ -40,7 +40,9 @@ async function withSsh(connect, fn) {
   }
 }
 const me = parsePrivateBundle(cfg.privateKey);
-const peers = parsePublicBundles(cfg.peerPublicKeys);
+const peers = parsePublicBundles(cfg.peerPublicKeysParam
+  ? await readPeerPublicKeys(queues, cfg.peerPublicKeysParam, { log })
+  : cfg.peerPublicKeys);
 
 const handlers = createJobHandlers({
   pfsenseEnabled: cfg.pfsenseEnabled,
