@@ -1,0 +1,92 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'On-premises site access: IAM Roles Anywhere trust anchor (own CA), profile and role; site public key in SSM.'
+
+Parameters:
+  Project:
+    Type: String
+  QueuesStack:
+    Type: String
+  CaCertificate:
+    Type: String
+    Description: Site CA certificate (PEM)
+  SessionSeconds:
+    Type: Number
+    Default: 3600
+    MinValue: 900
+    MaxValue: 3600
+    Description: Session duration
+
+Resources:
+  TrustAnchor:
+    Type: AWS::RolesAnywhere::TrustAnchor
+    Properties:
+      Name: !Sub '${Project}-site-ca'
+      Enabled: true
+      Source:
+        SourceType: CERTIFICATE_BUNDLE
+        SourceData:
+          X509CertificateData: !Ref CaCertificate
+
+  SiteRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${Project}-site'
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: {Service: rolesanywhere.amazonaws.com}
+            Action: [sts:AssumeRole, sts:TagSession, sts:SetSourceIdentity]
+            Condition:
+              ArnEquals:
+                aws:SourceArn: !GetAtt TrustAnchor.TrustAnchorArn
+              StringEquals:
+                aws:PrincipalTag/x509Subject/CN: !Sub '${Project}-site'
+      Policies:
+        - PolicyName: site-queues
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: [sqs:ReceiveMessage, sqs:DeleteMessage, sqs:ChangeMessageVisibility]
+                Resource:
+                  Fn::ImportValue: !Sub '${QueuesStack}-RequestQueueArn'
+              - Effect: Allow
+                Action: sqs:SendMessage
+                Resource:
+                  Fn::ImportValue: !Sub '${QueuesStack}-ResultQueueArn'
+              - Effect: Allow
+                Action: ssm:GetParameter
+                Resource: !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${Project}/backend-public-key'
+
+  Profile:
+    Type: AWS::RolesAnywhere::Profile
+    Properties:
+      Name: !Sub '${Project}-site'
+      Enabled: true
+      RoleArns: [!GetAtt SiteRole.Arn]
+      DurationSeconds: !Ref SessionSeconds
+
+  SiteKeysParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/${Project}/site-public-keys'
+      Type: String
+      Tier: Standard
+      Description: Site public message keys
+      Value: not-set
+
+Outputs:
+  TrustAnchorArn:
+    Value: !GetAtt TrustAnchor.TrustAnchorArn
+  ProfileArn:
+    Value: !GetAtt Profile.ProfileArn
+  RoleArn:
+    Value: !GetAtt SiteRole.Arn
+  CertificateCommonName:
+    Value: !Sub '${Project}-site'
+  SiteKeysParameter:
+    Value: !Ref SiteKeysParameter
+    Export:
+      Name: !Sub '${AWS::StackName}-SiteKeysParameter'

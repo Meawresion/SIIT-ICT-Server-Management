@@ -11,9 +11,11 @@
 # deletes them. Don't run this while the real acc-prov-vm is connected to the queues: it would take
 # the test jobs, which are sealed for the throwaway site key, and dead-letter them.
 #
-# Usage: smoke-test.sh [--domain] [--keep | --teardown]
+# Usage: smoke-test.sh [--domain | --cloudfront] [--keep | --teardown]
 #   --domain: deploy on APP_HOST.ZONE_NAME with the certificate (the dns and cert stacks must exist),
 #             so HTTPS and the HTTP -> HTTPS redirect are checked too
+#   --cloudfront: like --domain, but the portal is CloudFront + S3 (edge stack) in front of the
+#             ALB instead of the web stack (accounts with CloudFront)
 #   --keep: leave the test stacks running (delete them later with --teardown)
 #   --teardown: only delete the test stacks and check (after a run that was killed hard)
 # DATA_MODE=rds smoke-test.sh ... tests on RDS Multi-AZ instead of the ECS MySQL (D31; creating
@@ -24,22 +26,23 @@ read -r SITE_PRIVATE_KEY SITE_PUBLIC_KEYS < <(node --input-type=module -e "
   const { generateKeyBundle } = await import(pathToFileURL(resolve(process.argv[1])));
   const k = generateKeyBundle('smoke-site'); console.log(k.privateBundle, k.publicBundle);" \
   "$(dirname "$0")/../../backend/src/messaging/envelope.js")
-USE_DOMAIN=false keep=false teardown_only=false
+USE_DOMAIN=false ENTRY_MODE=direct keep=false teardown_only=false
 for arg in "$@"; do
   case $arg in
     --domain) USE_DOMAIN=true ;;
+    --cloudfront) USE_DOMAIN=true ENTRY_MODE=cloudfront ;;
     --keep) keep=true ;;
     --teardown) teardown_only=true ;;
-    *) echo "Usage: $0 [--domain] [--keep | --teardown]" >&2; exit 1 ;;
+    *) echo "Usage: $0 [--domain | --cloudfront] [--keep | --teardown]" >&2; exit 1 ;;
   esac
 done
 # SITE_HEARTBEAT_MINUTES=0: no heartbeat alarm (the fake site runs only for a few minutes).
-export ENTRY_MODE=direct USE_DOMAIN PROVISIONING=true SITE_PUBLIC_KEYS GPU_NODES=smoke-node SITE_HEARTBEAT_MINUTES=0 \
+export ENTRY_MODE USE_DOMAIN PROVISIONING=true SITE_PUBLIC_KEYS GPU_NODES=smoke-node SITE_HEARTBEAT_MINUTES=0 \
   OVPN_PROFILE_URL=https://example.com/smoke-ovpn MANUAL_GPU_URL=https://example.com/smoke-manual MANUAL_BIGDATA_URL=https://example.com/smoke-bigdata SCHEDULER_INTERVAL_SEC=30
 . "$(dirname "$0")/lib.sh"
 SCRIPTS="$(dirname "$0")"
 # What this run deletes at the end. Never the kept stacks.
-TEST_STACKS=("$STACK_WEB" "$STACK_GRAFANA" "$STACK_IDENTITY" "$STACK_PROVISIONING" "$STACK_APP" "$STACK_EVENTS" "$STACK_DATA_RDS" "$STACK_DATA_ECS" "$STACK_SECRETS")
+TEST_STACKS=("$STACK_EDGE" "$STACK_WEB" "$STACK_GRAFANA" "$STACK_IDENTITY" "$STACK_PROVISIONING" "$STACK_APP" "$STACK_EVENTS" "$STACK_DATA_RDS" "$STACK_DATA_ECS" "$STACK_SECRETS")
 started=$(date +%s)
 started_iso=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 elapsed() { echo "$(( ($(date +%s) - started) / 60 )) min"; }
@@ -87,9 +90,12 @@ done
 # Creates the kept stacks when they are missing; otherwise a quick no-op (or an update).
 "$SCRIPTS/deploy.sh" network platform logs
 "$SCRIPTS/push-images.sh"
-"$SCRIPTS/deploy.sh" data secrets queues events app identity provisioning grafana web
+if [ "$ENTRY_MODE" = cloudfront ]; then front=edge; else front=web; fi
+"$SCRIPTS/deploy.sh" data secrets queues events app identity provisioning grafana "$front"
+[ "$front" = web ] || "$SCRIPTS/publish-frontend.sh"
 
-url=$(stack_output "$STACK_APP" PublicUrl)
+url=$(portal_url)
+if [ "$ENTRY_MODE" = cloudfront ]; then via=CloudFront; else via="the ALB"; fi
 echo "== checks against $url (after $(elapsed))"
 status() { curl -s -o /dev/null -w '%{http_code}' "$@"; }
 wait_for_200() { # the ALB registers the task, and the ECS MySQL may still be running init.sql on EFS
@@ -98,11 +104,11 @@ wait_for_200() { # the ALB registers the task, and the ECS MySQL may still be ru
 wait_for_200 "$url/health"
 wait_for_200 "$url/health/ready"
 wait_for_200 "$url/"
-expect "backend answers through the ALB (/health)" 200 "$(status "$url/health")"
+expect "backend answers through $via (/health)" 200 "$(status "$url/health")"
 if [ "$DATA_MODE" = rds ]; then db_path="RDS (Multi-AZ, private subnets)"; else db_path="MySQL through the internal NLB"; fi
 expect "backend reaches $db_path as its own database user (/health/ready)" 200 "$(status "$url/health/ready")"
 has_root() { curl -s "$1" | grep -c '<div id="root">'; }
-expect "frontend answers through the ALB (/)" 1 "$(has_root "$url/")"
+expect "frontend answers through $via (/)" 1 "$(has_root "$url/")"
 expect "a client-side route gets index.html (/requests)" 1 "$(has_root "$url/requests")"
 expect "an unknown asset is 404, not index.html" 404 "$(status "$url/assets/missing.js")"
 expect "no sign-in token gives 401 (/api/auth/me)" 401 "$(status "$url/api/auth/me")"
@@ -169,8 +175,25 @@ if "$SCRIPTS/run-task.sh" node scripts/check-provisioning.js "$accounts"; then
 else
   fail "provisioning through SQS"
 fi
-# In a request service task, which gets the request dead-letter queue for this check only.
-if "$SCRIPTS/run-task.sh" --env "SQS_REQUEST_DLQ_URL=$(stack_output "$STACK_QUEUES" RequestDeadLetterQueueUrl)" node scripts/check-scheduler.js "$accounts"; then
+# The check logs check.dead_letter_ready once its job row exists; then this shell (admin credentials:
+# no service role may write to a dead-letter queue) puts the job's message there, as the redrive would.
+"$SCRIPTS/run-task.sh" node scripts/check-scheduler.js "$accounts" &
+check_pid=$!
+ready=''
+for _ in $(seq 1 40); do
+  ready=$("$SCRIPTS/find-in-logs.sh" '"event":"check.dead_letter_ready"' --since "$started_iso" --group backend 2>/dev/null \
+    | grep -o '{"event":"check.dead_letter_ready"[^}]*}' | tail -1) || true
+  [ -n "$ready" ] && break
+  sleep 15
+done
+if [ -n "$ready" ]; then
+  job_id=$(sed -E 's/.*"job_id":"([^"]+)".*/\1/' <<<"$ready")
+  rid=$(sed -E 's/.*"rid":([0-9]+).*/\1/' <<<"$ready")
+  awst sqs send-message --queue-url "$(stack_output "$STACK_QUEUES" RequestDeadLetterQueueUrl)" \
+    --message-body "{\"v\":1,\"typ\":\"job\",\"jti\":\"$job_id\",\"rid\":$rid,\"exp\":$(( $(date +%s) + 3600 ))}" \
+    --query MessageId >/dev/null
+fi
+if wait "$check_pid"; then
   pass "the service's scheduler: expiry REVOKE, reminder, notice by hand, dead letter (run-task.sh check-scheduler)"
 else
   fail "scheduler"
@@ -193,7 +216,7 @@ if in_logs "$marker" --alb; then pass "the ALB access logs reached S3"; else fai
 grafana_admin=$(awst secretsmanager get-secret-value --secret-id "$(stack_output "$STACK_GRAFANA" AdminSecretArn)" \
   --query SecretString | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{console.log(JSON.parse(s).password)}catch{console.log("none")}})')
 grafana_api() { curl -s -u "admin:$grafana_admin" "$url/grafana/api/$1"; }
-expect "Grafana answers through the ALB (/grafana/api/health)" 200 "$(status "$url/grafana/api/health")"
+expect "Grafana answers through $via (/grafana/api/health)" 200 "$(status "$url/grafana/api/health")"
 expect "Grafana refuses its API without sign-in" 401 "$(status "$url/grafana/api/dashboards/uid/siit-overview")"
 expect "Grafana's CloudWatch data source works with the task role" OK \
   "$(grafana_api datasources/uid/cloudwatch/health | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{console.log(JSON.parse(s).status)}catch{console.log("none")}})')"
@@ -225,8 +248,8 @@ fi
 if in_logs '"path":"/api/users/me"' --group identity; then pass "the identity service logged its request in its own log group (D34)"; else fail "identity service log"; fi
 if in_logs '"event":"worker.started"' --group provisioning; then pass "the provisioning service runs on its own (D34)"; else fail "provisioning service log"; fi
 alarms=$(awst cloudwatch describe-alarms --alarm-name-prefix "$PROJECT-" --query 'length(MetricAlarms)')
-if [ "$DATA_MODE" = rds ]; then
-  expect "the alarms exist (errors x3, ALB 5xx, unhealthy targets x3, dead letters x2, site not taking jobs, RDS storage and CPU)" 12 "$alarms"
-else
-  expect "the alarms exist (errors x3, ALB 5xx, unhealthy targets x3, dead letters x2, site not taking jobs)" 10 "$alarms"
-fi
+# Unhealthy targets: backend and identity, plus the frontend in direct mode (web stack).
+want_alarms=9 alarm_list="errors x3, ALB 5xx, unhealthy targets x2, dead letters x2, site not taking jobs"
+if [ "$ENTRY_MODE" != cloudfront ]; then want_alarms=$((want_alarms + 1)) alarm_list=${alarm_list/x2,/x3,}; fi
+if [ "$DATA_MODE" = rds ]; then want_alarms=$((want_alarms + 2)) alarm_list="$alarm_list, RDS storage and CPU"; fi
+expect "the alarms exist ($alarm_list)" "$want_alarms" "$alarms"

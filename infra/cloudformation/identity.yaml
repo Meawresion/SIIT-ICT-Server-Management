@@ -1,10 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: >-
-  The identity service (D34): the backend image with SERVICE_ROLE=identity behind the app stack's
-  ALB for /api/auth/* and /api/users (Google sign-in, the sign-in token, profiles). Only this
-  service holds the Google client; the request service only checks the token (shared JWT_SECRET).
-  Deleted with the app between test runs; without it, sign-in stops but signed-in users keep working
-  until their token expires.
+Description: 'Identity service (Google sign-in, tokens, profiles) on ECS Fargate.'
 
 Parameters:
   Project:
@@ -22,17 +17,13 @@ Parameters:
     Type: String
   ImageTag:
     Type: String
-  ExecutionRoleArn:
-    Type: String
-  TaskRoleArn:
-    Type: String
   GoogleSecretArn:
     Type: String
-    Description: Secret with GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET (secrets stack, filled by set-secrets.sh)
+    Description: Google OAuth client secret
   OriginVerifySecretArn:
     Type: String
     Default: ''
-    Description: cloudfront mode - the app stack's origin header secret (the ALB rule checks it); direct mode - empty
+    Description: CloudFront origin header secret; empty in direct mode
   DesiredCount:
     Type: Number
     Default: 1
@@ -53,7 +44,7 @@ Parameters:
   ApproverEmails:
     Type: String
     Default: ''
-    Description: The approvers, exact addresses (comma-separated); when set, the only approvers. Empty - the role column (set-user-role.js)
+    Description: Approver email addresses (comma-separated)
   SessionIdleMinutes:
     Type: Number
     Default: 30
@@ -83,7 +74,6 @@ Resources:
         - Key: deregistration_delay.timeout_seconds
           Value: '30'
 
-  # Before the app stack's rule for /api/* (priority 5).
   IdentityRule:
     Type: AWS::ElasticLoadBalancingV2::ListenerRule
     Properties:
@@ -106,6 +96,37 @@ Resources:
         - Type: forward
           TargetGroupArn: !Ref TargetGroup
 
+  ExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${Project}-identity-exec'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: {Service: ecs-tasks.amazonaws.com}
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: start-task
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: ecr:GetAuthorizationToken
+                Resource: '*'
+              - Effect: Allow
+                Action: [ecr:BatchGetImage, ecr:GetDownloadUrlForLayer, ecr:BatchCheckLayerAvailability]
+                Resource: !Sub 'arn:${AWS::Partition}:ecr:${AWS::Region}:${AWS::AccountId}:repository/${Project}-backend'
+              - Effect: Allow
+                Action: [logs:CreateLogStream, logs:PutLogEvents]
+                Resource: !Sub 'arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/${Project}/identity:*'
+              - Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource:
+                  - !Ref GoogleSecretArn
+                  - Fn::ImportValue: !Sub '${DataStack}-IdentityDbSecretArn'
+                  - Fn::ImportValue: !Sub '${AppStack}-AppSecretArn'
+
   TaskDefinition:
     Type: AWS::ECS::TaskDefinition
     Properties:
@@ -114,8 +135,7 @@ Resources:
       NetworkMode: awsvpc
       Cpu: !Ref Cpu
       Memory: !Ref Memory
-      ExecutionRoleArn: !Ref ExecutionRoleArn
-      TaskRoleArn: !Ref TaskRoleArn
+      ExecutionRoleArn: !GetAtt ExecutionRole.Arn
       ContainerDefinitions:
         - Name: identity
           Image: !Sub
@@ -133,7 +153,6 @@ Resources:
               Value: '3000'
             - Name: SERVICE_ROLE
               Value: identity
-            # CloudFront, then the ALB (as the app stack's service)
             - Name: TRUST_PROXY
               Value: '2'
             - Name: DB_HOST
@@ -145,7 +164,6 @@ Resources:
             - Name: DB_NAME
               Value:
                 Fn::ImportValue: !Sub '${DataStack}-DbName'
-            # TLS to the database (D31): verify on RDS, encrypt on the ECS MySQL.
             - Name: DB_TLS
               Value:
                 Fn::ImportValue: !Sub '${DataStack}-DbTls'
@@ -231,7 +249,7 @@ Resources:
     Type: AWS::CloudWatch::Alarm
     Properties:
       AlarmName: !Sub '${Project}-identity-unhealthy'
-      AlarmDescription: An identity task failed the ALB health check for 3 minutes (sign-in may be down)
+      AlarmDescription: An identity task failed the ALB health check for 3 minutes
       Namespace: AWS/ApplicationELB
       MetricName: UnHealthyHostCount
       Dimensions:

@@ -1,8 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: >-
-  The portal's one public address: CloudFront serves the React build from a private S3 bucket
-  (OAC) and sends /api/* to the ALB with the secret origin header, so the browser sees one origin
-  and the sign-in cookie stays first-party. Deploy in us-east-1 (CloudFront certificate).
+Description: 'CloudFront in front of the S3 frontend and the ALB (/api, /grafana, /health).'
 
 Parameters:
   Project:
@@ -21,17 +18,15 @@ Parameters:
     Type: String
     Default: PriceClass_200
     AllowedValues: [PriceClass_100, PriceClass_200, PriceClass_All]
-    Description: PriceClass_200 includes edge locations in Asia
+    Description: CloudFront price class
 
 Mappings:
-  # AWS-managed CloudFront policies (fixed IDs).
   ManagedPolicies:
     Cache:
       Optimized: 658327ea-f89d-4fab-a63d-7e88639e58f6
       Disabled: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad
     OriginRequest:
       AllViewerExceptHostHeader: b689b0a8-53d0-40ab-baf2-68738e2966ac
-  # The hosted zone ID that every CloudFront alias record uses.
   CloudFront:
     Alias:
       HostedZoneId: Z2FDTNDATAQYW2
@@ -69,6 +64,15 @@ Resources:
             Condition:
               StringEquals:
                 AWS:SourceArn: !Sub 'arn:aws:cloudfront::${AWS::AccountId}:distribution/${Distribution}'
+          - Sid: CloudFrontListsThroughOAC
+            Effect: Allow
+            Principal:
+              Service: cloudfront.amazonaws.com
+            Action: s3:ListBucket
+            Resource: !GetAtt Bucket.Arn
+            Condition:
+              StringEquals:
+                AWS:SourceArn: !Sub 'arn:aws:cloudfront::${AWS::AccountId}:distribution/${Distribution}'
   OriginAccessControl:
     Type: AWS::CloudFront::OriginAccessControl
     Properties:
@@ -78,8 +82,6 @@ Resources:
         SigningBehavior: always
         SigningProtocol: sigv4
 
-  # React Router paths (/home, /admin, ...) have no file in the bucket: serve index.html for them.
-  # Only on the S3 behavior, so API 404s stay API 404s.
   SpaRewrite:
     Type: AWS::CloudFront::Function
     Properties:
@@ -148,14 +150,19 @@ Resources:
         CacheBehaviors:
           - PathPattern: /api/*
             TargetOriginId: api
-            # No redirect for the API: a redirected POST would lose its body.
             ViewerProtocolPolicy: https-only
             AllowedMethods: [GET, HEAD, OPTIONS, PUT, PATCH, POST, DELETE]
             CachedMethods: [GET, HEAD]
             Compress: true
             CachePolicyId: !FindInMap [ManagedPolicies, Cache, Disabled]
             OriginRequestPolicyId: !FindInMap [ManagedPolicies, OriginRequest, AllViewerExceptHostHeader]
-          # Grafana (grafana stack) behind the same ALB: /grafana and everything under it.
+          - PathPattern: /health*
+            TargetOriginId: api
+            ViewerProtocolPolicy: https-only
+            AllowedMethods: [GET, HEAD]
+            CachedMethods: [GET, HEAD]
+            CachePolicyId: !FindInMap [ManagedPolicies, Cache, Disabled]
+            OriginRequestPolicyId: !FindInMap [ManagedPolicies, OriginRequest, AllViewerExceptHostHeader]
           - PathPattern: /grafana*
             TargetOriginId: api
             ViewerProtocolPolicy: redirect-to-https

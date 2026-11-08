@@ -1,4 +1,5 @@
-# The dashboards in /var/lib/grafana/dashboards (from grafana/dashboards in the repo), read-only.
+# The dashboards in /var/lib/grafana/dashboards (grafana/dashboards in the repo, with the project
+# name filled in by entrypoint.sh), read-only.
 apiVersion: 1
 providers:
   - name: siit

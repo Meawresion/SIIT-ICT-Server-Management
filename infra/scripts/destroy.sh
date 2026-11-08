@@ -5,7 +5,7 @@
 # The dns stack may stay between test runs (user's OK, 2026-10-28): it runs nothing.
 . "$(dirname "$0")/lib.sh"
 
-order=(edge web grafana identity provisioning app events secrets queues data logs platform network cert dns)
+order=(edge web grafana identity provisioning app events secrets site queues data logs platform network cert dns)
 [ $# -gt 0 ] || { echo "Usage: $0 <stack>...   (${order[*]})" >&2; exit 1; }
 for stack in "$@"; do
   [[ " ${order[*]} " == *" $stack "* ]] || { echo "Unknown stack: $stack" >&2; exit 1; }
@@ -22,6 +22,7 @@ for stack in "${order[@]}"; do
   case $stack in
     data) confirm "This deletes the database and its passwords." "delete data" ;;
     secrets) confirm "This deletes the Google client and SMTP secrets (set-secrets.sh puts them back)." "delete secrets" ;;
+    site) confirm "This deletes the site's AWS access and its public key (deploy.sh site and set-site-key.sh put them back)." "delete site" ;;
     queues) confirm "This deletes queued jobs and the backend message keys (acc-prov-vm then needs the new public key)." "delete queues" ;;
     logs)
       confirm "This deletes every log group (audit trail, incidents) and the ALB logs in S3." "delete logs"

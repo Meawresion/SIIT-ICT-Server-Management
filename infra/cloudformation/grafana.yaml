@@ -1,10 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: >-
-  Grafana (D34, NFR-8.3): the operations dashboards at /grafana/ on the app stack's ALB, one Fargate
-  task with the CloudWatch data source (task role) and the SIIT dashboards built into its image.
-  Sign-in with Google for the listed addresses only (Viewer); the admin password is generated here. Grafana
-  keeps no state worth keeping (dashboards are code, accounts come back at sign-in), so it uses
-  its built-in SQLite file and this stack can be deleted and recreated at any time.
+Description: 'Grafana operations dashboards at /grafana/ on ECS Fargate.'
 
 Parameters:
   Project:
@@ -20,31 +15,22 @@ Parameters:
     Type: String
   ImageTag:
     Type: String
-  ExecutionRoleArn:
-    Type: String
-  TaskRoleArn:
-    Type: String
-    Description: Needs CloudWatch and CloudWatch Logs read access (Learner Lab - LabRole, D30)
   GoogleSecretArn:
     Type: String
-    Description: Secret with GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET (secrets stack); add <portal>/grafana/login/google to the client's redirect URIs
+    Description: Google OAuth client secret
   OriginVerifySecretArn:
     Type: String
     Default: ''
-    Description: cloudfront mode - the app stack's origin header secret (the ALB rule checks it); direct mode - empty
+    Description: CloudFront origin header secret; empty in direct mode
   SignInRule:
     Type: String
     Default: ''
-    Description: >-
-      JMESPath on the Google user's claims that gives 'Viewer' to the allowed addresses and no role
-      to everyone else (refused, role_attribute_strict); deploy.sh builds it from GRAFANA_ALLOWED_EMAILS,
-      e.g. (email == 'staff1@siit.tu.ac.th' || email == 'someone@g.siit.tu.ac.th') && 'Viewer'.
-      Empty - Google sign-in off (admin only).
+    Description: Google sign-in role rule; empty = admin only
   DesiredCount:
     Type: Number
     Default: 1
     AllowedValues: [0, 1]
-    Description: 0 pauses Grafana; never more than 1 (each task has its own SQLite file)
+    Description: 0 or 1
   Cpu:
     Type: String
     Default: '256'
@@ -57,19 +43,16 @@ Conditions:
   GoogleSignIn: !Not [!Equals [!Ref SignInRule, '']]
 
 Resources:
-  # Generated name (no Name property): a recreated stack never meets a secret still in its
-  # deletion recovery window.
   AdminSecret:
     Type: AWS::SecretsManager::Secret
     Properties:
-      Description: !Sub '${Project} Grafana admin (break-glass sign-in; staff use Google)'
+      Description: !Sub '${Project} Grafana admin'
       GenerateSecretString:
         SecretStringTemplate: '{"username":"admin"}'
         GenerateStringKey: password
         PasswordLength: 32
         ExcludePunctuation: true
 
-  # Its own group: only the ALB reaches Grafana, and Grafana reaches nothing inside the VPC.
   SecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
@@ -111,7 +94,6 @@ Resources:
         - Key: deregistration_delay.timeout_seconds
           Value: '15'
 
-  # Before the app stack's rule for /api/* (priority 5); the paths don't overlap anyway.
   GrafanaRule:
     Type: AWS::ElasticLoadBalancingV2::ListenerRule
     Properties:
@@ -134,6 +116,65 @@ Resources:
         - Type: forward
           TargetGroupArn: !Ref TargetGroup
 
+  ExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${Project}-grafana-exec'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: {Service: ecs-tasks.amazonaws.com}
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: start-task
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: ecr:GetAuthorizationToken
+                Resource: '*'
+              - Effect: Allow
+                Action: [ecr:BatchGetImage, ecr:GetDownloadUrlForLayer, ecr:BatchCheckLayerAvailability]
+                Resource: !Sub 'arn:${AWS::Partition}:ecr:${AWS::Region}:${AWS::AccountId}:repository/${Project}-grafana'
+              - Effect: Allow
+                Action: [logs:CreateLogStream, logs:PutLogEvents]
+                Resource: !Sub 'arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/${Project}/grafana:*'
+              - Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource: [!Ref AdminSecret, !Ref GoogleSecretArn]
+  TaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${Project}-grafana-task'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: {Service: ecs-tasks.amazonaws.com}
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: read-cloudwatch
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - cloudwatch:DescribeAlarms
+                  - cloudwatch:DescribeAlarmsForMetric
+                  - cloudwatch:DescribeAlarmHistory
+                  - cloudwatch:GetMetricData
+                  - cloudwatch:ListMetrics
+                  - logs:DescribeLogGroups
+                  - logs:GetQueryResults
+                  - logs:StopQuery
+                  - ec2:DescribeRegions
+                  - tag:GetResources
+                Resource: '*'
+              - Effect: Allow
+                Action: [logs:StartQuery, logs:GetLogGroupFields, logs:GetLogEvents, logs:FilterLogEvents]
+                Resource: !Sub 'arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/${Project}/*'
+
   TaskDefinition:
     Type: AWS::ECS::TaskDefinition
     Properties:
@@ -142,8 +183,8 @@ Resources:
       NetworkMode: awsvpc
       Cpu: !Ref Cpu
       Memory: !Ref Memory
-      ExecutionRoleArn: !Ref ExecutionRoleArn
-      TaskRoleArn: !Ref TaskRoleArn
+      ExecutionRoleArn: !GetAtt ExecutionRole.Arn
+      TaskRoleArn: !GetAtt TaskRole.Arn
       ContainerDefinitions:
         - Name: grafana
           Image: !Sub
@@ -157,6 +198,8 @@ Resources:
           Environment:
             - Name: AWS_REGION
               Value: !Ref AWS::Region
+            - Name: SIIT_PROJECT
+              Value: !Ref Project
             - Name: GF_SERVER_ROOT_URL
               Value: !Sub
                 - '${Url}/grafana/'
@@ -182,8 +225,6 @@ Resources:
               Value: !If [GoogleSignIn, 'true', 'false']
             - Name: GF_AUTH_GOOGLE_ALLOW_SIGN_UP
               Value: 'true'
-            # Who may sign in: the rule's exact addresses get Viewer, anyone else gets no role and
-            # is refused.
             - Name: GF_AUTH_GOOGLE_ROLE_ATTRIBUTE_PATH
               Value: !Ref SignInRule
             - Name: GF_AUTH_GOOGLE_ROLE_ATTRIBUTE_STRICT
@@ -228,7 +269,6 @@ Resources:
       LaunchType: FARGATE
       DesiredCount: !Ref DesiredCount
       HealthCheckGracePeriodSeconds: 90
-      # One task at a time (its own SQLite file); a short gap during a deploy is fine here.
       DeploymentConfiguration:
         MinimumHealthyPercent: 0
         MaximumPercent: 100
@@ -249,7 +289,7 @@ Outputs:
   ServiceName:
     Value: !GetAtt Service.Name
   AdminSecretArn:
-    Description: The admin password (break-glass; read it from Secrets Manager, never print it)
+    Description: Grafana admin secret
     Value: !Ref AdminSecret
   GrafanaPath:
     Value: /grafana/

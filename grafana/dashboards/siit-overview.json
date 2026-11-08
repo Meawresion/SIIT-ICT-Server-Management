@@ -19,14 +19,14 @@
         "name": "project",
         "label": "Project",
         "type": "constant",
-        "query": "siit",
+        "query": "__PROJECT__",
         "hide": 2
       },
       {
         "name": "namespace",
         "label": "Metric namespace",
         "type": "constant",
-        "query": "siit/logs",
+        "query": "__PROJECT__/logs",
         "hide": 2
       }
     ]

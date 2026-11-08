@@ -1,9 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: >-
-  The event bus between the services and the notification service (D34). The API and provisioning
-  services put "Email requested" events on the bus; a rule copies them into the notification
-  queue, and the notification Lambda (container image) sends them with the SMTP settings from the
-  mail secret, which no other service reads. Deleted with the app between test runs.
+Description: 'Event bus, notification queue and the Lambda that sends status emails.'
 
 Parameters:
   Project:
@@ -15,19 +11,16 @@ Parameters:
     Type: String
   NotificationImageTag:
     Type: String
-  # Learner Lab: LabRole (D30).
-  LambdaRoleArn:
-    Type: String
   MailSecretArn:
     Type: String
-    Description: The secrets stack's mail secret (SMTP_HOST empty = emails off, only logged)
+    Description: Mail secret
   AllowedRecipientDomains:
     Type: String
-    Description: Comma-separated domains emails may go to (the sign-in domains)
+    Description: Allowed recipient domains (comma-separated)
   MaxReceiveCount:
     Type: Number
     Default: 5
-    Description: Failed sends of one email before it moves to the dead-letter queue
+    Description: Receives before dead-letter
 
 Resources:
   Bus:
@@ -46,13 +39,11 @@ Resources:
     Properties:
       QueueName: !Sub '${Project}-notifications'
       MessageRetentionPeriod: 345600
-      # At least 6 x the Lambda timeout, as AWS advises for an SQS event source.
       VisibilityTimeout: 180
       SqsManagedSseEnabled: true
       RedrivePolicy:
         deadLetterTargetArn: !GetAtt NotificationDeadLetterQueue.Arn
         maxReceiveCount: !Ref MaxReceiveCount
-  # SQS takes one resource per statement, so each queue has its own policy.
   NotificationQueuePolicy:
     Type: AWS::SQS::QueuePolicy
     Properties:
@@ -101,11 +92,35 @@ Resources:
         - Id: notification-queue
           Arn: !GetAtt NotificationQueue.Arn
 
+  NotificationRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${Project}-notification-fn'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: {Service: lambda.amazonaws.com}
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: send-mail
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: [sqs:ReceiveMessage, sqs:DeleteMessage, sqs:GetQueueAttributes, sqs:ChangeMessageVisibility]
+                Resource: !GetAtt NotificationQueue.Arn
+              - Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource: !Ref MailSecretArn
+              - Effect: Allow
+                Action: [logs:CreateLogStream, logs:PutLogEvents]
+                Resource: !Sub 'arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/${Project}/notification:*'
   NotificationFunction:
     Type: AWS::Lambda::Function
     Properties:
       FunctionName: !Sub '${Project}-notification'
-      Description: Sends the portal's status emails (D34)
+      Description: Sends status emails
       PackageType: Image
       Code:
         ImageUri: !Sub
@@ -115,12 +130,11 @@ Resources:
       Architectures: [x86_64]
       MemorySize: 256
       Timeout: 30
-      Role: !Ref LambdaRoleArn
+      Role: !GetAtt NotificationRole.Arn
       Environment:
         Variables:
           MAIL_SECRET_ARN: !Ref MailSecretArn
           ALLOWED_RECIPIENT_DOMAINS: !Ref AllowedRecipientDomains
-      # Its log lines go to the logs stack's group, so they outlive this stack.
       LoggingConfig:
         LogFormat: Text
         LogGroup:
@@ -138,7 +152,7 @@ Resources:
     Type: AWS::CloudWatch::Alarm
     Properties:
       AlarmName: !Sub '${Project}-notification-dead-letters'
-      AlarmDescription: A status email could not be sent after several tries (see /siit/notification)
+      AlarmDescription: Status email failed
       Namespace: AWS/SQS
       MetricName: ApproximateNumberOfMessagesVisible
       Dimensions:
@@ -155,7 +169,7 @@ Resources:
     Type: AWS::CloudWatch::Alarm
     Properties:
       AlarmName: !Sub '${Project}-notification-errors'
-      AlarmDescription: The notification service logged an error (a send failed or its settings are wrong)
+      AlarmDescription: Notification service logged an error
       Namespace:
         Fn::ImportValue: !Sub '${LogsStack}-MetricNamespace'
       MetricName: NotificationErrors

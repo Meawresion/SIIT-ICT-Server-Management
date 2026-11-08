@@ -1,10 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: >-
-  Frontend behind the app stack's ALB (EntryMode direct, for accounts without CloudFront, e.g.
-  Learner Lab): an ECS Fargate service running nginx with the React build, its own image and
-  deploys, separate from the backend. The ALB sends /api/* and /health to the backend (app stack)
-  and everything else here, so the portal and the API share one origin. With CloudFront, the edge
-  stack (S3) serves the frontend instead.
+Description: 'Frontend (nginx) on ECS behind the ALB, for accounts without CloudFront.'
 
 Parameters:
   Project:
@@ -12,7 +7,7 @@ Parameters:
     Default: siit
   LogsStack:
     Type: String
-    Description: The logs stack (log groups, alert topic)
+    Description: Logs stack
   NetworkStack:
     Type: String
   PlatformStack:
@@ -21,10 +16,7 @@ Parameters:
     Type: String
   ImageTag:
     Type: String
-    Description: Tag of the siit-frontend image in ECR
-  ExecutionRoleArn:
-    Type: String
-    Description: Pulls the image and writes the logs (Learner Lab - LabRole, D30)
+    Description: Frontend image tag
   DesiredCount:
     Type: Number
     Default: 1
@@ -74,7 +66,6 @@ Resources:
       TargetGroupAttributes:
         - Key: deregistration_delay.timeout_seconds
           Value: '10'
-  # After the app stack's API rule (priority 1): every other path is the frontend.
   FrontendRule:
     Type: AWS::ElasticLoadBalancingV2::ListenerRule
     Properties:
@@ -110,6 +101,31 @@ Resources:
       TreatMissingData: notBreaching
       AlarmActions: [{'Fn::ImportValue': !Sub '${LogsStack}-AlertTopicArn'}]
 
+  ExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${Project}-frontend-exec'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: {Service: ecs-tasks.amazonaws.com}
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: start-task
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: ecr:GetAuthorizationToken
+                Resource: '*'
+              - Effect: Allow
+                Action: [ecr:BatchGetImage, ecr:GetDownloadUrlForLayer, ecr:BatchCheckLayerAvailability]
+                Resource: !Sub 'arn:${AWS::Partition}:ecr:${AWS::Region}:${AWS::AccountId}:repository/${Project}-frontend'
+              - Effect: Allow
+                Action: [logs:CreateLogStream, logs:PutLogEvents]
+                Resource: !Sub 'arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/${Project}/frontend:*'
+
   TaskDefinition:
     Type: AWS::ECS::TaskDefinition
     Properties:
@@ -118,7 +134,7 @@ Resources:
       NetworkMode: awsvpc
       Cpu: !Ref Cpu
       Memory: !Ref Memory
-      ExecutionRoleArn: !Ref ExecutionRoleArn
+      ExecutionRoleArn: !GetAtt ExecutionRole.Arn
       ContainerDefinitions:
         - Name: frontend
           Image: !Sub
@@ -156,7 +172,6 @@ Resources:
           Rollback: true
       NetworkConfiguration:
         AwsvpcConfiguration:
-          # Public subnet + public IP: pulls the image from ECR without a NAT gateway.
           AssignPublicIp: ENABLED
           Subnets: !Split [',', {'Fn::ImportValue': !Sub '${NetworkStack}-PublicSubnets'}]
           SecurityGroups: [!Ref FrontendSecurityGroup]

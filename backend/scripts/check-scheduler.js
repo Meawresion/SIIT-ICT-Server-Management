@@ -1,6 +1,7 @@
-// One-off scheduler check on AWS (infra/scripts/smoke-test.sh), in a request service task with the
-// request dead-letter queue added (the check puts a message there, as the queue's redrive would):
-//   run-task.sh --env SQS_REQUEST_DLQ_URL=<url> node scripts/check-scheduler.js <marker>
+// One-off scheduler check on AWS (infra/scripts/smoke-test.sh), in a request service task:
+//   run-task.sh node scripts/check-scheduler.js <marker>
+// For the dead letter it logs check.dead_letter_ready; the smoke test then puts that job's message
+// into the request dead-letter queue, as the queue's redrive would.
 // It uses the accounts check-identity.js added for the marker; check-grants.js in the provisioning
 // service has already seen its scheduler take the lease. That scheduler must act; this task only
 // sets things up and waits:
@@ -12,7 +13,6 @@
 // (the audit log can't be deleted), so run it only on a throwaway database.
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { SendMessageCommand, SQSClient } from '@aws-sdk/client-sqs';
 import prisma from '../src/lib/prisma.js';
 import { loadSchedulerConfig } from '../src/config/scheduler.js';
 import { createRequest } from '../src/services/request.service.js';
@@ -24,8 +24,10 @@ import { siteToday } from '../src/services/scheduler.service.js';
 delete process.env.APPROVER_EMAILS;
 
 const TIMEOUT_MS = 4 * 60_000;
-const waitFor = async (label, fn) => {
-  const end = Date.now() + TIMEOUT_MS;
+// The smoke test finds the ready line through CloudWatch Logs Insights, which takes a few minutes.
+const DEAD_LETTER_TIMEOUT_MS = 12 * 60_000;
+const waitFor = async (label, fn, timeoutMs = TIMEOUT_MS) => {
+  const end = Date.now() + timeoutMs;
   for (;;) {
     const v = await fn();
     if (v) return v;
@@ -43,8 +45,8 @@ const marker = process.argv[2];
 const account = (name) => prisma.user.findFirstOrThrow({ where: { fullname: `Check ${name} ${marker}` } });
 
 try {
-  if (!marker || !process.env.SQS_REQUEST_DLQ_URL) {
-    throw new Error('Usage: SQS_REQUEST_DLQ_URL=<url> node scripts/check-scheduler.js <marker> (after check-identity.js <marker>)');
+  if (!marker) {
+    throw new Error('Usage: node scripts/check-scheduler.js <marker> (after check-identity.js <marker>)');
   }
   console.log(`site day ${today} (${config.timeZone}); the provisioning service's scheduler must act`);
   // Its student ID starts with zeros, which SIIT doesn't issue.
@@ -81,11 +83,12 @@ try {
   const job_id = randomUUID();
   await prisma.provision_job.create({ data: { job_id, rid: waiting.id, action: 'CREATE', status: 'Sent', sent_at: new Date(), attempts: 1,
     payload: { action: 'CREATE', gpuNode: 'check' } } });
-  const sqs = new SQSClient({ region: process.env.AWS_REGION });
-  await sqs.send(new SendMessageCommand({ QueueUrl: process.env.SQS_REQUEST_DLQ_URL,
-    MessageBody: JSON.stringify({ v: 1, typ: 'job', jti: job_id, rid: waiting.id, exp: Math.floor(Date.now() / 1000) + 3600 }) }));
-  console.log('put a job into the request dead-letter queue; waiting for the scheduler to fail it');
-  const failed = await waitFor('the dead-lettered job Failed', () => prisma.provision_job.findFirst({ where: { job_id, status: 'Failed' } }));
+  // The smoke test (admin credentials) puts its message into the request dead-letter queue when it
+  // sees this line: the service roles can't write to a dead-letter queue.
+  console.log(JSON.stringify({ event: 'check.dead_letter_ready', job_id, rid: waiting.id }));
+  console.log('waiting for the job in the request dead-letter queue, then for the scheduler to fail it');
+  const failed = await waitFor('the dead-lettered job Failed', () => prisma.provision_job.findFirst({ where: { job_id, status: 'Failed' } }),
+    DEAD_LETTER_TIMEOUT_MS);
   assert.match(failed.last_error, /refused the job/);
   assert.deepEqual(await events(waiting.id), ['CREATED', 'PROVISION_FAILED']);
   assert.equal(await status(waiting.id), 'Approved');

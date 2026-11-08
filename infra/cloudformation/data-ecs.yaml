@@ -1,13 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: >-
-  Budget database (D31): MySQL 8.4 as one ECS Fargate task, data on EFS, reachable inside the VPC
-  through an internal Network Load Balancer (a stable name for a task whose IP changes; Cloud Map
-  isn't allowed on Learner Lab). The first start on an empty EFS runs database/init.sql (baked
-  into the image).
-  To move to RDS, run switch-to-rds.sh (data-rds, then the services point at it): both export
-  DbHost, DbPort, DbName, DbTls and one database user secret per service (IdentityDbSecretArn,
-  RequestsDbSecretArn, ProvisioningDbSecretArn; D34). The services connect over TLS (DB_TLS=encrypt). Pause with DesiredCount 0; deleting this stack deletes the data
-  and its passwords together.
+Description: 'Budget database: MySQL 8.4 as one ECS task on EFS behind an internal NLB.'
 
 Parameters:
   Project:
@@ -15,20 +7,14 @@ Parameters:
     Default: siit
   LogsStack:
     Type: String
-    Description: The logs stack (log groups, alert topic)
+    Description: Logs stack
   NetworkStack:
     Type: String
   PlatformStack:
     Type: String
   ImageTag:
     Type: String
-    Description: Tag of the siit-mysql image in ECR
-  ExecutionRoleArn:
-    Type: String
-    Description: Pulls the image and reads the secrets (Learner Lab - LabRole, D30)
-  TaskRoleArn:
-    Type: String
-    Description: Role of the running container (Learner Lab - LabRole, D30)
+    Description: MySQL image tag
   DbName:
     Type: String
     Default: siit_resource
@@ -36,7 +22,7 @@ Parameters:
     Type: Number
     Default: 1
     AllowedValues: [0, 1]
-    Description: 0 pauses the database; never more than 1 (one MySQL per data directory)
+    Description: 0 or 1
   Cpu:
     Type: String
     Default: '512'
@@ -45,14 +31,10 @@ Parameters:
     Default: '1024'
 
 Resources:
-  # Each service connects as its own user with rights on its own tables only (D34,
-  # database/privileges.sh); root only creates the schema and the users on the first start.
-  # Generated names (no Name property), so a recreated stack never collides with a secret that
-  # is still in its deletion recovery window.
   IdentityDbSecret:
     Type: AWS::SecretsManager::Secret
     Properties:
-      Description: !Sub '${Project} MySQL user of the identity service (username, password)'
+      Description: !Sub '${Project} identity service DB user'
       GenerateSecretString:
         SecretStringTemplate: !Sub '{"username":"${Project}_identity"}'
         GenerateStringKey: password
@@ -61,7 +43,7 @@ Resources:
   RequestsDbSecret:
     Type: AWS::SecretsManager::Secret
     Properties:
-      Description: !Sub '${Project} MySQL user of the requests service (username, password)'
+      Description: !Sub '${Project} requests service DB user'
       GenerateSecretString:
         SecretStringTemplate: !Sub '{"username":"${Project}_requests"}'
         GenerateStringKey: password
@@ -70,7 +52,7 @@ Resources:
   ProvisioningDbSecret:
     Type: AWS::SecretsManager::Secret
     Properties:
-      Description: !Sub '${Project} MySQL user of the provisioning service (username, password)'
+      Description: !Sub '${Project} provisioning service DB user'
       GenerateSecretString:
         SecretStringTemplate: !Sub '{"username":"${Project}_provisioning"}'
         GenerateStringKey: password
@@ -79,7 +61,7 @@ Resources:
   DbRootSecret:
     Type: AWS::SecretsManager::Secret
     Properties:
-      Description: !Sub '${Project} MySQL root (admin, schema changes only)'
+      Description: !Sub '${Project} MySQL root'
       GenerateSecretString:
         SecretStringTemplate: '{"username":"root"}'
         GenerateStringKey: password
@@ -158,7 +140,6 @@ Resources:
       FileSystemId: !Ref FileSystem
       SubnetId: !Select [1, !Split [',', {'Fn::ImportValue': !Sub '${NetworkStack}-PrivateSubnets'}]]
       SecurityGroups: [!Ref EfsSecurityGroup]
-  # Files belong to the image's mysql user (uid/gid 999), so the entrypoint has nothing to chown.
   AccessPoint:
     Type: AWS::EFS::AccessPoint
     Properties:
@@ -176,6 +157,7 @@ Resources:
   DbLoadBalancer:
     Type: AWS::ElasticLoadBalancingV2::LoadBalancer
     Properties:
+      Name: !Sub '${Project}-db'
       Type: network
       Scheme: internal
       Subnets: !Split [',', {'Fn::ImportValue': !Sub '${NetworkStack}-PrivateSubnets'}]
@@ -203,6 +185,33 @@ Resources:
         - Type: forward
           TargetGroupArn: !Ref DbTargetGroup
 
+  ExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${Project}-mysql-exec'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: {Service: ecs-tasks.amazonaws.com}
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: start-task
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: ecr:GetAuthorizationToken
+                Resource: '*'
+              - Effect: Allow
+                Action: [ecr:BatchGetImage, ecr:GetDownloadUrlForLayer, ecr:BatchCheckLayerAvailability]
+                Resource: !Sub 'arn:${AWS::Partition}:ecr:${AWS::Region}:${AWS::AccountId}:repository/${Project}-mysql'
+              - Effect: Allow
+                Action: [logs:CreateLogStream, logs:PutLogEvents]
+                Resource: !Sub 'arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/${Project}/mysql:*'
+              - Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource: [!Ref DbRootSecret, !Ref IdentityDbSecret, !Ref RequestsDbSecret, !Ref ProvisioningDbSecret]
   TaskDefinition:
     Type: AWS::ECS::TaskDefinition
     Properties:
@@ -211,8 +220,7 @@ Resources:
       NetworkMode: awsvpc
       Cpu: !Ref Cpu
       Memory: !Ref Memory
-      ExecutionRoleArn: !Ref ExecutionRoleArn
-      TaskRoleArn: !Ref TaskRoleArn
+      ExecutionRoleArn: !GetAtt ExecutionRole.Arn
       Volumes:
         - Name: data
           EFSVolumeConfiguration:
@@ -228,8 +236,6 @@ Resources:
             - Repo:
                 Fn::ImportValue: !Sub '${PlatformStack}-MysqlRepositoryUri'
           Essential: true
-          # Linux native AIO isn't available on NFS (EFS). The load balancer's TCP health checks
-          # never log in; without the host cache MySQL never blocks its address for that.
           Command: ['--innodb-use-native-aio=0', '--skip-name-resolve', '--host-cache-size=0']
           PortMappings:
             - ContainerPort: 3306
@@ -279,15 +285,12 @@ Resources:
       TaskDefinition: !Ref TaskDefinition
       LaunchType: FARGATE
       DesiredCount: !Ref DesiredCount
-      # The first start runs init.sql on EFS before MySQL accepts connections.
       HealthCheckGracePeriodSeconds: 300
-      # Stop the old task before starting a new one: two MySQL servers must never share a data dir.
       DeploymentConfiguration:
         MinimumHealthyPercent: 0
         MaximumPercent: 100
       NetworkConfiguration:
         AwsvpcConfiguration:
-          # Public subnet + public IP: pulls the image from ECR without a NAT gateway (S7).
           AssignPublicIp: ENABLED
           Subnets: !Split [',', {'Fn::ImportValue': !Sub '${NetworkStack}-PublicSubnets'}]
           SecurityGroups: [!Ref DbSecurityGroup]
@@ -326,12 +329,12 @@ Outputs:
   FileSystemId:
     Value: !Ref FileSystem
   DbTls:
-    Description: The services' DB_TLS (encrypt - MySQL's own self-signed certificate, not checked)
+    Description: DB TLS mode
     Value: encrypt
     Export:
       Name: !Sub '${AWS::StackName}-DbTls'
   DbRootSecretArn:
-    Description: Root password, for schema changes from a one-off task and the copy to RDS (switch-to-rds.sh)
+    Description: MySQL root secret
     Value: !Ref DbRootSecret
     Export:
       Name: !Sub '${AWS::StackName}-DbRootSecretArn'

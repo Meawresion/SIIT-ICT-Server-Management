@@ -1,8 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: >-
-  Shared pieces that outlive the data and app stacks: the ECR repositories (deploy this before
-  pushing images), the ECS cluster and the backend tasks' security group (the database stack
-  refers to it before the app stack exists).
+Description: 'ECR repositories, the ECS cluster and the backend tasks security group.'
 
 Parameters:
   Project:
@@ -17,14 +14,13 @@ Parameters:
     Type: String
     Default: disabled
     AllowedValues: [enabled, disabled]
-    Description: Per-task CPU, memory and task counts in CloudWatch (billed per metric; demo days only, D34)
+    Description: ECS Container Insights
 
 Resources:
   BackendRepository:
     Type: AWS::ECR::Repository
     Properties:
       RepositoryName: !Sub '${Project}-backend'
-      # Deleting the stack deletes the images too (nothing left behind after a test run).
       EmptyOnDelete: true
       ImageScanningConfiguration:
         ScanOnPush: true
@@ -40,7 +36,6 @@ Resources:
       LifecyclePolicy:
         LifecyclePolicyText: !Sub '{"rules":[{"rulePriority":1,"description":"Keep the newest images","selection":{"tagStatus":"any","countType":"imageCountMoreThan","countNumber":${ImagesToKeep}},"action":{"type":"expire"}}]}'
 
-  # The frontend image (nginx + the React build), used where CloudFront isn't available (web stack).
   FrontendRepository:
     Type: AWS::ECR::Repository
     Properties:
@@ -51,7 +46,6 @@ Resources:
       LifecyclePolicy:
         LifecyclePolicyText: !Sub '{"rules":[{"rulePriority":1,"description":"Keep the newest images","selection":{"tagStatus":"any","countType":"imageCountMoreThan","countNumber":${ImagesToKeep}},"action":{"type":"expire"}}]}'
 
-  # The notification service (D34): a Lambda container image.
   NotificationRepository:
     Type: AWS::ECR::Repository
     Properties:
@@ -61,7 +55,6 @@ Resources:
         ScanOnPush: true
       LifecyclePolicy:
         LifecyclePolicyText: !Sub '{"rules":[{"rulePriority":1,"description":"Keep the newest images","selection":{"tagStatus":"any","countType":"imageCountMoreThan","countNumber":${ImagesToKeep}},"action":{"type":"expire"}}]}'
-      # Lambda pulls the image with its own service principal.
       RepositoryPolicyText:
         Version: '2012-10-17'
         Statement:
@@ -72,7 +65,6 @@ Resources:
             Condition:
               StringLike: {'aws:sourceArn': !Sub 'arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:*'}
 
-  # Grafana (D34): the official image with the SIIT data source and dashboards built in.
   GrafanaRepository:
     Type: AWS::ECR::Repository
     Properties:

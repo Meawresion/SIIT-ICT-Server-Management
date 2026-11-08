@@ -1,37 +1,27 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: >-
-  Provisioning messages between the backend and acc-prov-vm (plan §2.3, D22): the request and
-  result queues, each with a dead-letter queue, and the backend's message keys. A small Lambda
-  (custom resource) generates the backend's key bundle and writes it straight into Secrets Manager,
-  so the private key never leaves AWS; the public bundle is an output for acc-prov-vm's .env
-  (MSG_PEER_PUBLIC_KEYS). Messages are signed and encrypted by the apps; SQS adds TLS-only access
-  and encryption at rest.
+Description: 'Site job and result queues with dead-letter queues, and the backend message keys.'
 
 Parameters:
   Project:
     Type: String
     Default: siit
-  LambdaRoleArn:
-    Type: String
-    Description: Role of the key generator; needs secretsmanager:PutSecretValue (Learner Lab - LabRole, D30)
   KeyGeneration:
     Type: Number
     Default: 1
-    Description: Change it to make a new backend key pair (rotation); the key id becomes <project>-backend-<n>
+    Description: Backend key generation number
   JobVisibilitySeconds:
     Type: Number
     Default: 900
-    Description: Longer than the slowest job at the site (pfSense UI + conda env), so a job isn't handed out twice
+    Description: Job visibility timeout
   MaxReceiveCount:
     Type: Number
     Default: 5
-    Description: Deliveries before a message moves to its dead-letter queue
+    Description: Receives before dead-letter
   LogRetentionDays:
     Type: Number
     Default: 14
 
 Resources:
-  # 14 days everywhere (NFR-1.2): jobs wait while the site is offline.
   RequestDeadLetterQueue:
     Type: AWS::SQS::Queue
     Properties:
@@ -64,9 +54,6 @@ Resources:
       RedrivePolicy:
         deadLetterTargetArn: !GetAtt ResultDeadLetterQueue.Arn
         maxReceiveCount: !Ref MaxReceiveCount
-  # Who may send and receive is IAM's job (one LabRole on Learner Lab; separate backend and site
-  # roles with the full account, D30). The queues themselves refuse plain HTTP (SQS wants one
-  # statement per queue, so one policy each).
   RequestQueueTlsOnly:
     Type: AWS::SQS::QueuePolicy
     Properties:
@@ -128,37 +115,52 @@ Resources:
               Bool:
                 aws:SecureTransport: 'false'
 
-  # The generator overwrites this placeholder; ECS reads MSG_PRIVATE_KEY from it.
   BackendKeysSecret:
     Type: AWS::SecretsManager::Secret
     Properties:
-      Description: !Sub '${Project} backend message keys (D22): MSG_PRIVATE_KEY'
+      Description: !Sub '${Project} backend message keys'
       SecretString: '{"MSG_PRIVATE_KEY":"not generated yet"}'
   KeyGeneratorLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
       LogGroupName: !Sub '/${Project}/message-keys'
       RetentionInDays: !Ref LogRetentionDays
+  KeyGeneratorRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${Project}-message-keys-fn'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: {Service: lambda.amazonaws.com}
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: generate-keys
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: [secretsmanager:GetSecretValue, secretsmanager:PutSecretValue]
+                Resource: !Ref BackendKeysSecret
+              - Effect: Allow
+                Action: [logs:CreateLogStream, logs:PutLogEvents]
+                Resource: !GetAtt KeyGeneratorLogGroup.Arn
   KeyGeneratorFunction:
     Type: AWS::Lambda::Function
     Properties:
       FunctionName: !Sub '${Project}-message-keys'
-      Description: Generates the backend message key bundle into Secrets Manager (custom resource)
+      Description: Generates the backend message keys
       Runtime: nodejs22.x
       Handler: index.handler
-      Role: !Ref LambdaRoleArn
+      Role: !GetAtt KeyGeneratorRole.Arn
       Timeout: 30
-      # Only warnings and errors are logged, and the delete path logs nothing: Lambda delivers logs
-      # after the invocation, and a late line would recreate the log group after the stack deleted it.
       LoggingConfig:
         LogGroup: !Ref KeyGeneratorLogGroup
         LogFormat: JSON
         ApplicationLogLevel: WARN
         SystemLogLevel: WARN
       Code:
-        # The same bundle format as acc-prov-vm's npm run keygen: <kid>.<ed25519>.<x25519>, raw
-        # 32-byte keys in base64url. The private bundle goes only to Secrets Manager; the response
-        # (and the log) carries the public bundle only.
         ZipFile: |
           const https = require('node:https');
           const { createPrivateKey, createPublicKey, generateKeyPairSync } = require('node:crypto');
@@ -188,7 +190,6 @@ Resources:
               if (event.RequestType === 'Delete') return await respond(event, 'SUCCESS', {});
               const { SecretArn, Kid } = event.ResourceProperties;
               if (!/^[a-z0-9][a-z0-9-]{0,39}$/.test(Kid)) throw new Error('bad kid');
-              // A new key pair on create, and on an update only when the kid (KeyGeneration) changes.
               if (event.RequestType === 'Update' && event.PhysicalResourceId === Kid) {
                 const stored = JSON.parse((await secrets.send(new GetSecretValueCommand({ SecretId: SecretArn }))).SecretString).MSG_PRIVATE_KEY;
                 const [kid, sk, ek] = stored.split('.');
@@ -214,6 +215,14 @@ Resources:
       ServiceToken: !GetAtt KeyGeneratorFunction.Arn
       SecretArn: !Ref BackendKeysSecret
       Kid: !Sub '${Project}-backend-${KeyGeneration}'
+  BackendPublicKeyParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/${Project}/backend-public-key'
+      Type: String
+      Tier: Standard
+      Description: Backend public message key
+      Value: !GetAtt BackendKeys.PublicBundle
 
 Outputs:
   RequestQueueUrl:
@@ -224,7 +233,6 @@ Outputs:
     Value: !Ref ResultQueue
     Export:
       Name: !Sub '${AWS::StackName}-ResultQueueUrl'
-  # The backend's scheduler reads both dead-letter queues (FR-6.7).
   RequestDeadLetterQueueUrl:
     Value: !Ref RequestDeadLetterQueue
     Export:
@@ -233,10 +241,31 @@ Outputs:
     Value: !Ref ResultDeadLetterQueue
     Export:
       Name: !Sub '${AWS::StackName}-ResultDeadLetterQueueUrl'
+  RequestQueueArn:
+    Value: !GetAtt RequestQueue.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-RequestQueueArn'
+  ResultQueueArn:
+    Value: !GetAtt ResultQueue.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-ResultQueueArn'
+  RequestDeadLetterQueueArn:
+    Value: !GetAtt RequestDeadLetterQueue.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-RequestDeadLetterQueueArn'
+  ResultDeadLetterQueueArn:
+    Value: !GetAtt ResultDeadLetterQueue.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-ResultDeadLetterQueueArn'
+  BackendPublicKeyParameter:
+    Description: SSM parameter with the backend public key
+    Value: !Ref BackendPublicKeyParameter
+    Export:
+      Name: !Sub '${AWS::StackName}-BackendPublicKeyParameter'
   BackendKeysSecretArn:
     Value: !Ref BackendKeysSecret
     Export:
       Name: !Sub '${AWS::StackName}-BackendKeysSecretArn'
   BackendPublicKey:
-    Description: Put this into acc-prov-vm's .env as MSG_PEER_PUBLIC_KEYS (public, not secret)
+    Description: Backend public key
     Value: !GetAtt BackendKeys.PublicBundle

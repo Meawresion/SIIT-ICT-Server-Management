@@ -232,10 +232,13 @@ With `MESSAGE_TRANSPORT=sqs` the worker uses the queues from the root `infra` qu
 
 Setup, from the stack outputs:
 - `SQS_REQUEST_QUEUE_URL`, `SQS_RESULT_QUEUE_URL`: `RequestQueueUrl`, `ResultQueueUrl`;
-- `MSG_PEER_PUBLIC_KEYS`: `BackendPublicKey` (the backend's private key exists only in Secrets Manager);
-- this site's public bundle (`npm run keygen`) goes into `SITE_PUBLIC_KEYS` in `infra/config.env`;
-- credentials: on Learner Lab, the session's `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` and
-  `AWS_SESSION_TOKEN` in `.env` each session (plan §10.1); with the full account, IAM Roles Anywhere.
+- `MSG_PEER_PUBLIC_KEYS_PARAM`: the SSM parameter with the backend's public key
+  (`BackendPublicKeyParameter`, e.g. `/<project>/backend-public-key`), read once at start. Or the key
+  itself as text in `MSG_PEER_PUBLIC_KEYS` (it wins); the backend's private key exists only in
+  Secrets Manager;
+- this site's public bundle (`npm run keygen`) goes to SSM with `infra/scripts/set-site-key.sh`;
+- credentials: IAM Roles Anywhere with the site certificate (`credential_process`, see "Running at
+  the site", step 6); on Learner Lab, its session keys instead (plan §10.1).
 - **Heartbeat:** every `HEARTBEAT_INTERVAL_SEC` (default 300; 0 = off) the worker sends the portal
   a signed and encrypted heartbeat on the result queue (`src/heartbeat.js`, rid 0, no job). It
   carries a TCP check of the pfSense webGUI and each node's SSH port, with no login. The portal
@@ -312,32 +315,55 @@ store and Chromium live in `/var/lib/acc-prov-vm`.
      and `BIGDATA_FILE=/etc/acc-prov-vm/bigdata.json`.
    - An SSH key goes in `/etc/acc-prov-vm/ssh/`, owned `root:accprov`, mode 640.
    - `JOB_STORE_FILE` is set by the unit (`/var/lib/acc-prov-vm/jobs.json`).
-   - Leave the `AWS_*` keys out of this file; step 6 puts them in `aws.env`.
+   - Leave the `AWS_*` keys out of this file (step 6 sets up the AWS access); `AWS_REGION` stays.
    - The npm scripts read `.env` in the code folder, so link it there:
      ```bash
      sudo ln -s /etc/acc-prov-vm/acc-prov-vm.env /opt/siit/acc-prov-vm/.env
      ```
 4. Message keys and queues:
    - `sudo -u accprov npm run keygen -- site-YYYY-MM`. The private line goes in the settings file
-     (`MSG_PRIVATE_KEY`). The public line goes to the portal's `SITE_PUBLIC_KEYS` (`infra/config.env`,
-     then `deploy.sh app identity provisioning`).
-   - Set `MESSAGE_TRANSPORT=sqs`, the two queue URLs and `MSG_PEER_PUBLIC_KEYS` from the queues
-     stack outputs (see [AWS SQS](#aws-sqs)).
+     (`MSG_PRIVATE_KEY`). The public line goes to the portal admin, who runs
+     `infra/scripts/set-site-key.sh <public line>` (SSM; the provisioning service restarts with it).
+   - Set `MESSAGE_TRANSPORT=sqs`, the two queue URLs and `MSG_PEER_PUBLIC_KEYS_PARAM` (the backend's
+     public key in SSM, read at start) as `deploy.sh site` prints them. Leave `MSG_PEER_PUBLIC_KEYS`
+     empty (it would win over the parameter).
 5. Check the settings:
    ```bash
    sudo -u accprov env PLAYWRIGHT_BROWSERS_PATH=/var/lib/acc-prov-vm/ms-playwright npm run check:config
    ```
    It lists the GPU and Hadoop nodes.
-6. The service and the AWS keys:
+6. AWS access with IAM Roles Anywhere (no keys to paste or renew). The portal admin runs
+   `site-ca.sh issue` and gives you `site.key` and `site.pem` (over SSH, never by email), and the
+   three ARNs that `deploy.sh site` prints:
+   ```bash
+   # The credential helper, from AWS (check the SHA256 against the Roles Anywhere user guide,
+   # "Get temporary security credentials"; 1.8.6 Linux x86-64 below)
+   curl -fLo /tmp/aws_signing_helper https://rolesanywhere.amazonaws.com/releases/1.8.6/X86_64/Linux/Amzn2023/aws_signing_helper
+   echo "3553fdc515e5682541a9ebdd37031ec7f461169aa13ccbb6fbd5b7259644113d  /tmp/aws_signing_helper" | sha256sum -c
+   sudo install -o root -g root -m 755 /tmp/aws_signing_helper /usr/local/bin/aws_signing_helper
+   # The certificate and its key
+   sudo install -d -o root -g accprov -m 750 /etc/acc-prov-vm/site
+   sudo install -o root -g accprov -m 640 site.pem site.key /etc/acc-prov-vm/site/
+   # The SDK runs the helper and renews the credentials by itself
+   sudo tee /etc/acc-prov-vm/aws-config >/dev/null <<'CFG'
+   [default]
+   credential_process = /usr/local/bin/aws_signing_helper credential-process --certificate /etc/acc-prov-vm/site/site.pem --private-key /etc/acc-prov-vm/site/site.key --trust-anchor-arn <TrustAnchorArn> --profile-arn <ProfileArn> --role-arn <RoleArn>
+   CFG
+   sudo chown root:accprov /etc/acc-prov-vm/aws-config && sudo chmod 640 /etc/acc-prov-vm/aws-config
+   sudo rm -f /etc/acc-prov-vm/aws.env   # old Learner Lab keys would win over it
+   # Test: prints temporary credentials as JSON (don't share the output)
+   sudo -u accprov /usr/local/bin/aws_signing_helper credential-process --certificate /etc/acc-prov-vm/site/site.pem --private-key /etc/acc-prov-vm/site/site.key --trust-anchor-arn <TrustAnchorArn> --profile-arn <ProfileArn> --role-arn <RoleArn> | head -c 20; echo
+   ```
+   Then the service:
    ```bash
    sudo cp deploy/acc-prov-vm.service /etc/systemd/system/
    sudo systemctl daemon-reload
-   sudo systemctl enable acc-prov-vm
-   sudo bash deploy/set-aws-creds.sh
+   sudo systemctl enable --now acc-prov-vm
    ```
-   `set-aws-creds.sh` asks you to paste Learner Lab's "AWS CLI" block, then Ctrl+D. It writes
-   `/etc/acc-prov-vm/aws.env` (root only), then starts or restarts the service. The keys are never
-   printed.
+   The site role may only take jobs from the request queue, send results and read the backend's
+   public key. The certificate lasts a year: `site-ca.sh issue` again, copy, restart.
+   (Learner Lab only: `sudo bash deploy/set-aws-creds.sh` pastes its session keys into `aws.env`
+   instead; they expire after a few hours.)
 7. Watch the first start: `journalctl -u acc-prov-vm -f`. It logs JSON lines, starting with
    `acc-prov-vm.ready` (the transport, the key id and the nodes).
    - The hardening lines in the unit were checked with `systemd-analyze verify`, but not yet on the
@@ -349,7 +375,7 @@ store and Chromium live in `/var/lib/acc-prov-vm`.
 
 | Task | Command |
 |---|---|
-| New Learner Lab session (the keys expire after a few hours) | `sudo bash /opt/siit/acc-prov-vm/deploy/set-aws-creds.sh` |
+| New site certificate (yearly) | copy the new `site.pem` and `site.key` to `/etc/acc-prov-vm/site/`, `sudo systemctl restart acc-prov-vm` |
 | Logs | `journalctl -u acc-prov-vm -f` (`--since "1 hour ago"`) |
 | Stop or start (e.g. before a portal smoke test, which must not meet the real worker) | `sudo systemctl stop acc-prov-vm` / `start` |
 | New version | `cd /opt/siit && sudo git pull && cd acc-prov-vm && sudo npm ci --omit=dev && sudo systemctl restart acc-prov-vm` |
