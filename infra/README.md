@@ -1,8 +1,14 @@
 # AWS infrastructure (CloudFormation)
 
 The portal on AWS: CloudFront in front of a private S3 bucket (the React build) and an ALB
-(`/api/*`), the backend on ECS Fargate, and MySQL either as an ECS task with its data on EFS
-(`DATA_MODE=ecs`, the budget mode for testing) or on RDS Multi-AZ (`DATA_MODE=rds`, D31).
+(`/api/*`), the services on ECS Fargate, and RDS MySQL Multi-AZ (`DATA_MODE=rds`). MySQL as an ECS
+task with its data on EFS (`DATA_MODE=ecs`) is still there as a budget mode.
+
+**Where it runs now:** the course account, CLI profile `des424`, region us-east-1, portal
+`https://app.siitrrapp.arbw.dev`. Every resource name starts with `des424-126-g01`, the `<project>`
+in this file. **The scripts take that prefix from the settings file:** without
+`CONFIG=infra/config.des424.env` they read `infra/config.env`, and if that says `PROJECT=siit` they
+work on `siit-*` stacks. See [Next session](#next-session-the-usual-way-in).
 
 ```
 Browser ─HTTPS─▶ CloudFront  APP_HOST.ZONE_NAME
@@ -36,20 +42,27 @@ provisioning; the portal keeps working and the jobs wait in the outbox).
 | provisioning | `provisioning` | `node src/worker.js` (ECS, no load balancer): sends the outbox's jobs, applies the results, scheduler, audit shipping | the backend message key, the site queues, DB user |
 | notification | `events` | a Lambda (container image) fed by the event bus through its own SQS queue | the SMTP settings (mail secret) |
 | grafana | `grafana` | Grafana at `/grafana/` behind the ALB (ECS): the operations dashboards, CloudWatch as its data source | the Google client (staff sign-in), its admin password |
-| acc-prov-vm | on-site | creates the accounts at SIIT | the site key, pfSense and SSH access |
+| acc-prov-vm | on-site | creates the accounts at SIIT and emails the student their credentials | the site key and certificate, pfSense and SSH access, its own SMTP settings |
 
 ```
 requests ──outbox (DB)──▶ provisioning ──job──▶ SQS provision-requests (+DLQ) ──▶ acc-prov-vm (SIIT site)
                                  ◀─result─ SQS provision-results  (+DLQ) ◀──┘
 requests, provisioning ──"Email requested"──▶ EventBridge bus ──rule──▶ SQS notifications (+DLQ) ──▶ notification Lambda ──SMTP──▶ student / approvers
+acc-prov-vm ──SMTP (from the site, never through AWS)──▶ student (instructions, then the password as an image)
+acc-prov-vm ──site certificate──▶ IAM Roles Anywhere ──▶ short-lived credentials of the site role
 ```
+
+**Two senders, one relay.** The notification Lambda sends the status emails with the mail secret;
+acc-prov-vm sends the credential emails with `SMTP_*` in its own settings file at the site. Both
+use the same relay (for now a Gmail sender with an App Password), so credentials never reach AWS.
+The outbound SMTP port must be open at the site (465 for Gmail).
 
 Locally (`docker compose`) one backend process does both (`SERVICE_ROLE=all`) and sends the emails
 itself.
 
 **Logs** (`logs` stack, kept between runs): every container writes one JSON line per event to
-stdout, and ECS sends it to the service's CloudWatch Logs group (`/<project>/backend`,
-`/frontend`, `/mysql`, kept `APP_LOG_DAYS`, default 90). The backend copies the audit trail
+stdout, and ECS sends it to the service's CloudWatch Logs group (`/<project>/backend`, `/identity`,
+`/provisioning`, `/grafana`, `/notification`, `/frontend`, `/mysql`, kept `APP_LOG_DAYS`, default 90). The backend copies the audit trail
 (`request_event`) into `/<project>/audit` (kept `AUDIT_LOG_DAYS`, default 400, NFR-7.1), so the
 trail outlives the database. The groups belong to the logs stack, so deleting the app stacks
 keeps the logs. The ALB writes its access logs to the stack's S3 bucket (`alb/`, every 5 minutes,
@@ -58,8 +71,8 @@ Error pages show only a reference (the request ID); `find-in-logs.sh <reference>
 Insights query and prints the full error. Saved queries (CloudWatch > Logs Insights): find a
 reference, backend errors, one request's audit trail, provisioning failures, slow requests.
 
-**Alerts:** the app and web stacks' alarms (backend error lines, ALB 5xx, unhealthy targets,
-messages in a dead-letter queue) and an EventBridge rule for tasks that crash or fail to start
+**Alerts:** the stacks' alarms (error lines per service, ALB 5xx, unhealthy targets, messages in a
+dead-letter queue, the site's health, RDS storage and CPU; 13 on the course account) and an EventBridge rule for tasks that crash or fail to start
 publish to the logs stack's SNS topic, which mails `ALERT_EMAIL` (AWS sends a confirmation link
 first). The alarms are deleted with the app, so they cost ($0.10 each a month) only while it runs.
 
@@ -83,7 +96,7 @@ no state of its own, so the stack can be deleted and recreated at any time. The 
 billed) stays off; set `CONTAINER_INSIGHTS=enabled` and run `deploy.sh platform` for a demo day,
 then turn it off the same way.
 
-The backend's scheduler (every `SCHEDULER_INTERVAL_SEC`, in one task at a time) reads both
+The provisioning service's scheduler (every `SCHEDULER_INTERVAL_SEC`, in one task at a time) reads both
 dead-letter queues and fails the jobs it finds there, so the approvers are told (FR-6.7). It also
 sends the end-date reminders and removes access when a request ends (FR-8.2, FR-8.4).
 
@@ -111,7 +124,22 @@ sends the end-date reminders and removes access when a request ends (FR-8.2, FR-
 
 **IAM (least privilege).** Each stack creates the roles of what it runs, named `<project>-<service>-exec` (ECS pulls that one image, writes that one log group, reads only that service's secrets) and `<project>-<service>-task` (what the running code calls: the backend only puts events on the bus; provisioning only its queues, the audit log group and the bus; Grafana reads CloudWatch and only the project's log groups). Identity, the database tasks and nginx call no AWS API and have no task role. The Lambdas have `<project>-notification-fn` and `<project>-message-keys-fn`, the site `<project>-site`. Deploys need `CAPABILITY_NAMED_IAM`, and every stack is tagged `Project=<project>`. Learner Lab can't create roles, so these templates no longer run there (D30 is replaced).
 
-**A shared account** (e.g. the course account, every group in one account): set `PROJECT` to the group's prefix. Every name starts with it, and the scripts only list, check or delete resources with that prefix. A second settings file can reuse `config.env` and change a few values: `CONFIG=infra/config.<name>.env infra/scripts/<script>.sh` (git-ignored; it starts with `. "$INFRA_DIR/config.env"`).
+**A shared account** (the course account, every group in one account): set `PROJECT` to the group's prefix. Every name starts with it, and the scripts only list, check or delete resources with that prefix. A second settings file can reuse `config.env` and change a few values: `CONFIG=infra/config.<name>.env infra/scripts/<script>.sh` (git-ignored; it starts with `. "$INFRA_DIR/config.env"`, and a relative `CONFIG` is read from the folder you run in, so run from the repository root). `infra/config.des424.env` does this for the course account:
+
+```bash
+. "$INFRA_DIR/config.env"
+AWS_PROFILE=des424
+AWS_REGION=us-east-1
+PROJECT=des424-126-g01
+ENTRY_MODE=cloudfront
+USE_DOMAIN=true
+DATA_MODE=rds
+DB_INSTANCE_CLASS=db.t3.micro
+DB_MULTI_AZ=true
+DB_BACKUP_DAYS=1
+DB_RESTORE=latest
+CONTAINER_INSIGHTS=disabled
+```
 
 ## AWS Learner Lab limits (checked 2026-10-27, no longer supported)
 
@@ -154,9 +182,9 @@ domain, provisioning on with a throwaway site key), and checks:
   with the task role, and the SIIT dashboard is provisioned;
 - the status emails of these checks reach the notification Lambda through the event bus (it reads
   the mail secret and sends them, or only logs them with the placeholders; a failed send fails the
-  check), the provisioning service logs its start, and the 9 alarms exist.
+  check), the provisioning service logs its start, and the alarms exist (9, plus 1 in direct mode and 2 on RDS; the two site heartbeat alarms are off in a smoke run).
 
-Then it deletes the test stacks (`web`, `grafana`, `identity`, `provisioning`, `app`, `events`, `data`, `secrets`), even after a
+Then it deletes the test stacks (`edge`, `web`, `grafana`, `identity`, `provisioning`, `app`, `events`, `rds`, `data`, `secrets`), even after a
 failure or Ctrl+C, and lists anything left behind (stacks, ECS services and tasks, load
 balancers, EFS, SQS, Lambda, log groups, secrets). The teardown is fast: every ECS task is
 stopped at once, then the stacks go in dependency order, independent ones in parallel.
@@ -165,6 +193,7 @@ stopped at once, then the stacks go in dependency order, independent ones in par
 - `network` and `platform` (the ECR images; user's OK, 2026-10-28): they run nothing and cost cents a month (ECR storage, at most 5 images per repository), so the next run only uploads the images whose code changed.
 - `queues` (2026-10-30): idle queues cost nothing, since SQS bills per request; the backend key secret costs $0.40/month. Keeping it keeps the backend public key and queue URLs that acc-prov-vm is set up with.
 - `logs` (2026-10-30): the log groups, the audit trail and the alert topic. Log storage costs cents; metric filters, saved queries and an idle topic cost nothing.
+- `site` (2026-11-08): the Roles Anywhere access and the site's public key, so nothing changes at the site between sessions.
 
 The smoke test creates them when they are missing (first run, or after a Learner Lab reset) and never deletes them. The `dns` and `cert` stacks stay too.
 
@@ -175,7 +204,7 @@ The smoke test creates them when they are missing (first run, or after a Learner
 | `smoke-test.sh` | Deploy, check, delete the test stacks; keep network, platform, queues, logs, dns, cert |
 | `smoke-test.sh --cloudfront` | The same through CloudFront and S3 (edge stack, `publish-frontend.sh`) instead of the web stack; needs the dns and cert stacks |
 | `smoke-test.sh --keep` | Leave the test stacks running |
-| `smoke-test.sh --teardown` | Only delete the test stacks and check (e.g. after a run was killed hard) |
+| `smoke-test.sh --teardown` | Only delete the test stacks and check (after a run was killed hard, or at the end of a session: it is the list of paid stacks). RDS leaves a final snapshot |
 | `teardown-all.sh` | Delete everything, including network, platform, queues and logs with its log groups and S3 bucket (asks first); `--dns` also deletes the zone |
 
 ## Settings and secrets
@@ -200,13 +229,45 @@ The smoke test creates them when they are missing (first run, or after a Learner
 - The backend gets plain values from the task definition and secret ones from Secrets Manager;
   ECS reads them when a task starts.
 
+## Next session (the usual way in)
+
+The base stacks (`dns`, `cert`, `network`, `platform`, `logs`, `queues`, `site`) stay between
+sessions, so a session is these commands, from the repository root in Git Bash (about 20-30 minutes,
+mostly RDS and CloudFront):
+
+```bash
+export CONFIG=infra/config.des424.env     # every script below then uses the des424-126-g01 prefix
+infra/scripts/push-images.sh              # builds and uploads what changed
+infra/scripts/deploy.sh secrets
+infra/scripts/set-secrets.sh              # Google and SMTP values from config.env
+infra/scripts/deploy.sh all               # RDS restores the newest final snapshot (DB_RESTORE)
+infra/scripts/publish-frontend.sh
+```
+
+Then start acc-prov-vm at the site and check that its heartbeat arrives (it sends one every 5
+minutes; Logs Insights takes a little longer):
+
+```bash
+infra/scripts/find-in-logs.sh '"event":"site.heartbeat"' --since "30 minutes ago" --group provisioning
+```
+
+The paid stacks cost about USD 0.15 an hour (estimate). At the end of the session:
+
+```bash
+infra/scripts/smoke-test.sh --teardown    # deletes the paid stacks, keeps the base stacks; RDS leaves a final snapshot
+```
+
+The final snapshots stay until you delete them, so the next session starts with the same data.
+
 ## First deploy
 
-The scripts are bash (Git Bash on Windows, or Linux/WSL) and need the AWS CLI v2, Node.js and Docker.
+From an empty account, once. The scripts are bash (Git Bash on Windows, or Linux/WSL) and need the
+AWS CLI v2, Node.js and Docker.
 
-1. `cp infra/config.example.env infra/config.env` and fill it in.
-2. AWS credentials for `AWS_PROFILE` (Learner Lab: "AWS Details" → paste into `~/.aws/credentials`
-   under `[siit-lab]`; they expire after a few hours).
+1. `cp infra/config.example.env infra/config.env` and fill it in (the example already has the course
+   account's profile and prefix), or keep your `config.env` and add a settings file as under "A shared
+   account" above. In that case, `export CONFIG=infra/config.<name>.env` before the steps below.
+2. AWS credentials for `AWS_PROFILE` (`aws configure --profile des424`).
 3. `infra/scripts/probe.sh`: checks that the account allows every service used here.
 4. `infra/scripts/deploy.sh dns`, then add the printed name servers as `NS` records for the
    subdomain at the parent domain's DNS provider (e.g. Cloudflare: 4 NS records named after the
@@ -247,17 +308,20 @@ The scripts are bash (Git Bash on Windows, or Linux/WSL) and need the AWS CLI v2
 | Check the database from inside AWS (adds 4 check accounts: throwaway data only) | `run-task.sh --identity node scripts/check-identity.js <marker>`, then `run-task.sh node scripts/check-db.js <marker>` |
 | Find an incident from its reference | `find-in-logs.sh <reference>` (last 2 days; `--since "2026-11-01"` for older ones, `--group audit` for one group) |
 | Search the ALB access logs | `find-in-logs.sh <text> --alb` (`--date YYYY-MM-DD` for other days) |
+| Is the site connected? | `find-in-logs.sh '"event":"site.heartbeat"' --since "30 minutes ago" --group provisioning` |
 | Stop the tasks between test sessions | `pause.sh` (the ALB still costs ~$0.6/day; on RDS it stops the instance too, storage still billed, and AWS starts it again after 7 days) |
 | Start them again | `resume.sh` |
 | Move the database to RDS with its data | `DATA_MODE=rds` in `config.env`, then `switch-to-rds.sh` (RDS is created while the portal runs; then about 5 minutes down for the copy and the restart). Check the portal, then delete the old `<project>-data` stack |
 | Test on RDS | `DATA_MODE=rds smoke-test.sh --domain --keep` (RDS adds 15-25 minutes) |
 | Rotate the site key | `npm run keygen` at the site, `set-site-key.sh <new>,<old>`, switch the site to the new private key, then `set-site-key.sh <new>` |
 | Renew the site certificate (yearly) | `site-ca.sh issue`, copy `site.key` and `site.pem` to the site, restart acc-prov-vm (no AWS change) |
-| Long break | `destroy.sh edge web app` (keeps the zone, certificate, images and data) |
+| End of a session | `smoke-test.sh --teardown` (see [Next session](#next-session-the-usual-way-in)) |
 | Remove everything (end of the course) | `teardown-all.sh` (and `--dns` for the zone) |
 
 Image tags follow the last commit that changed `backend/` (`frontend/` for the frontend,
 `database/` for MySQL and the RDS init task), so a deploy only restarts what changed. Uncommitted changes
 produce a `-dirty` tag.
 
-Logs: CloudWatch log groups `/<project>/backend`, `/<project>/frontend`, `/<project>/mysql` and `/<project>/audit` (logs stack).
+All commands above assume `export CONFIG=infra/config.des424.env` in the shell, from the repository root.
+
+Logs: CloudWatch log groups `/<project>/<service>` and `/<project>/audit` (logs stack).

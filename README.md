@@ -11,7 +11,7 @@ A full-stack web application for SIIT students to submit ICT/resource requests a
 - **Authentication**: Google OAuth 2.0 + OpenID Connect
 - **Containerization**: Docker & Docker Compose
 - **Validation**: Zod
-- **Deployment**: AWS ECS Fargate (production)
+- **Deployment**: AWS (CloudFront, S3, ECS Fargate, RDS MySQL Multi-AZ), built with CloudFormation
 
 ## Project Structure
 
@@ -44,6 +44,10 @@ A full-stack web application for SIIT students to submit ICT/resource requests a
 ├── database/
 │   ├── init.sql               # MySQL schema
 │   └── README.md
+├── notification/               # Notification Lambda (status emails)
+├── grafana/                    # Dashboards as code
+├── acc-prov-vm/                # Account provisioning worker at the SIIT site
+├── infra/                      # AWS: CloudFormation templates and scripts
 ├── docker-compose.yml         # Local development setup
 └── README.md
 
@@ -305,14 +309,18 @@ Tests cover:
 ## Production Deployment
 
 AWS is built with CloudFormation; the templates, scripts and steps are in
-[`infra/README.md`](infra/README.md). In short:
+[`infra/README.md`](infra/README.md). It runs on the course account, where every resource name
+starts with `des424-126-g01`: run the scripts with `CONFIG=infra/config.des424.env`. In short:
 
-- **Backend:** ECS Fargate behind an Application Load Balancer (`backend/Dockerfile`, `prod` stage).
-- **Frontend:** CloudFront + S3 (the target design), or, where CloudFront isn't allowed (AWS
-  Learner Lab), its own ECS service behind the same load balancer (`frontend/Dockerfile`, `prod`
-  stage: nginx with the React build). Either way it is built and deployed separately from the
-  backend, on the same origin as the API.
-- **Database:** MySQL as an ECS task on EFS for now, RDS later.
+- **Services:** identity, requests, provisioning and Grafana on ECS Fargate behind an Application
+  Load Balancer (`backend/Dockerfile`, `prod` stage), and a notification Lambda for the status emails.
+- **Frontend:** CloudFront + S3, built and deployed separately from the backend, on the same origin
+  as the API. Without CloudFront (`ENTRY_MODE=direct`) it is its own ECS service (nginx).
+- **Database:** RDS MySQL Multi-AZ, private subnets, TLS checked. The paid stacks are deleted between
+  sessions; a final snapshot is kept and restored on the next deploy.
+- **SIIT site:** [`acc-prov-vm`](acc-prov-vm/README.md) takes jobs from SQS with short-lived
+  credentials from IAM Roles Anywhere, creates the accounts, and emails the student directly through
+  the SMTP relay. See its README, "Running at the site".
 
 ## Development Commands
 

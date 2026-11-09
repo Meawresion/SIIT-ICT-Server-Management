@@ -7,7 +7,7 @@ Runs at the SIIT resource site, behind pfSense. When a GPU or Big Data request i
 - **Hadoop nodes** Linux user in the Hadoop groups on every node, plus the HDFS home, over SSH (`src/hadoop.js`)
 - **HUE** user, via the webGUI with Playwright (`src/hue.js`; off until verified on the live UI)
 - **Messaging:** signed + encrypted envelopes (`src/envelope.js`) over local ActiveMQ (`src/amqp.js`) or AWS SQS (`src/sqs.js`)
-- **Student email** with credentials and links, via SMTP (`src/mail.js`)
+- **Student email** with credentials and links, sent directly from this host to the SMTP relay (`src/mail.js`)
 - **Worker** (`npm start`): runs CREATE / REVOKE / EXTEND jobs from the queue (`src/worker.js`, `src/jobs.js`)
 
 ## Setup
@@ -166,16 +166,16 @@ await sendProvisionEmails(mailer, {
 
 - **Escaping and attachments:** every email has a text and an HTML version, with user text escaped. The only attachment is the inline password image (CID).
 - **Recipients** must be plain addresses. Quotes, `;`, `<>`, `()` and spaces are rejected. Optionally, `MAIL_ALLOWED_RECIPIENT_DOMAINS` limits sending to the SIIT domain.
-- **Sender:** SMTP settings come from `.env`; for now that's Gmail with an App Password (D9). The sender can be swapped for an SIIT relay or SES by changing config only.
+- **Sender:** this host connects to the SMTP relay itself, with the `SMTP_*` settings in its own `.env`; nothing about the email passes through AWS. For now the relay is Gmail with an App Password (D9). It can be swapped for an SIIT relay or SES by changing config only. The portal's status emails are separate: the notification Lambda sends them with its own copy of the settings.
 - **The image is obfuscation, not encryption.** It keeps the password out of search, previews and scrapers, but anyone who opens the email can read it.
 
 ## Message envelope (D22)
 
-Every message between the backend and acc-prov-vm is **signed and encrypted**, on every transport (local ActiveMQ, AWS SQS). IAM, TLS and SSE-KMS stay in place underneath. The envelope additionally makes sure that only the backend's key can authorize a job, and only acc-prov-vm can read it.
+Every message between the backend and acc-prov-vm is **signed and encrypted**, on every transport (local ActiveMQ, AWS SQS). IAM, TLS and SQS-managed encryption stay in place underneath. The envelope additionally makes sure that only the backend's key can authorize a job, and only acc-prov-vm can read it.
 
 - **Keys:** each side has one bundle, `<kid>.<Ed25519 key>.<X25519 key>`. Generate one with `npm run keygen -- site-2026-10`.
   - The private bundle goes in this side's `.env` (`MSG_PRIVATE_KEY`) only.
-  - The public bundle goes to the other side (`MSG_PEER_PUBLIC_KEYS`, or Secrets Manager on AWS).
+  - The public bundle goes to the other side (`MSG_PEER_PUBLIC_KEYS`, or the SSM parameter on AWS, `MSG_PEER_PUBLIC_KEYS_PARAM`).
   - Several peer bundles can be listed during a key rotation; the first one is used for sending.
 - **Crypto (Node built-in `crypto`):** an ephemeral X25519 key with ECDH, then HKDF-SHA256, then AES-256-GCM, with the header as additional authenticated data. The sender signs header + iv + ciphertext + tag with Ed25519.
 - **Envelope:** `{ v, typ: 'job'|'result', kid, rkid, jti (job_id), rid, iat, exp, epk, iv, ct, tag, sig }`. Payloads never contain passwords.
@@ -233,12 +233,12 @@ With `MESSAGE_TRANSPORT=sqs` the worker uses the queues from the root `infra` qu
 Setup, from the stack outputs:
 - `SQS_REQUEST_QUEUE_URL`, `SQS_RESULT_QUEUE_URL`: `RequestQueueUrl`, `ResultQueueUrl`;
 - `MSG_PEER_PUBLIC_KEYS_PARAM`: the SSM parameter with the backend's public key
-  (`BackendPublicKeyParameter`, e.g. `/<project>/backend-public-key`), read once at start. Or the key
+  (`BackendPublicKeyParameter`: `/des424-126-g01/backend-public-key` on the course account), read once at start. Or the key
   itself as text in `MSG_PEER_PUBLIC_KEYS` (it wins); the backend's private key exists only in
   Secrets Manager;
 - this site's public bundle (`npm run keygen`) goes to SSM with `infra/scripts/set-site-key.sh`;
 - credentials: IAM Roles Anywhere with the site certificate (`credential_process`, see "Running at
-  the site", step 6); on Learner Lab, its session keys instead (plan §10.1).
+  the site", step 6).
 - **Heartbeat:** every `HEARTBEAT_INTERVAL_SEC` (default 300; 0 = off) the worker sends the portal
   a signed and encrypted heartbeat on the result queue (`src/heartbeat.js`, rid 0, no job). It
   carries a TCP check of the pfSense webGUI and each node's SSH port, with no login. The portal
@@ -284,7 +284,11 @@ store and Chromium live in `/var/lib/acc-prov-vm`.
 
 **Requirements on the host (Ubuntu):**
 - Node.js 22 at `/usr/bin/node` (e.g. from NodeSource; otherwise change `ExecStart`).
-- Outbound HTTPS to `sqs.<region>.amazonaws.com`, and SMTP to the mail server.
+- Outbound HTTPS to `sqs.<region>.amazonaws.com`, `ssm.<region>.amazonaws.com` and
+  `rolesanywhere.<region>.amazonaws.com`.
+- Outbound SMTP to the relay (`SMTP_PORT`: 465 for Gmail). The credential emails go straight from
+  this host, so pfSense must let this out. The emails are the last step of a job, so a blocked port
+  shows up as a failed job after the accounts were made.
 - The pfSense webGUI, and SSH to the GPU and Hadoop nodes.
 
 **Install** (as an admin with sudo):
@@ -328,7 +332,10 @@ store and Chromium live in `/var/lib/acc-prov-vm`.
      (`MSG_PRIVATE_KEY`). The public line goes to the portal admin, who runs
      `infra/scripts/set-site-key.sh <public line>` (SSM; the provisioning service restarts with it).
    - Set `MESSAGE_TRANSPORT=sqs`, the two queue URLs and `MSG_PEER_PUBLIC_KEYS_PARAM` (the backend's
-     public key in SSM, read at start) as `deploy.sh site` prints them. Leave `MSG_PEER_PUBLIC_KEYS`
+     public key in SSM, read at start) as `deploy.sh site` prints them. On the course account every
+     name has the prefix `des424-126-g01`: `/des424-126-g01/backend-public-key`, queues
+     `des424-126-g01-provision-requests` and `-provision-results`. A value with `siit-` in it means the
+     admin ran `deploy.sh` without `CONFIG=infra/config.des424.env`. Leave `MSG_PEER_PUBLIC_KEYS`
      empty (it would win over the parameter).
 5. Check the settings (from the code folder):
    ```bash
@@ -358,6 +365,13 @@ store and Chromium live in `/var/lib/acc-prov-vm`.
    # Test: prints temporary credentials as JSON (don't share the output)
    sudo -u accprov /usr/local/bin/aws_signing_helper credential-process --certificate /etc/acc-prov-vm/site/site.pem --private-key /etc/acc-prov-vm/site/site.key --trust-anchor-arn <TrustAnchorArn> --profile-arn <ProfileArn> --role-arn <RoleArn> | head -c 20; echo
    ```
+   `Profile default could not be found` or `Could not load credentials` means the `[default]` line
+   at the top of `aws-config` is missing.
+
+   To try it in the foreground first (Ctrl+C stops it):
+   ```bash
+   cd /opt/siit/acc-prov-vm && sudo -u accprov -H env AWS_CONFIG_FILE=/etc/acc-prov-vm/aws-config PLAYWRIGHT_BROWSERS_PATH=/var/lib/acc-prov-vm/ms-playwright JOB_STORE_FILE=/var/lib/acc-prov-vm/jobs.json /usr/bin/node --env-file=/etc/acc-prov-vm/acc-prov-vm.env src/main.js
+   ```
    Then the service:
    ```bash
    sudo cp deploy/acc-prov-vm.service /etc/systemd/system/
@@ -366,8 +380,6 @@ store and Chromium live in `/var/lib/acc-prov-vm`.
    ```
    The site role may only take jobs from the request queue, send results and read the backend's
    public key. The certificate lasts a year: `site-ca.sh issue` again, copy, restart.
-   (Learner Lab only: `sudo bash deploy/set-aws-creds.sh` pastes its session keys into `aws.env`
-   instead; they expire after a few hours.)
 7. Watch the first start: `journalctl -u acc-prov-vm -f`. It logs JSON lines, starting with
    `acc-prov-vm.ready` (the transport, the key id and the nodes).
    - The hardening lines in the unit were checked with `systemd-analyze verify`, but not yet on the
@@ -381,6 +393,7 @@ store and Chromium live in `/var/lib/acc-prov-vm`.
 |---|---|
 | New site certificate (yearly) | copy the new `site.pem` and `site.key` to `/etc/acc-prov-vm/site/`, `sudo systemctl restart acc-prov-vm` |
 | Logs | `journalctl -u acc-prov-vm -f` (`--since "1 hour ago"`) |
+| Is it connected? | The portal admin runs `find-in-logs.sh '"event":"site.heartbeat"' --group provisioning` (one every 5 minutes, only while the portal's stacks are up). `envelope expired` lines right after a portal start are old heartbeats and are harmless |
 | Stop or start (e.g. before a portal smoke test, which must not meet the real worker) | `sudo systemctl stop acc-prov-vm` / `start` |
 | New version | `cd /opt/siit && sudo git pull && cd acc-prov-vm && sudo npm ci --omit=dev && sudo systemctl restart acc-prov-vm` |
 | Changed settings | `sudoedit /etc/acc-prov-vm/acc-prov-vm.env`, then `sudo systemctl restart acc-prov-vm` |
