@@ -448,8 +448,9 @@ docker volume rm siit-ict-server-management_mysql_data
 docker compose up -d --build
 ```
 
-The volume name is `<compose project>_mysql_data` (`docker volume ls`). On AWS, a new data stack
-starts from the same `init.sql`.
+The volume name is `<compose project>_mysql_data` (`docker volume ls`). On AWS, a new, empty database
+starts from the same `init.sql` (`rds-init.sh` on RDS); with `DB_RESTORE=latest`, the default, the rds
+stack restores its newest final snapshot instead.
 
 ## Assign reviewer access by email
 
