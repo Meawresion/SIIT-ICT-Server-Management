@@ -29,6 +29,12 @@ Browser ─▶ ALB  APP_HOST.ZONE_NAME (HTTPS; HTTP only redirects), or its AWS 
             └─ everything else ─▶ ECS Fargate frontend (web stack)
 ```
 
+**Two Availability Zones.** The request and identity services run 2 tasks each
+(`BACKEND_DESIRED_COUNT`, `IDENTITY_DESIRED_COUNT`), which ECS places one per AZ; the ALB checks
+them and takes a bad one out. They keep no state in memory (the sign-in session and the OAuth state
+are cookies), so any task can answer. Provisioning and Grafana run 1 task, which ECS restarts in
+either AZ, and RDS has its standby in the other AZ.
+
 **Services (D34).** The backend runs as separate services that never call each other: they share
 the database (each change and its outbox row in one transaction) and talk through queues and an
 event bus. Each can be deployed, scaled or deleted on its own (`destroy.sh provisioning` stops
@@ -251,7 +257,7 @@ minutes; Logs Insights takes a little longer):
 infra/scripts/find-in-logs.sh '"event":"site.heartbeat"' --since "30 minutes ago" --group provisioning
 ```
 
-The paid stacks cost about USD 0.15 an hour (estimate). At the end of the session:
+The paid stacks cost about USD 0.18 an hour (estimate). At the end of the session:
 
 ```bash
 infra/scripts/smoke-test.sh --teardown    # deletes the paid stacks, keeps the base stacks; RDS leaves a final snapshot
