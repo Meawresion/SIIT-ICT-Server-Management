@@ -257,7 +257,7 @@ deploy_grafana() {
     "PlatformStack=$STACK_PLATFORM" "AppStack=$STACK_APP" "LogsStack=$STACK_LOGS" "ImageTag=$tag" \
     "GoogleSecretArn=$google" \
     "OriginVerifySecretArn=$origin" "SignInRule=$rule" \
-    "DesiredCount=${GRAFANA_DESIRED_COUNT:-1}"
+    "DesiredCount=${GRAFANA_DESIRED_COUNT:-1}" "Memory=${GRAFANA_MEMORY:-1024}"
   echo "Grafana: $(stack_output "$STACK_APP" PublicUrl)/grafana/ (Google sign-in: ${GRAFANA_ALLOWED_EMAILS:-off, admin only})"
 }
 

@@ -28,6 +28,13 @@
         "type": "constant",
         "query": "__PROJECT__/logs",
         "hide": 2
+      },
+      {
+        "name": "alb",
+        "label": "Load balancer",
+        "type": "constant",
+        "query": "__ALB__",
+        "hide": 2
       }
     ]
   },
@@ -72,7 +79,7 @@
           },
           "queryMode": "Metrics",
           "metricQueryType": 0,
-          "metricEditorMode": 0,
+          "metricEditorMode": 1,
           "region": "default",
           "namespace": "AWS/ApplicationELB",
           "metricName": "RequestCount",
@@ -83,7 +90,7 @@
           "statistic": "Sum",
           "period": "",
           "id": "",
-          "expression": "",
+          "expression": "SEARCH('{AWS/ApplicationELB,LoadBalancer} MetricName=\"RequestCount\" LoadBalancer=\"$alb\"', 'Sum')",
           "label": "requests"
         }
       ],
@@ -132,7 +139,7 @@
           },
           "queryMode": "Metrics",
           "metricQueryType": 0,
-          "metricEditorMode": 0,
+          "metricEditorMode": 1,
           "region": "default",
           "namespace": "AWS/ApplicationELB",
           "metricName": "HTTPCode_Target_5XX_Count",
@@ -143,7 +150,7 @@
           "statistic": "Sum",
           "period": "",
           "id": "",
-          "expression": "",
+          "expression": "SEARCH('{AWS/ApplicationELB,LoadBalancer} MetricName=\"HTTPCode_Target_5XX_Count\" LoadBalancer=\"$alb\"', 'Sum')",
           "label": "from services"
         },
         {
@@ -154,7 +161,7 @@
           },
           "queryMode": "Metrics",
           "metricQueryType": 0,
-          "metricEditorMode": 0,
+          "metricEditorMode": 1,
           "region": "default",
           "namespace": "AWS/ApplicationELB",
           "metricName": "HTTPCode_ELB_5XX_Count",
@@ -165,7 +172,7 @@
           "statistic": "Sum",
           "period": "",
           "id": "",
-          "expression": "",
+          "expression": "SEARCH('{AWS/ApplicationELB,LoadBalancer} MetricName=\"HTTPCode_ELB_5XX_Count\" LoadBalancer=\"$alb\"', 'Sum')",
           "label": "from the ALB"
         }
       ],
@@ -214,7 +221,7 @@
           },
           "queryMode": "Metrics",
           "metricQueryType": 0,
-          "metricEditorMode": 0,
+          "metricEditorMode": 1,
           "region": "default",
           "namespace": "AWS/ApplicationELB",
           "metricName": "TargetResponseTime",
@@ -225,7 +232,7 @@
           "statistic": "p95",
           "period": "",
           "id": "",
-          "expression": "",
+          "expression": "SEARCH('{AWS/ApplicationELB,LoadBalancer} MetricName=\"TargetResponseTime\" LoadBalancer=\"$alb\"', 'p95')",
           "label": "p95"
         }
       ],
@@ -274,7 +281,7 @@
           },
           "queryMode": "Metrics",
           "metricQueryType": 0,
-          "metricEditorMode": 0,
+          "metricEditorMode": 1,
           "region": "default",
           "namespace": "AWS/ApplicationELB",
           "metricName": "HealthyHostCount",
@@ -286,7 +293,7 @@
           "statistic": "Minimum",
           "period": "",
           "id": "",
-          "expression": "",
+          "expression": "SEARCH('{AWS/ApplicationELB,LoadBalancer,TargetGroup} MetricName=\"HealthyHostCount\" LoadBalancer=\"$alb\"', 'Minimum')",
           "label": "${PROP('Dim.TargetGroup')}"
         }
       ],
@@ -335,7 +342,7 @@
           },
           "queryMode": "Metrics",
           "metricQueryType": 0,
-          "metricEditorMode": 0,
+          "metricEditorMode": 1,
           "region": "default",
           "namespace": "AWS/ApplicationELB",
           "metricName": "UnHealthyHostCount",
@@ -347,7 +354,7 @@
           "statistic": "Maximum",
           "period": "",
           "id": "",
-          "expression": "",
+          "expression": "SEARCH('{AWS/ApplicationELB,LoadBalancer,TargetGroup} MetricName=\"UnHealthyHostCount\" LoadBalancer=\"$alb\"', 'Maximum')",
           "label": "${PROP('Dim.TargetGroup')}"
         }
       ],
@@ -409,7 +416,7 @@
           },
           "queryMode": "Metrics",
           "metricQueryType": 0,
-          "metricEditorMode": 0,
+          "metricEditorMode": 1,
           "region": "default",
           "namespace": "AWS/ECS",
           "metricName": "CPUUtilization",
@@ -421,7 +428,7 @@
           "statistic": "Average",
           "period": "",
           "id": "",
-          "expression": "",
+          "expression": "SEARCH('{AWS/ECS,ClusterName,ServiceName} MetricName=\"CPUUtilization\" ClusterName=\"$project\"', 'Average')",
           "label": "${PROP('Dim.ServiceName')}"
         }
       ],
@@ -470,7 +477,7 @@
           },
           "queryMode": "Metrics",
           "metricQueryType": 0,
-          "metricEditorMode": 0,
+          "metricEditorMode": 1,
           "region": "default",
           "namespace": "AWS/ECS",
           "metricName": "MemoryUtilization",
@@ -482,7 +489,7 @@
           "statistic": "Average",
           "period": "",
           "id": "",
-          "expression": "",
+          "expression": "SEARCH('{AWS/ECS,ClusterName,ServiceName} MetricName=\"MemoryUtilization\" ClusterName=\"$project\"', 'Average')",
           "label": "${PROP('Dim.ServiceName')}"
         }
       ],
@@ -531,7 +538,7 @@
           },
           "queryMode": "Metrics",
           "metricQueryType": 0,
-          "metricEditorMode": 0,
+          "metricEditorMode": 1,
           "region": "default",
           "namespace": "ECS/ContainerInsights",
           "metricName": "RunningTaskCount",
@@ -543,7 +550,7 @@
           "statistic": "Maximum",
           "period": "",
           "id": "",
-          "expression": "",
+          "expression": "SEARCH('{ECS/ContainerInsights,ClusterName,ServiceName} MetricName=\"RunningTaskCount\" ClusterName=\"$project\"', 'Maximum')",
           "label": "${PROP('Dim.ServiceName')}"
         }
       ],
@@ -605,7 +612,7 @@
           },
           "queryMode": "Metrics",
           "metricQueryType": 0,
-          "metricEditorMode": 0,
+          "metricEditorMode": 1,
           "region": "default",
           "namespace": "AWS/SQS",
           "metricName": "ApproximateNumberOfMessagesVisible",
@@ -616,7 +623,7 @@
           "statistic": "Maximum",
           "period": "",
           "id": "",
-          "expression": "",
+          "expression": "SEARCH('{AWS/SQS,QueueName} MetricName=\"ApproximateNumberOfMessagesVisible\" QueueName=$project', 'Maximum')",
           "label": "${PROP('Dim.QueueName')}"
         }
       ],
@@ -665,7 +672,7 @@
           },
           "queryMode": "Metrics",
           "metricQueryType": 0,
-          "metricEditorMode": 0,
+          "metricEditorMode": 1,
           "region": "default",
           "namespace": "AWS/SQS",
           "metricName": "ApproximateAgeOfOldestMessage",
@@ -676,7 +683,7 @@
           "statistic": "Maximum",
           "period": "",
           "id": "",
-          "expression": "",
+          "expression": "SEARCH('{AWS/SQS,QueueName} MetricName=\"ApproximateAgeOfOldestMessage\" QueueName=$project', 'Maximum')",
           "label": "${PROP('Dim.QueueName')}"
         }
       ],
@@ -725,7 +732,7 @@
           },
           "queryMode": "Metrics",
           "metricQueryType": 0,
-          "metricEditorMode": 0,
+          "metricEditorMode": 1,
           "region": "default",
           "namespace": "AWS/Lambda",
           "metricName": "Invocations",
@@ -736,7 +743,7 @@
           "statistic": "Sum",
           "period": "",
           "id": "",
-          "expression": "",
+          "expression": "SEARCH('{AWS/Lambda,FunctionName} MetricName=\"Invocations\" FunctionName=$project', 'Sum')",
           "label": "${PROP('Dim.FunctionName')} runs"
         },
         {
@@ -747,7 +754,7 @@
           },
           "queryMode": "Metrics",
           "metricQueryType": 0,
-          "metricEditorMode": 0,
+          "metricEditorMode": 1,
           "region": "default",
           "namespace": "AWS/Lambda",
           "metricName": "Errors",
@@ -758,7 +765,7 @@
           "statistic": "Sum",
           "period": "",
           "id": "",
-          "expression": "",
+          "expression": "SEARCH('{AWS/Lambda,FunctionName} MetricName=\"Errors\" FunctionName=$project', 'Sum')",
           "label": "${PROP('Dim.FunctionName')} errors"
         }
       ],
