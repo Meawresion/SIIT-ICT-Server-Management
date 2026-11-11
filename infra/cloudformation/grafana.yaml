@@ -36,7 +36,7 @@ Parameters:
     Default: '256'
   Memory:
     Type: String
-    Default: '512'
+    Default: '1024'
 
 Conditions:
   ViaCloudFront: !Not [!Equals [!Ref OriginVerifySecretArn, '']]
@@ -200,6 +200,9 @@ Resources:
               Value: !Ref AWS::Region
             - Name: SIIT_PROJECT
               Value: !Ref Project
+            - Name: SIIT_ALB
+              Value:
+                Fn::ImportValue: !Sub '${AppStack}-LoadBalancerFullName'
             - Name: GF_SERVER_ROOT_URL
               Value: !Sub
                 - '${Url}/grafana/'
@@ -207,6 +210,12 @@ Resources:
                     Fn::ImportValue: !Sub '${AppStack}-PublicUrl'
             - Name: GF_SERVER_SERVE_FROM_SUB_PATH
               Value: 'true'
+            - Name: GF_SECURITY_CSRF_TRUSTED_ORIGINS
+              Value: !Select
+                - 2
+                - !Split
+                  - '/'
+                  - Fn::ImportValue: !Sub '${AppStack}-PublicUrl'
             - Name: GF_SECURITY_ADMIN_USER
               Value: admin
             - Name: GF_SECURITY_COOKIE_SECURE
