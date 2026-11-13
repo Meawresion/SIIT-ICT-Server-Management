@@ -24,11 +24,12 @@ export function tcpCheck(host, port, timeoutMs = 3000) {
   });
 }
 
-// What the heartbeat checks: pfSense (when enabled) and every GPU and Hadoop node.
+// What the heartbeat checks: pfSense (when enabled; loadPfSenseConfig() result) and every GPU and
+// Hadoop node.
 export function siteTargets({ pfsense, gpu, bigData }) {
   const targets = [];
   if (pfsense) {
-    const url = new URL(pfsense.url);
+    const url = new URL(pfsense.baseUrl);
     targets.push({ name: 'pfsense', kind: 'pfsense', host: url.hostname, port: Number(url.port) || (url.protocol === 'http:' ? 80 : 443) });
   }
   for (const n of gpu?.nodes ?? []) targets.push({ name: n.name, kind: 'gpu', host: n.host, port: n.port });
