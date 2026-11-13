@@ -65,7 +65,7 @@ export function parseJobPayload(p) {
 
 const today = (now) => new Date(now()).toISOString().slice(0, 10);
 
-// D15. -> { vpn: 'created' | 'reactivated' | 'kept' | 'skipped', vpnIsNew }
+// D15. -> { vpn: 'created' | 'reactivated' | 'kept', vpnIsNew }
 async function ensureVpn(pf, { username, fullName, password, end, now, forceNew }) {
   const state = await pf.getUserState(username);
   if (!state.exists) {
@@ -168,7 +168,8 @@ export function createJobHandlers(deps) {
     const password = deps.generatePassword();
     if (p.resource === 'BIG_DATA') bigData(); // refuse before touching anything
 
-    let vpn = { vpn: 'skipped', vpnIsNew: false };
+    // Skipped: nothing is known about the VPN account, so the email doesn't claim one exists.
+    let vpn = { vpn: 'skipped', vpnIsNew: null };
     if (deps.pfsenseEnabled) {
       try {
         vpn = await deps.withPfSense((pf) => ensureVpn(pf, {

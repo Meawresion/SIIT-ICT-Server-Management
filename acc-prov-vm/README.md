@@ -147,7 +147,7 @@ The Hadoop nodes are listed in `bigdata.json` (`BIGDATA_FILE`). Without it, Big 
 ## Mail module
 
 The student gets **two emails**:
-1. **(1/2) Instructions:** the username, the D15 note (whether to keep the existing VPN password), and links to the VPN profile, the service and the student manual. **No password.**
+1. **(1/2) Instructions:** the username, the D15 note (whether to keep the existing VPN password; with `PFSENSE_ENABLED=false` it says the VPN login comes separately from SIIT ICT), and links to the VPN profile, the service and the student manual. **No password.**
 2. **(2/2) The password, as an inline image only.** It is rendered with Playwright's Chromium. The password never appears in any text part, in the image alt text, or in the logs.
 
 ```js
@@ -159,6 +159,7 @@ const mailer = createMailer(loadMailConfig());
 await sendProvisionEmails(mailer, {
   to: 'student@...', fullName: 'Jane Doe', username: 'st6622001234',
   vpnIsNew: false, // false: keep the existing VPN password; the new one is for the service only (D15)
+                   // null: the VPN account wasn't checked here (PFSENSE_ENABLED=false); no claim either way
   service: { name: 'GPU server gpu-01', links: [{ label: 'JupyterHub', url: node.jupyterUrl }], manualUrl },
   ovpnProfileUrl, period: { start: '2026-11-01', end: '2026-12-31' },
 }, password, { renderImage: renderPasswordImage });

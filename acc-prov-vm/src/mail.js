@@ -28,15 +28,24 @@ function escapeHtml(s) {
 
 // D15: which password the student uses for the VPN.
 function passwordNote(vpnIsNew, serviceName) {
+  if (vpnIsNew === null) {
+    return `Your VPN login is not part of this email. If you don't have one yet, SIIT ICT will send it to you separately. This password is only for the ${serviceName}.`;
+  }
   return vpnIsNew
     ? `This password is for both the VPN and the ${serviceName}.`
     : `You already have VPN access. Keep using your existing VPN password. This password is only for the ${serviceName}.`;
+}
+
+function vpnLoginText(vpnIsNew) {
+  if (vpnIsNew === null) return 'your VPN login from SIIT ICT';
+  return vpnIsNew ? 'your username and the new password' : 'your username and your existing VPN password';
 }
 
 // msg: {
 //   to, fullName, username,
 //   vpnIsNew: true  -> the new password covers the VPN and the service (D15)
 //             false -> the student keeps the existing VPN password; the new one is for the service only
+//             null  -> the VPN account was not checked or set up here (PFSENSE_ENABLED=false)
 //   service: { name, links: [{ label, url }], manualUrl, notes? },   e.g. name 'GPU server gpu-01';
 //            notes: optional plain-text lines shown under the links
 //   ovpnProfileUrl, period: { start: 'YYYY-MM-DD', end: 'YYYY-MM-DD' },
@@ -46,7 +55,7 @@ function assertMessage(msg) {
   assertNonEmpty('to', to);
   assertNonEmpty('fullName', fullName);
   assertUsername(username);
-  if (typeof vpnIsNew !== 'boolean') throw new Error('vpnIsNew must be true or false');
+  if (typeof vpnIsNew !== 'boolean' && vpnIsNew !== null) throw new Error('vpnIsNew must be true, false or null');
   assertNonEmpty('service.name', service?.name);
   if (!Array.isArray(service.links) || !service.links.length) throw new Error('service.links must not be empty');
   for (const l of service.links) {
@@ -67,7 +76,7 @@ export function buildInstructionsEmail(msg) {
   assertMessage(msg);
   const { to, fullName, username, vpnIsNew, service, ovpnProfileUrl, period } = msg;
   const note = passwordNote(vpnIsNew, service.name);
-  const vpnLogin = vpnIsNew ? 'your username and the new password' : 'your username and your existing VPN password';
+  const vpnLogin = vpnLoginText(vpnIsNew);
 
   const text = [
     `Dear ${fullName},`,
