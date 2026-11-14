@@ -66,7 +66,7 @@ export const UpdateRequestSchema = RequestFields.partial().refine(
 
 // FR-8.3: a later end date for a request in use.
 export const ExtensionRequestSchema = z.object({
-  end_date: z.string().regex(/^d{4}-d{2}-d{2}$/, 'Pick a date').refine(d => !isNaN(Date.parse(d)), 'Invalid date'),
+  end_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Pick a date').refine(d => !isNaN(Date.parse(d)), 'Invalid date'),
   reason: z.string().trim().min(1, 'Say why you need more time').max(1000),
 });
 
