@@ -62,7 +62,7 @@ export async function handleGoogleCallback(req, res, next) {
   }
 }
 
-// kind is 'student' or 'staff'; a student also gets the ID and degree from the address (D25).
+// kind is 'student' or 'staff'; a student also gets the ID and degree from the address.
 function identityFields(email) {
   const identity = classifyEmail(email, loadIdentityRules());
   if (identity?.kind === 'student') return { kind: 'student', student_id: identity.studentId, degree: identity.degree };

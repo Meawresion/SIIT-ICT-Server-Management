@@ -1,5 +1,5 @@
 // Deleting a student's accounts everywhere: the admin's tool (scripts/cleanup-user.js), never the
-// worker (D16: revoke = disable). Every system is checked first; an account is deleted only when it
+// worker (revoke = disable). Every system is checked first; an account is deleted only when it
 // exists and its full name matches; every check and change is printed for the admin to verify.
 //
 // Systems: pfSense VPN user, the Linux user on every GPU node and every Hadoop node (with its home

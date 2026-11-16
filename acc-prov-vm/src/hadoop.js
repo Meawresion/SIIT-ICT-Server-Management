@@ -42,7 +42,7 @@ export async function hdfsDirState(ssh, hdfs, dir) {
 // half-done setup. -> { created, owner, group, mode }
 //
 // studentOwnsHome: true runs `-chown <user>:<group>`, SIIT's real command step. false runs
-// `-chown :<group>` as the manual prints it (a typo, plan.md §6b): only the group changes, the owner
+// `-chown :<group>` as the manual prints it (a typo): only the group changes, the owner
 // stays the HDFS superuser and, with mode 755, the student can't write to their own home.
 export async function ensureHdfsHome(ssh, hdfs, username) {
   assertUsername(username);
@@ -72,7 +72,7 @@ export async function provisionHadoopUser(ssh, node, settings, { username, fullN
   return { created: !existed, hdfsHome };
 }
 
-// Lock + expire the Linux account; the home directory and the HDFS home are kept (D16).
+// Lock + expire the Linux account; the home directory and the HDFS home are kept.
 export function revokeHadoopUser(ssh, username) {
   return lockUser(ssh, username);
 }

@@ -1,21 +1,21 @@
-// Settings for automatic provisioning through acc-prov-vm (plan §2, step 6). Every value comes
+// Settings for automatic provisioning through acc-prov-vm. Every value comes
 // from config. Without MESSAGE_TRANSPORT, provisioning is off and GPU and Big Data requests are
 // activated by hand like the other types.
-//   MESSAGE_TRANSPORT      amqp (local ActiveMQ, D23) | sqs (AWS) | empty = off
+//   MESSAGE_TRANSPORT      amqp (local ActiveMQ) | sqs (AWS) | empty = off
 //   AMQP_URL, AMQP_USER, AMQP_PASSWORD, AMQP_REQUEST_QUEUE, AMQP_RESULT_QUEUE      (amqp)
 //   SQS_REQUEST_QUEUE_URL, SQS_RESULT_QUEUE_URL, AWS_REGION                         (sqs)
 //   AMQP_DEAD_LETTER_QUEUE (Artemis: DLQ), or SQS_REQUEST_DLQ_URL and SQS_RESULT_DLQ_URL: optional;
 //                          the scheduler inspects them (FR-6.7). Without them, a job that never
 //                          gets an answer is still failed once it expires.
-//   MSG_PRIVATE_KEY        this backend's key bundle (D22); MSG_PEER_PUBLIC_KEYS: acc-prov-vm's,
+//   MSG_PRIVATE_KEY        this backend's key bundle; MSG_PEER_PUBLIC_KEYS: acc-prov-vm's,
 //                          comma-separated during a rotation, the first one is used for sending
 //   MSG_JOB_TTL_SEC        how long a job stays valid, so it survives the site being offline
 //   MSG_MAX_TTL_SEC        the longest lifetime accepted on a result
 //   GPU_NODES              comma-separated node names, as in acc-prov-vm's gpu-nodes.json; a tie
-//                          in load goes to the first (D12)
-//   OVPN_PROFILE_URL, MANUAL_GPU_URL, MANUAL_BIGDATA_URL   links put in the student's email (D14)
+//                          in load goes to the first
+//   OVPN_PROFILE_URL, MANUAL_GPU_URL, MANUAL_BIGDATA_URL   links put in the student's email
 //
-// SERVICE_ROLE=api or requests (the API services on AWS, D34) only queue jobs in the outbox: they need
+// SERVICE_ROLE=api or requests (the API services on AWS) only queue jobs in the outbox: they need
 // MESSAGE_TRANSPORT (provisioning on), GPU_NODES and the links, but no queue, key or lifetime. The
 // provisioning service (SERVICE_ROLE=worker) and a single local process (all) need everything.
 

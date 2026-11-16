@@ -1,11 +1,11 @@
-// The scheduler (step 7, FR-8.4). Every backend task runs the loop; a pass runs only in the task
+// The scheduler (FR-8.4). Every backend task runs the loop; a pass runs only in the task
 // that holds the scheduler_lease row. Each pass:
 // - reminders (FR-8.2): the student of an On Use request hears EXPIRY_REMINDER_DAYS before its end
 //   date, once;
-// - expiry (D7, FR-8.5): an On Use request whose end date has passed gets a REVOKE job when it was
-//   set up automatically (the result then completes it, D10), or the approvers are asked to remove
-//   the access by hand (S8); once;
-// - dead letters (FR-6.7, S5): a job or result the broker gave up on fails its job, which alerts
+// - expiry (FR-8.5): an On Use request whose end date has passed gets a REVOKE job when it was
+//   set up automatically (the result then completes it), or the approvers are asked to remove
+//   the access by hand; once;
+// - dead letters (FR-6.7): a job or result the broker gave up on fails its job, which alerts
 //   the approvers like a failed result;
 // - no answer: a Sent job still unanswered after it expired fails the same way.
 // Each action appends a request_event (actor NULL = the system) in the same transaction; the
@@ -90,7 +90,7 @@ export async function remindEndingRequests({ today, reminderDays, log = () => {}
   return count;
 }
 
-// D7. provisioning: the provisioning settings, or null when it is off. -> number of requests.
+// Expiry of ended On Use requests. provisioning: the provisioning settings, or null when it is off. -> number of requests.
 export async function expireEndedRequests({ today, provisioning, log = () => {}, notify = () => {} }) {
   const rids = await withoutEvent({ status: 'On_Use', end_date: { lt: midnightUtc(today) } }, 'EXPIRED');
   let count = 0;

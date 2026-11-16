@@ -1,12 +1,12 @@
-// Status emails from the backend (S2, FR-4.3): the student hears about every status change and
+// Status emails from the backend (FR-4.3): the student hears about every status change and
 // before the end date (FR-8.2), and approvers hear about a failed setup (FR-6.7) and about an ended
 // request they must turn off by hand; extensions (FR-8.3) are asked of the approvers and answered
-// to the student. acc-prov-vm still sends the login details itself (S1), so
+// to the student. acc-prov-vm still sends the login details itself, so
 // these emails never carry credentials.
 //
 // Sent after the change is committed, best effort: a mail failure is logged and never undoes or
 // blocks the decision. On AWS (EVENT_BUS_NAME set) each email goes as an "Email requested" event to
-// the notification service, which alone holds the SMTP settings (D34); locally the backend sends it
+// the notification service, which alone holds the SMTP settings; locally the backend sends it
 // over SMTP itself. Without either the emails are only logged.
 
 import nodemailer from 'nodemailer';
@@ -158,7 +158,7 @@ export function createNotifier(config, { transport, events, allowedRecipientDoma
       }
     }
     if (action === 'EXPIRED' && details?.by_hand) {
-      // D7 for a request set up by hand (S8): the system can't turn it off.
+      // Expiry of a request set up by hand: the system can't turn it off, so the approvers are asked.
       const recipients = await approvers();
       for (const a of recipients) {
         await send({ to: a.siitemail, fullName: a.fullname, subject: `Request ${formatId(rid)} ended: turn off the access`, path: '/history', lines: [

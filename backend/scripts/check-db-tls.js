@@ -1,4 +1,4 @@
-// TLS check (D31): this task's connection to MySQL is encrypted, and with DB_TLS=verify (RDS) the
+// TLS check: this task's connection to MySQL is encrypted, and with DB_TLS=verify (RDS) the
 // server certificate and host name were checked (Prisma refuses the connection otherwise).
 // Run it in a service task (infra/scripts/smoke-test.sh): run-task.sh node scripts/check-db-tls.js
 // Pass the expected mode to check that too: check-db-tls.js verify | encrypt

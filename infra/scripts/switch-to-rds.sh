@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Moves the portal's database from the ECS MySQL (data stack) to RDS (rds stack) with its data (D31).
+# Moves the portal's database from the ECS MySQL (data stack) to RDS (rds stack) with its data.
 # Set DATA_MODE=rds in config.env first. Steps:
 #  1. creates the rds stack: RDS Multi-AZ, the schema, the service users (15-25 minutes; the portal
 #     keeps running on the ECS MySQL meanwhile);

@@ -259,7 +259,7 @@ export class PfSenseSession {
     return { changed: true };
   }
 
-  // Admin only (scripts/cleanup-user.js): the worker never deletes (D16). Deletes only after the
+  // Admin only (scripts/cleanup-user.js): the worker never deletes. Deletes only after the
   // edit page shows both the username and the full name. The trash link, its confirm() dialog and
   // the alert text come from the recorded delete flow (P10); it had not run live when this was
   // written. The user's certificate stays in Cert Manager.

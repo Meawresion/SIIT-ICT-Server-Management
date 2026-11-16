@@ -6,7 +6,7 @@
 // setting HUE_ENABLED=true.
 //
 // Manual (Step B2): Administer Users -> Add user, username + password twice, untick "Create home
-// directory" (acc-prov-vm makes the HDFS home itself), Add user. Revoke = untick "Active" (D16).
+// directory" (acc-prov-vm makes the HDFS home itself), Add user. Revoke = untick "Active".
 //
 // One HueSession = one login. A failed login is never retried.
 
@@ -118,7 +118,7 @@ export class HueSession {
     this.#log('hue.createUser', { user: username });
   }
 
-  // New password and active again (a returning student, D15).
+  // New password and active again (a returning student).
   async resetUser({ username, password }) {
     assertUsername(username);
     assertNonEmpty('password', password);

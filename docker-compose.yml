@@ -33,7 +33,7 @@ services:
       NODE_ENV: ${NODE_ENV}
       PORT: 3000
       # all: this one process is the API and the provisioning service (on AWS they are separate
-      # ECS services, D34; status emails then go through the notification Lambda).
+      # ECS services; status emails then go through the notification Lambda).
       SERVICE_ROLE: all
       DB_HOST: mysql
       DB_PORT: 3306
@@ -110,8 +110,8 @@ services:
       - siit-network
     command: npm run dev -- --host 0.0.0.0
 
-  # Local message broker for backend <-> acc-prov-vm (D23), instead of SQS. Messages are
-  # signed and encrypted by the apps (D22). Ports are bound to 127.0.0.1 only.
+  # Local message broker for backend <-> acc-prov-vm, instead of SQS. Messages are
+  # signed and encrypted by the apps. Ports are bound to 127.0.0.1 only.
   activemq:
     image: apache/artemis:2.57.0
     container_name: siit_activemq

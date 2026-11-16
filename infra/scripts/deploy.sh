@@ -17,7 +17,7 @@ deploy_cert() {
 
 deploy_network() { deploy "$STACK_NETWORK" network.yaml "Project=$PROJECT"; }
 
-# CONTAINER_INSIGHTS=enabled turns on per-task metrics (billed; demo days only, D34).
+# CONTAINER_INSIGHTS=enabled turns on per-task metrics (billed; demo days only).
 deploy_platform() {
   deploy "$STACK_PLATFORM" platform.yaml "Project=$PROJECT" "NetworkStack=$STACK_NETWORK" \
     "ContainerInsights=${CONTAINER_INSIGHTS:-disabled}"
@@ -41,7 +41,7 @@ deploy_data() {
     "DesiredCount=${DB_DESIRED_COUNT:-1}" "LogsStack=$STACK_LOGS"
 }
 
-# DATA_MODE=rds (D31): RDS Multi-AZ, then rds-init.sh as a one-off task (schema when empty, service
+# DATA_MODE=rds: RDS Multi-AZ, then rds-init.sh as a one-off task (schema when empty, service
 # users; with COPY_FROM_STACK, set by switch-to-rds.sh, the data of that data-ecs stack too).
 # On create, DB_RESTORE picks the starting data: latest (default) = the newest final snapshot of a
 # deleted rds stack, none = an empty database, or a snapshot name. Updates keep the stack's value
@@ -114,7 +114,7 @@ deploy_secrets() {
   echo "Put your values into it with set-secrets.sh (until then: placeholders, no sign-in, no emails)."
 }
 
-# The notification service (D34): the event bus, its queue and the Lambda with the mail secret.
+# The notification service: the event bus, its queue and the Lambda with the mail secret.
 deploy_events() {
   local tag mail
   require_logs_stack
@@ -130,7 +130,7 @@ deploy_events() {
     "AllowedRecipientDomains=$STUDENT_EMAIL_DOMAIN,$STAFF_EMAIL_DOMAINS"
 }
 
-# The provisioning service (D34): site jobs and results, scheduler, audit shipping.
+# The provisioning service: site jobs and results, scheduler, audit shipping.
 deploy_provisioning() {
   local tag provisioning=()
   require_logs_stack
@@ -157,7 +157,7 @@ deploy_provisioning() {
     "SiteTimeZone=${SITE_TIME_ZONE:-Asia/Bangkok}" "${provisioning[@]}"
 }
 
-# The identity service (D34): sign-in and profiles, behind the app stack's ALB.
+# The identity service: sign-in and profiles, behind the app stack's ALB.
 deploy_identity() {
   local tag google origin=''
   require_logs_stack
@@ -240,7 +240,7 @@ grafana_sign_in_rule() {
   [ -z "$rule" ] || echo "($rule) && 'Viewer'"
 }
 
-# Grafana (D34, NFR-8.3): dashboards at /grafana/ on the app stack's ALB.
+# Grafana (NFR-8.3): dashboards at /grafana/ on the app stack's ALB.
 deploy_grafana() {
   local tag google origin='' rule
   rule=$(grafana_sign_in_rule) || exit 1

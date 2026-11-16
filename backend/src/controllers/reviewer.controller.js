@@ -185,7 +185,7 @@ export async function activateRequestHandler(req, res, next) {
   }
 }
 
-// D4: a new job after a failed setup or revoke; the request keeps its status.
+// A new job after a failed setup or revoke; the request keeps its status.
 export async function retryProvisioningHandler(req, res, next) {
   try {
     const job = await retryProvisioning(parseId(req.params.id), req.auth.account_id);

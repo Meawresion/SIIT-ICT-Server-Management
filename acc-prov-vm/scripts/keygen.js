@@ -1,4 +1,4 @@
-// Generates one message key bundle (D22): npm run keygen -- <kid>
+// Generates one message key bundle: npm run keygen -- <kid>
 // e.g. npm run keygen -- site-2026-10
 // Prints the private bundle (put it in THIS side's .env as MSG_PRIVATE_KEY, nowhere else) and the
 // public bundle (give it to the other side: MSG_PEER_PUBLIC_KEYS there, or Secrets Manager on AWS).

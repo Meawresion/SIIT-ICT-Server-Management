@@ -8,7 +8,7 @@ import { formatDateTime, formatId } from '../utils/format.js';
 import { onRequestsChanged } from '../utils/requestEvents.js';
 import { BellIcon, CloseIcon } from './Icons.jsx';
 
-// No notification API exists yet, so the bell is built from request data:
+// There is no notification API, so the bell is built from request data:
 //   student  -> decisions on their requests (reviewed_at), unread since last opened
 //   reviewer -> requests still waiting for review
 // It reloads after any request change in this tab, when the tab regains focus, and every

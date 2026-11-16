@@ -34,9 +34,9 @@ for name in "$@"; do
     # in frontend/ (or a -dirty build), because the tag follows frontend/ only.
     frontend) push frontend "$(frontend_tag)" "$REPO_DIR/frontend" --target prod \
       --build-arg "VITE_CONTACT_EMAIL=${CONTACT_EMAIL:-}" ;;
-    # The notification Lambda (D34).
+    # The notification Lambda.
     notification) push notification "$(notification_tag)" "$REPO_DIR/notification" ;;
-    # Grafana with the SIIT data source and dashboards built in (D34).
+    # Grafana with the SIIT data source and dashboards built in.
     grafana) push grafana "$(grafana_tag)" "$REPO_DIR/grafana" ;;
     *) echo "Unknown image: $name" >&2; exit 1 ;;
   esac

@@ -21,7 +21,7 @@ export async function getRequest(id) {
   return apiRequest(`/api/reviewer/requests/${id}`);
 }
 
-// confirm_overlap: the approver saw the student's overlapping requests (D28). Without it the API
+// confirm_overlap: the approver saw the student's overlapping requests. Without it the API
 // answers 409 with the list when there are any.
 export async function approveRequest(id, review_comment, confirm_overlap = false) {
   return apiRequest(`/api/reviewer/requests/${id}/approve`, {
@@ -51,7 +51,7 @@ export async function completeRequest(id) {
   });
 }
 
-// D4: after a failed setup or removal, queue a new job.
+// After a failed setup or removal, queue a new job.
 export async function retryProvisioning(id) {
   return apiRequest(`/api/reviewer/requests/${id}/provision/retry`, { method: 'POST', body: JSON.stringify({}) });
 }

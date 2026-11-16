@@ -100,7 +100,7 @@ CREATE TABLE `request_event`(
 ) COMMENT 'Append-only audit log (FR-9.1): the app user may only SELECT and INSERT (database/privileges.sh)';
 ALTER TABLE
     `request_event` ADD INDEX `request_event_rid_index`(`rid`, `eid`);
--- Outbox for acc-prov-vm (plan §2.1): a job is written in the same transaction as the decision
+-- Outbox for acc-prov-vm: a job is written in the same transaction as the decision
 -- that causes it, and the backend's dispatcher publishes it later, so a broker outage loses
 -- nothing. A retry is a new job (new job_id), because acc-prov-vm answers a job_id it has seen
 -- with its stored result.
@@ -132,8 +132,8 @@ CREATE TABLE `scheduler_lease`(
     `lease_until` DATETIME(3) NOT NULL
 ) COMMENT 'One row per scheduled job; the app user may only read and update it';
 INSERT INTO `scheduler_lease` (`name`, `lease_until`) VALUES ('scheduler', '1970-01-01 00:00:00');
--- Log shipping (NFR-7.1): the last request_event copied into the logs as an audit.event line
--- (backend/src/services/audit-log.service.js). On AWS the logs go to S3 and outlive the database.
+-- Log shipping (NFR-7.1): the last request_event copied out of the database
+-- (backend/src/services/audit-log.service.js). On AWS the events go to the audit log group, kept 400 days.
 CREATE TABLE `log_cursor`(
     `name` VARCHAR(32) NOT NULL PRIMARY KEY,
     `last_id` BIGINT UNSIGNED NOT NULL DEFAULT 0,

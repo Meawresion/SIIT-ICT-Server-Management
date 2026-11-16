@@ -1,4 +1,4 @@
-// Student notification emails (D6), sent as two messages:
+// Student notification emails, sent as two messages:
 //   1/2 instructions and links (VPN profile, service URLs, manual), no password;
 //   2/2 the password, as an inline image only (never as text, never in the logs).
 
@@ -26,7 +26,7 @@ function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 }
 
-// D15: which password the student uses for the VPN.
+// Which password the student uses for the VPN.
 function passwordNote(vpnIsNew, serviceName) {
   if (vpnIsNew === null) {
     return `Your VPN login is not part of this email. If you don't have one yet, SIIT ICT will send it to you separately. This password is only for the ${serviceName}.`;
@@ -43,7 +43,7 @@ function vpnLoginText(vpnIsNew) {
 
 // msg: {
 //   to, fullName, username,
-//   vpnIsNew: true  -> the new password covers the VPN and the service (D15)
+//   vpnIsNew: true  -> the new password covers the VPN and the service
 //             false -> the student keeps the existing VPN password; the new one is for the service only
 //             null  -> the VPN account was not checked or set up here (PFSENSE_ENABLED=false)
 //   service: { name, links: [{ label, url }], manualUrl, notes? },   e.g. name 'GPU server gpu-01';

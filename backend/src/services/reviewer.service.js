@@ -24,7 +24,7 @@ export async function getAllRequests(filters = {}, page = { take: DEFAULT_LIMIT,
   return { rows: rows.map(requestView), total };
 }
 
-// D28: the same student's other live requests for the same resource type whose dates intersect.
+// The same student's other live requests for the same resource type whose dates intersect.
 // A warning for the reviewer only; the student is never blocked.
 export async function findOverlaps(client, row) {
   const rows = await client.request.findMany({
@@ -49,8 +49,8 @@ export async function getRequestForReview(request_id) {
 
 // Every decision changes the status and appends its event in one transaction (FR-5.5, FR-9.1).
 // With provisioning on, approving a GPU request also picks its node and queues the CREATE job, and
-// completing it queues the REVOKE job, in the same transaction (outbox, plan §2.1).
-// The student's status email goes out after the commit (S2).
+// completing it queues the REVOKE job, in the same transaction (outbox).
+// The student's status email goes out after the commit.
 async function transition(request_id, reviewer_account_id, from, to, action, review_comment, options) {
   const result = await applyTransition(request_id, reviewer_account_id, from, to, action, review_comment, options);
   notifyRequestEvent({ rid: request_id, action, from, to, comment: review_comment ?? null });

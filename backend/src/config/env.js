@@ -1,8 +1,8 @@
-// The backend reads only the process environment (D24): docker compose passes each key from the
-// root .env, and ECS passes them from the task definition and Secrets Manager (D13).
+// The backend reads only the process environment: docker compose passes each key from the
+// root .env, and ECS passes them from the task definition and Secrets Manager.
 
 const REQUIRED = ['GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET', 'GOOGLE_CALLBACK_URL', 'FRONTEND_URL', 'JWT_SECRET'];
-// SERVICE_ROLE (D34): all (one local process: every API route and the background work), api (every
+// SERVICE_ROLE: all (one local process: every API route and the background work), api (every
 // API route, no background work), identity (sign-in and profiles: /api/auth, /api/users), requests
 // (requests and review: /api/requests, /api/reviewer; checks the sign-in token but needs no Google
 // client) or worker (the provisioning service: no HTTP, no sign-in).
@@ -14,10 +14,10 @@ export const servesRequests = role => ['all', 'api', 'requests'].includes(role);
 const DB_KEYS = ['DB_HOST', 'DB_NAME', 'DB_USER', 'DB_PASSWORD'];
 const MIN_SECRET_LENGTH = 32;
 
-// DB_TLS (D31): how the connection to MySQL is protected. Prisma uses no TLS unless told to.
+// DB_TLS: how the connection to MySQL is protected. Prisma uses no TLS unless told to.
 //   verify   TLS, the server certificate checked against the CA bundle DB_TLS_CA, host name
 //            included (RDS; the backend image holds the RDS bundle and sets DB_TLS_CA)
-//   encrypt  TLS without checking the certificate (the ECS MySQL's self-signed one, D31)
+//   encrypt  TLS without checking the certificate (the ECS MySQL's self-signed one)
 //   empty    no TLS (docker compose: the database is on the local container network)
 const TLS_PARAMS = {
   verify: source => `sslcert=${source.DB_TLS_CA}&sslaccept=strict`,
@@ -72,7 +72,7 @@ const env = {
   google_client_secret: process.env.GOOGLE_CLIENT_SECRET,
   google_callback_url: process.env.GOOGLE_CALLBACK_URL,
 
-  // Signs the sign-in token (D1). Sign-in ends after SESSION_IDLE_MINUTES without activity, and
+  // Signs the sign-in token. Sign-in ends after SESSION_IDLE_MINUTES without activity, and
   // SESSION_MAX_HOURS after sign-in at the latest (FR-1.4).
   jwt_secret: process.env.JWT_SECRET,
   session_idle_minutes: Number(process.env.SESSION_IDLE_MINUTES) || 30,

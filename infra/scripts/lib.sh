@@ -42,7 +42,7 @@ ENTRY_MODE=${ENTRY_MODE:-cloudfront}
 USE_DOMAIN=${USE_DOMAIN:-true}
 # true: the queues stack and automatic provisioning of GPU requests through acc-prov-vm.
 PROVISIONING=${PROVISIONING:-false}
-# Where the database runs (D31): ecs (MySQL as an ECS task on EFS, the data stack) or rds (RDS
+# Where the database runs: ecs (MySQL as an ECS task on EFS, the data stack) or rds (RDS
 # Multi-AZ, the rds stack). switch-to-rds.sh moves the data from one to the other.
 DATA_MODE=${DATA_MODE:-ecs}
 case $DATA_MODE in
@@ -138,7 +138,7 @@ docker_() { MSYS_NO_PATHCONV=1 $DOCKER "$@"; }
 
 # Kept between test runs: they run nothing and cost little or nothing while idle. platform holds the
 # ECR images (a run only uploads what changed); queues keeps the backend key and queue URLs that
-# acc-prov-vm is set up with (D33); logs holds the log groups, the audit trail and the alert topic.
+# acc-prov-vm is set up with; logs holds the log groups, the audit trail and the alert topic.
 # site holds the site's Roles Anywhere access and public key. Only teardown-all.sh deletes them.
 KEPT_STACKS=("$STACK_NETWORK" "$STACK_PLATFORM" "$STACK_QUEUES" "$STACK_LOGS" "$STACK_SITE")
 

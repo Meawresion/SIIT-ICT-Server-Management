@@ -1,4 +1,4 @@
-// Who may sign in, worked out from the Google account's email (plan D25). Every value comes
+// Who may sign in, worked out from the Google account's email. Every value comes
 // from config; nothing about SIIT's addresses is written here.
 //   STUDENT_EMAIL_DOMAIN   e.g. g.siit.tu.ac.th
 //   STUDENT_ID_DIGITS      e.g. 10

@@ -30,7 +30,7 @@ COPY --from=build /app/node_modules ./node_modules
 COPY prisma ./prisma
 COPY src ./src
 COPY scripts ./scripts
-# The RDS CA certificates (D31): with DB_TLS=verify the services check the RDS server certificate
+# The RDS CA certificates: with DB_TLS=verify the services check the RDS server certificate
 # and host name against them. Files from a URL arrive readable by root only.
 ADD https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem /etc/ssl/rds/global-bundle.pem
 RUN chmod 644 /etc/ssl/rds/global-bundle.pem

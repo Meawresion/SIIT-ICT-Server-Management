@@ -1,4 +1,4 @@
-// Generates the one password a student gets for a new service (and the VPN when it is new, D15).
+// Generates the one password a student gets for a new service (and the VPN when it is new).
 // Letters and digits only, without look-alikes (0/O, 1/l/I), so it is safe to type and to pass
 // through pfSense, chpasswd and HUE without escaping, and easy to read from the password image.
 

@@ -1,4 +1,4 @@
-// The notification service (D34): a Lambda that sends the status emails the other services ask
+// The notification service: a Lambda that sends the status emails the other services ask
 // for. The API and provisioning services put an "Email requested" event on the EventBridge bus; a
 // rule copies it into this service's SQS queue, and Lambda hands the queue's messages to this
 // handler. Only this service holds the SMTP settings (the mail secret).

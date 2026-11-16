@@ -1,4 +1,4 @@
-// Automatic provisioning through acc-prov-vm (plan §2). Jobs go into the provision_job outbox in
+// Automatic provisioning through acc-prov-vm. Jobs go into the provision_job outbox in
 // the same transaction as the decision that causes them; dispatchQueued() publishes them, and
 // handleResult() applies acc-prov-vm's answers. Every change appends a request_event; results
 // are logged with actor_uid NULL (the system).
@@ -17,9 +17,9 @@ import { isApprover } from '../config/identity.js';
 import { EnvelopeError, open, seal } from '../messaging/envelope.js';
 import { PoisonMessageError } from '../messaging/errors.js';
 
-// Resource types acc-prov-vm sets up (FR-3.1); the other types are activated by hand (S8).
+// Resource types acc-prov-vm sets up (FR-3.1); the other types are activated by hand.
 export const AUTOMATED_RESOURCES = ['GPU_SERVER', 'BIG_DATA'];
-// D20: the same username on pfSense, Linux and JupyterHub.
+// The same username on pfSense, Linux and JupyterHub.
 const USERNAME_PREFIX = { Undergraduate: 'st', Master: 'stm', PhD: 'std' };
 const ACTIVE_JOB = ['Queued', 'Sent'];
 const RESULT_EVENT = { CREATE: ['PROVISIONED', 'PROVISION_FAILED'], REVOKE: ['REVOKED', 'REVOKE_FAILED'], EXTEND: ['EXTENDED', 'EXTEND_FAILED'] };
@@ -50,7 +50,7 @@ export function usernameFor(student) {
   return `${prefix}${student.s_id}`;
 }
 
-// D12: the node with the fewest GPU requests that are Approved (setup in progress) or On Use on
+// The node with the fewest GPU requests that are Approved (setup in progress) or On Use on
 // the new request's start date; a tie goes to the first node in GPU_NODES. The locking read sees
 // the latest committed rows and holds them, so two approvals at the same moment are counted one
 // after the other instead of both picking the same empty node.
@@ -96,7 +96,7 @@ async function setUpAutomatically(tx, row) {
 }
 
 // The VPN account is shared by all of a student's requests: disable it only when no other request
-// of theirs is in use or still being set up (plan §6b REVOKE).
+// of theirs is in use or still being set up.
 async function keepsVpn(tx, row) {
   const others = await tx.request.count({ where: { student_uid: row.student_uid, rid: { not: row.rid }, OR: [
     { status: 'On_Use' }, { status: 'Approved', resource_type: { in: AUTOMATED_RESOURCES } },
@@ -104,7 +104,7 @@ async function keepsVpn(tx, row) {
   return others > 0;
 }
 
-// Called inside the complete transaction (and by the scheduler later, D7). At most one REVOKE per
+// Called inside the complete transaction (and by the scheduler later). At most one REVOKE per
 // request unless the last one failed. -> the job row data, or null.
 export async function buildRevokeJob(tx, row) {
   const node = await setUpAutomatically(tx, row);
@@ -141,7 +141,7 @@ export async function assertManualActivationAllowed(tx, row) {
   }
 }
 
-// Reviewer's Retry after a failure (D4): a new job with a new job_id, since acc-prov-vm answers a
+// Reviewer's Retry after a failure: a new job with a new job_id, since acc-prov-vm answers a
 // job_id it has seen with its stored result.
 export async function retryProvisioning(request_id, reviewer_account_id) {
   const config = provisioningConfig();
@@ -218,7 +218,7 @@ export async function dispatchQueued({ config, transport, log = () => {}, now = 
   }, { timeout: 120_000 });
 }
 
-// Fails a job that is still waiting for its answer, as a failed result does (D4): the request
+// Fails a job that is still waiting for its answer, as a failed result does: the request
 // keeps its status, and the event alerts the approvers, who can retry. Used by the scheduler for
 // dead letters and jobs that got no answer. -> 'failed', 'unknown' (no such job for that request)
 // or 'finished' (it already has its outcome).
@@ -296,7 +296,7 @@ export async function handleResult(text, { config, log = () => {}, notify = () =
       log('provision.result_duplicate', { job_id: job.job_id, rid: job.rid });
       return 'duplicate';
     }
-    // D10: a successful CREATE makes the request On Use; a successful REVOKE completes it.
+    // A successful CREATE makes the request On Use; a successful REVOKE completes it.
     const row = await tx.request.findUnique({ where: { rid: job.rid } });
     let to = row.status;
     if (ok && job.action === 'CREATE' && row.status === 'Approved') to = 'On_Use';

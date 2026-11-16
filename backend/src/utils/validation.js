@@ -2,7 +2,7 @@ import { z } from 'zod';
 
 export const UserProfileSchema = z.object({
   full_name: z.string().trim().min(1, 'Full name is required').max(100),
-  // student_id and degree are not accepted: the API takes them from the SIIT email (D25).
+  // student_id and degree are not accepted: the API takes them from the SIIT email.
   program: z.string().trim().min(1, 'Program is required').max(50),
   advisor_name: z.string().trim().min(1, 'Advisor name is required').max(100),
   phone_number: z.string().trim().min(1, 'Phone number is required').max(15),
@@ -72,7 +72,7 @@ export const ExtensionRequestSchema = z.object({
 
 export const ReviewRequestSchema = z.object({
   review_comment: z.string().min(1, 'Review comment is required'),
-  // D28: approving while the student has overlapping requests needs this, or the API answers 409.
+  // Approving while the student has overlapping requests needs this, or the API answers 409.
   confirm_overlap: z.boolean().optional(),
 });
 

@@ -18,7 +18,7 @@
 #             ALB instead of the web stack (accounts with CloudFront)
 #   --keep: leave the test stacks running (delete them later with --teardown)
 #   --teardown: only delete the test stacks and check (after a run that was killed hard)
-# DATA_MODE=rds smoke-test.sh ... tests on RDS Multi-AZ instead of the ECS MySQL (D31; creating
+# DATA_MODE=rds smoke-test.sh ... tests on RDS Multi-AZ instead of the ECS MySQL (creating
 # RDS adds 15-25 minutes, deleting it about 10).
 # The private half of the throwaway site key stays in this shell; it is never printed or stored.
 read -r SITE_PRIVATE_KEY SITE_PUBLIC_KEYS < <(node --input-type=module -e "
@@ -127,17 +127,17 @@ expect "an unknown API path is a JSON 404 with its reference and no framework he
 expect "a state change from another origin gives 403" 403 "$(status -X POST -H 'Origin: https://evil.example' "$url/api/auth/logout")"
 redirect=$(curl -s "$url/api/auth/google" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{console.log(new URL(JSON.parse(s).auth_url).searchParams.get("redirect_uri"))}catch{console.log("none")}})')
 expect "Google sign-in starts with this deploy's callback URL" "$url/api/auth/google/callback" "$redirect"
-# D34: the request service holds neither the Google client, the SMTP settings nor the site key.
+# The request service holds neither the Google client, the SMTP settings nor the site key.
 if "$SCRIPTS/run-task.sh" node -e "const e=process.env; process.exit(e.SERVICE_ROLE==='requests' && e.EVENT_BUS_NAME && e.JWT_SECRET && !Object.keys(e).some(k => /^(GOOGLE_|SMTP_|MAIL_FROM|MSG_PRIVATE_KEY|SQS_)/.test(k)) ? 0 : 1)"; then
-  pass "the request service has the event bus and token secret but no Google client, SMTP settings, site key or queue (D34)"
+  pass "the request service has the event bus and token secret but no Google client, SMTP settings, site key or queue"
 else
-  fail "request service settings (D34)"
+  fail "request service settings"
 fi
 # The ALB sends /api/auth and /api/users to the identity service, the rest of /api to the request
 # service: each answers only its own paths, so a wrong rule shows up as a 404.
 expect "the identity service answers /api/users/me and the request service /api/requests/me (401, not 404)" "401 401" \
   "$(status "$url/api/users/me") $(status "$url/api/requests/me")"
-# D34: each service has its own database user with rights on its own tables only. The identity
+# Each service has its own database user with rights on its own tables only. The identity
 # check also adds the accounts of the request service's checks (that user may only read accounts).
 accounts="chk$(date +%s)"
 if "$SCRIPTS/run-task.sh" --identity node scripts/check-identity.js "$accounts"; then
@@ -150,7 +150,7 @@ if "$SCRIPTS/run-task.sh" node scripts/check-db.js "$accounts"; then
 else
   fail "request database check"
 fi
-# D31: TLS to the database; on RDS the certificate and host name are checked (verify).
+# TLS to the database; on RDS the certificate and host name are checked (verify).
 if [ "$DATA_MODE" = rds ]; then tls=verify; else tls=encrypt; fi
 if "$SCRIPTS/run-task.sh" node scripts/check-db-tls.js "$tls"; then
   pass "the request service reaches the database over TLS (DB_TLS=$tls) (run-task.sh check-db-tls)"
@@ -211,7 +211,7 @@ if in_logs "$marker" --group backend; then pass "a request's access log line is 
 if in_logs '"event":"site.heartbeat"' --group provisioning; then pass "the site heartbeat reached the provisioning service (signed, rid 0; the fake site sends one)"; else fail "site heartbeat"; fi
 if in_logs '"action":"PROVISIONED"' --group audit; then pass "the audit trail reached its log group (request_event copied to /$PROJECT/audit)"; else fail "audit events in the audit log group"; fi
 if in_logs "$marker" --alb; then pass "the ALB access logs reached S3"; else fail "ALB access logs in S3"; fi
-# Grafana (D34, NFR-8.3): up behind the ALB at /grafana/, its CloudWatch data source works with the
+# Grafana (NFR-8.3): up behind the ALB at /grafana/, its CloudWatch data source works with the
 # task role, and the provisioned dashboard is there. The admin password stays in this shell.
 grafana_admin=$(awst secretsmanager get-secret-value --secret-id "$(stack_output "$STACK_GRAFANA" AdminSecretArn)" \
   --query SecretString | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{console.log(JSON.parse(s).password)}catch{console.log("none")}})')
@@ -238,15 +238,15 @@ for _ in $(seq 1 24); do
   sleep 15
 done
 if [ -n "$mail_event" ]; then
-  pass "status emails reached the notification Lambda through the event bus ($mail_event, D34)"
+  pass "status emails reached the notification Lambda through the event bus ($mail_event)"
 else
   fail "status emails through the event bus"
 fi
 if "$SCRIPTS/find-in-logs.sh" '"event":"mail.send_failed"' --since "$started_iso" --group notification >/dev/null 2>&1; then
   fail "the notification Lambda could not send an email (mail.send_failed: check the SMTP settings)"
 fi
-if in_logs '"path":"/api/users/me"' --group identity; then pass "the identity service logged its request in its own log group (D34)"; else fail "identity service log"; fi
-if in_logs '"event":"worker.started"' --group provisioning; then pass "the provisioning service runs on its own (D34)"; else fail "provisioning service log"; fi
+if in_logs '"path":"/api/users/me"' --group identity; then pass "the identity service logged its request in its own log group"; else fail "identity service log"; fi
+if in_logs '"event":"worker.started"' --group provisioning; then pass "the provisioning service runs on its own"; else fail "provisioning service log"; fi
 alarms=$(awst cloudwatch describe-alarms --alarm-name-prefix "$PROJECT-" --query 'length(MetricAlarms)')
 # Unhealthy targets: backend and identity, plus the frontend in direct mode (web stack).
 want_alarms=9 alarm_list="errors x3, ALB 5xx, unhealthy targets x2, dead letters x2, site not taking jobs"

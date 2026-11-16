@@ -3,7 +3,7 @@ import { getAccountById, updateAccount } from '../services/auth.service.js';
 import { ApproverProfileSchema, StaffProfileSchema, UserProfileSchema } from '../utils/validation.js';
 import { classifyEmail, loadIdentityRules } from '../config/identity.js';
 
-// A requester's profile fields. For a student, the ID and degree come from the SIIT email (D25),
+// A requester's profile fields. For a student, the ID and degree come from the SIIT email,
 // never from the client; a staff member has a department instead.
 const profileView = (user) => ({
   id: user.id.toString(),

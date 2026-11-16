@@ -1,4 +1,4 @@
-// Signed + encrypted message envelope (D22), the same on every transport (local ActiveMQ, SQS).
+// Signed + encrypted message envelope, the same on every transport (local ActiveMQ, SQS).
 //
 // - Each side has one key bundle: an Ed25519 signing key and an X25519 encryption key, with a kid.
 //     private bundle: "<kid>.<ed25519 private>.<x25519 private>"   (this side's .env only)

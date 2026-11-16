@@ -1,4 +1,4 @@
-// The provisioning service (D34, SERVICE_ROLE=worker): the background work without HTTP. It sends
+// The provisioning service (SERVICE_ROLE=worker): the background work without HTTP. It sends
 // the jobs to the site and applies the results, runs the scheduler and copies the audit trail. The
 // API service only queues jobs in the outbox, so the site key and queues stay here.
 
