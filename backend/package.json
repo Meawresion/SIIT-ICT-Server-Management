@@ -9,8 +9,6 @@
     "dev": "node --watch src/server.js",
     "prisma:pull": "prisma db pull",
     "prisma:generate": "prisma generate",
-    "prisma:migrate:dev": "prisma migrate dev",
-    "prisma:migrate:reset": "prisma migrate reset",
     "test": "node --test src/**/*.test.js",
     "test:watch": "node --test --watch src/**/*.test.js",
     "test:db": "node scripts/check-identity.js && node scripts/check-db.js",

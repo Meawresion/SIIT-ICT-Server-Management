@@ -1,377 +1,199 @@
-# SIIT ICT Resource Request System
+# SIIT ICT Server Management
 
-A full-stack web application for SIIT students to submit ICT/resource requests and for authorized reviewers to review and manage them.
+A web portal where SIIT students and staff request ICT resources (GPU server, big data platform,
+virtual machines, lab equipment, AWS Learner Lab, AWS Skill Builder) and resource approvers review
+them. When a GPU or big data request is approved, the accounts are created automatically at the SIIT
+site (Linux, HDFS and the OpenVPN user on pfSense), and the student gets the login details by email.
+The approver's decision is the only manual step.
 
-## Technology Stack
+```
+Browser ─▶ CloudFront ─▶ S3 (React app)
+                     └─▶ ALB ─▶ ECS Fargate: identity, requests ─▶ RDS MySQL (Multi-AZ)
+                                 provisioning ──SQS (signed + encrypted jobs)──▶ acc-prov-vm at SIIT
+                                 EventBridge ─▶ notification Lambda ─▶ status emails
+acc-prov-vm ─SSH─▶ GPU and Hadoop nodes, ─webGUI─▶ pfSense, ─SMTP─▶ the student's credentials
+```
 
-- **Frontend**: React + JavaScript + Vite + React Router
-- **Backend**: Node.js + Express + JavaScript
-- **Database**: MySQL 8
-- **ORM**: Prisma
-- **Authentication**: Google OAuth 2.0 + OpenID Connect
-- **Containerization**: Docker & Docker Compose
-- **Validation**: Zod
-- **Deployment**: AWS (CloudFront, S3, ECS Fargate, RDS MySQL Multi-AZ), built with CloudFormation
+## Technology
 
-## Project Structure
+| Part | Stack |
+|---|---|
+| Frontend | React 19, React Router, Vite |
+| Backend | Node.js 22, Express, Prisma (MySQL client), Zod validation |
+| Database | MySQL 8 (local container, or Amazon RDS for MySQL Multi-AZ on AWS) |
+| Sign-in | Google OAuth 2.0 / OpenID Connect, limited to SIIT student and staff accounts |
+| Site worker | Node.js, Playwright (pfSense webGUI), SSH |
+| AWS | CloudFront, S3, ALB, ECS Fargate, RDS, SQS, EventBridge, Lambda, Secrets Manager, CloudWatch, IAM Roles Anywhere, all defined in CloudFormation |
+| Monitoring | CloudWatch Logs and alarms, Grafana dashboards as code |
+
+## Repository layout
 
 ```
 .
-├── backend/                    # Express.js API
-│   ├── prisma/                # Prisma schema
-│   ├── src/
-│   │   ├── routes/           # API routes
-│   │   ├── controllers/       # Request handlers
-│   │   ├── services/          # Business logic
-│   │   ├── middleware/        # Authentication & error handling
-│   │   ├── auth/              # Google OAuth
-│   │   ├── utils/             # Validation schemas
-│   │   ├── config/            # Configuration
-│   │   ├── lib/               # Prisma client
-│   │   ├── app.js             # Express app
-│   │   └── server.js          # Server entry point
-│   ├── package.json
-│   └── Dockerfile
-├── frontend/                   # React + Vite
-│   ├── src/
-│   │   ├── api/               # API client modules
-│   │   ├── pages/             # Page components
-│   │   ├── styles/            # CSS files
-│   │   ├── App.jsx            # Main app with routing
-│   │   └── main.jsx           # Entry point
-│   ├── package.json
-│   └── Dockerfile
-├── database/
-│   ├── init.sql               # MySQL schema
-│   └── README.md
-├── notification/               # Notification Lambda (status emails)
-├── grafana/                    # Dashboards as code
-├── acc-prov-vm/                # Account provisioning worker at the SIIT site
-├── infra/                      # AWS: CloudFormation templates and scripts
-├── docker-compose.yml         # Local development setup
-└── README.md
-
+├── backend/            Express API and background worker (one image, run as several services)
+│   ├── prisma/         Prisma schema (mirrors database/init.sql)
+│   ├── scripts/        Database and deployment checks, set-user-role.js
+│   └── src/            routes, controllers, services, auth, messaging, config
+├── frontend/           React app (Vite)
+├── database/           init.sql (the schema), privileges.sh, rds-init.sh, ER diagram
+├── notification/       Lambda that sends the status emails
+├── grafana/            Grafana image with the dashboards and CloudWatch data source
+├── acc-prov-vm/        Account provisioning worker that runs at the SIIT site
+├── infra/              CloudFormation templates and deploy scripts
+├── tests/              End-to-end tests (Playwright) and the read-only live check
+├── docker-compose.yml  Local stack: mysql, backend, frontend, activemq
+└── .env.example        Template for the local .env
 ```
 
-## Quick Start with Docker Compose
+Each folder has its own README with the details: [backend data model](database/README.md),
+[frontend](frontend/README.md), [AWS](infra/README.md), [site worker](acc-prov-vm/README.md),
+[tests](tests/README.md).
 
-### Prerequisites
+## Run it locally
 
-- Docker & Docker Compose installed
-- Google OAuth 2.0 credentials
+**You need:** Docker with Docker Compose, and a Google OAuth client (Google Cloud Console →
+APIs & Services → Credentials → OAuth client ID, type "Web application") with:
+- authorized redirect URI `http://localhost:3000/api/auth/google/callback`;
+- authorized JavaScript origin `http://localhost:5173`.
 
-### Setup
-
-1. **Clone and Navigate**
+1. Create the settings file and fill it in:
    ```bash
-   cd SIIT-ICT-Server-Management
-   ```
-
-2. **Configure Environment**
-   ```bash
-   # One env file for the whole stack: mysql, backend, frontend and activemq
    cp .env.example .env
-   # Edit .env: Google OAuth credentials, database passwords, JWT_SECRET
    ```
-   Each container gets only its own keys (see `docker-compose.yml`). If you change
-   `MYSQL_USER` or `MYSQL_PASSWORD` later, recreate the database volume
-   (`docker compose down -v`): the mysql image creates the app user only on its first start.
-
-3. **Start Services**
+   Set at least the `CHANGE_ME` passwords, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `JWT_SECRET`
+   and the ActiveMQ login. `docker-compose.yml` passes each container only its own keys.
+2. Start the stack:
    ```bash
-   docker-compose up --build
+   docker compose up --build
+   ```
+   - Portal: http://localhost:5173
+   - API: http://localhost:3000 (`/health`, `/health/ready`)
+   - MySQL: `127.0.0.1:3306`, from this machine only. `database/init.sql` and
+     `database/privileges.sh` run on the first start of an empty volume.
+3. Sign in with an SIIT Google account. Only addresses that match `STUDENT_EMAIL_DOMAIN` (students)
+   or `STAFF_EMAIL_DOMAINS` (staff) are accepted. The first sign-in asks for a profile.
+4. Make an approver: put the address in `APPROVER_EMAILS` and restart the backend, or, with the
+   list empty, after that person's first sign-in:
+   ```bash
+   docker compose exec backend npm run user:role -- person@siit.tu.ac.th Approver
    ```
 
-4. **Access Application**
-   - Frontend: `http://localhost:5173`
-   - Backend API: `http://localhost:3000`
-   - Database: `127.0.0.1:3306` (this machine only)
+Locally one backend process serves every route and runs the background work
+(`SERVICE_ROLE=all`). Status emails are only logged while `SMTP_HOST` is empty, and automatic
+provisioning is off while `MESSAGE_TRANSPORT` is empty: approvers then mark requests active by hand.
+To try provisioning end to end, set `MESSAGE_TRANSPORT=amqp`, generate the message keys and run
+acc-prov-vm against the local ActiveMQ broker ([acc-prov-vm/README.md](acc-prov-vm/README.md),
+"Local message broker").
 
-## Local Development Setup
+**After a schema change** (`database/init.sql`) recreate the database volume; there are no migration
+scripts, and this deletes the local data:
+```bash
+docker compose down -v
+docker compose up --build
+```
 
-### Backend Setup
+### Without Docker for the app
 
-The backend reads only environment variables; it doesn't load an env file itself.
-Use the root `.env`, with the database on this machine:
+Keep MySQL (and ActiveMQ, if used) in Docker and run the app on the host with Node.js 22:
 
 ```bash
+docker compose up -d mysql
+
 cd backend
-
-# Install dependencies
-npm install
-
-# Generate Prisma client
+npm ci
 npx prisma generate
-
-# Start development server (mysql from docker compose, published on 127.0.0.1)
 DB_HOST=127.0.0.1 node --env-file=../.env --watch src/server.js
+
+cd ../frontend            # in a second terminal
+npm ci
+npm run dev               # reads the VITE_* keys from the root .env
 ```
 
-### Frontend Setup
+The backend reads only environment variables. It stops at start with a clear message if a required
+key is missing.
 
-```bash
-cd frontend
-
-# Install dependencies
-npm install
-
-# Start development server (reads the VITE_* keys from the root .env)
-npm run dev
-```
-
-## API Documentation
-
-### Authentication Endpoints
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/api/auth/google` | Initiate Google OAuth flow |
-| GET | `/api/auth/google/callback` | OAuth callback handler |
-| GET | `/api/auth/me` | Get current authenticated user |
-| POST | `/api/auth/logout` | Logout and destroy session |
-
-### User Profile Endpoints
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/api/users/me` | Get user profile |
-| POST | `/api/users/me` | Create user profile |
-| PATCH | `/api/users/me` | Update user profile |
-
-### Student Request Endpoints
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| POST | `/api/requests` | Create new resource request |
-| GET | `/api/requests/me` | Get authenticated user's requests |
-| GET | `/api/requests/:id` | Get specific request details |
-| PATCH | `/api/requests/:id` | Update pending request |
-
-### Reviewer Endpoints
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/api/reviewer/requests` | List all requests (with filtering) |
-| GET | `/api/reviewer/requests/:id` | Get request details for review |
-| PATCH | `/api/reviewer/requests/:id/approve` | Approve a pending request |
-| PATCH | `/api/reviewer/requests/:id/reject` | Reject a pending request |
-| PATCH | `/api/reviewer/requests/:id/activate` | Activate an approved request |
-| PATCH | `/api/reviewer/requests/:id/complete` | Mark request as completed |
-
-## Database Schema
-
-### accounts
-Main account/profile table for all users
-
-```sql
-CREATE TABLE accounts (
-  id BIGINT PRIMARY KEY AUTO_INCREMENT,
-  google_sub VARCHAR(255) UNIQUE NOT NULL,
-  primary_email VARCHAR(255) UNIQUE NOT NULL,
-  full_name VARCHAR(255) NOT NULL,
-  phone_number VARCHAR(30),
-  active BOOLEAN DEFAULT TRUE,
-  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
-);
-```
-
-### users
-Student-specific profile information
-
-```sql
-CREATE TABLE users (
-  id BIGINT PRIMARY KEY AUTO_INCREMENT,
-  account_id BIGINT UNIQUE NOT NULL,
-  student_id VARCHAR(30) UNIQUE NOT NULL,
-  degree ENUM('UNDERGRADUATE', 'MASTER', 'DOCTORAL'),
-  program VARCHAR(255),
-  advisor_name VARCHAR(255),
-  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE
-);
-```
-
-### resource_requests
-Main request information
-
-```sql
-CREATE TABLE resource_requests (
-  id BIGINT PRIMARY KEY AUTO_INCREMENT,
-  user_id BIGINT NOT NULL,
-  purpose VARCHAR(255),
-  project_description TEXT,
-  project_supervisor_name VARCHAR(255),
-  resource_type ENUM(...),
-  justification TEXT,
-  estimated_start_date DATE,
-  estimated_end_date DATE,
-  impact_score TINYINT CHECK (impact_score BETWEEN 1 AND 10),
-  supervisor_confirmation ENUM('CONFIRMED', 'NOT_CONFIRMED'),
-  status ENUM('PENDING', 'APPROVED', 'REJECTED', 'ACTIVE', 'COMPLETED') DEFAULT 'PENDING',
-  reviewed_by_account_id BIGINT,
-  reviewed_at TIMESTAMP NULL,
-  review_comment TEXT,
-  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
-  FOREIGN KEY (reviewed_by_account_id) REFERENCES accounts(id) ON DELETE SET NULL
-);
-```
-
-### Resource-Specific Tables
-Each resource type has a detail table:
-- `hpc_gpu_requests`
-- `big_data_requests`
-- `vm_requests`
-- `lab_equipment_requests`
-- `aws_skill_builder_requests`
-- `aws_learner_lab_requests`
-
-## Features
-
-### Student Portal
-✅ Google OAuth authentication
-✅ Profile completion
-✅ Submit resource requests
-✅ View and edit pending requests
-✅ Track request status
-✅ Review comments from reviewers
-
-### Reviewer Dashboard
-✅ View all requests
-✅ Filter by status, resource type, student
-✅ Approve/reject with comments
-✅ Activate and complete requests
-✅ Enforce state transitions
-
-### Security
-✅ Google OAuth 2.0 verification
-✅ Server-side sessions
-✅ HttpOnly secure cookies
-✅ CORS protection
-✅ Parameterized queries
-✅ Input validation (Zod)
-✅ Backend authorization
-
-## Request Status Workflow
+## Request lifecycle
 
 ```
-PENDING
-├→ APPROVED (reviewer)
-│  └→ ACTIVE (reviewer)
-│     └→ COMPLETED (reviewer)
-└→ REJECTED (reviewer)
+Draft (saved on the server, up to 20) ─submit─▶ Pending ─approve─▶ Approved ─▶ On Use ─▶ Completed
+                                                   └─reject─▶ Rejected
 ```
 
-## Resource Types
+- A comment is required for every decision, and approving a request that overlaps the student's
+  other requests needs a confirmation. The student can edit a request while it is Pending.
+- **GPU server and big data:** approval queues a `CREATE` job. The request becomes On Use when the
+  site reports success. At the end date (or when an approver completes it) a `REVOKE` job disables
+  the accounts; they are never deleted. An approver can retry a failed job, and a student can ask
+  for a later end date (extension).
+- **Other resources:** the approver marks the request On Use and Completed by hand.
+- Every change is a row in the append-only `request_event` audit log, also copied to CloudWatch Logs
+  for 400 days on AWS.
 
-- **HPC GPU** - High-Performance Computing / GPU Cluster Access
-- **Big Data** - Big Data Platform / Server Access
-- **VM** - Virtual Machine
-- **Lab Equipment** - Specialized Laboratory Equipment
-- **AWS Skill Builder** - AWS Skill Builder Training Course
-- **AWS Learner Lab** - AWS Learner Lab
+## API
 
-## Environment Variables
+All routes are under `/api`. Sign-in sets an HttpOnly cookie; every other route needs it.
 
-All keys live in the root `.env` (template: `.env.example`), grouped by service.
-The backend stops at start if a required key is missing.
+| Method | Path | Who | What |
+|---|---|---|---|
+| GET | `/auth/google` | anyone | Start Google sign-in |
+| GET | `/auth/google/callback` | Google | Sign-in callback |
+| GET | `/auth/me` | signed in | The current user and role |
+| POST | `/auth/logout` | signed in | Sign out |
+| GET, POST, PATCH | `/users/me` | signed in | Read, create, update the profile |
+| GET, POST | `/drafts` | requester | List drafts, save a new one |
+| PUT, DELETE | `/drafts/:id` | requester | Update, delete a draft |
+| POST | `/requests` | requester | Submit a request (optionally from a draft, which is then deleted) |
+| GET | `/requests/me` | requester | My requests |
+| GET, PATCH | `/requests/:id` | requester | One request with its history; edit while Pending |
+| POST | `/requests/:id/extension` | requester | Ask for a later end date |
+| GET | `/reviewer/requests` | approver | All requests, with filters and paging |
+| GET | `/reviewer/requests/:id` | approver | One request with history, overlaps and setup state |
+| PATCH | `/reviewer/requests/:id/approve`, `/reject` | approver | Decide (comment required) |
+| PATCH | `/reviewer/requests/:id/activate`, `/complete` | approver | Mark On Use, Completed |
+| POST | `/reviewer/requests/:id/provision/retry` | approver | Queue a new job after a failed one |
+| PATCH | `/reviewer/requests/:id/extension/approve`, `/reject` | approver | Decide an extension |
+| GET | `/reviewer/export` | approver | CSV of the requests in a date range, or of their status history |
 
-| Service | Keys |
+## Tests
+
+| Suite | Command |
 |---|---|
-| mysql | `MYSQL_ROOT_PASSWORD` (admin), `MYSQL_DATABASE`, `MYSQL_USER` and `MYSQL_PASSWORD` (the app user) |
-| backend | `NODE_ENV`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_CALLBACK_URL`, `JWT_SECRET`, `SESSION_IDLE_MINUTES`, `SESSION_MAX_HOURS`, `FRONTEND_URL`, `STUDENT_EMAIL_DOMAIN`, `STUDENT_ID_DIGITS`, `DEGREE_EMAIL_PREFIXES`, `STAFF_EMAIL_DOMAINS` |
-| frontend | `VITE_API_URL`, `VITE_CONTACT_EMAIL` |
-| activemq | `ARTEMIS_USER`, `ARTEMIS_PASSWORD` |
+| Backend unit tests | `cd backend && npm test` |
+| Database integration (real MySQL, rolled back) | `cd backend && npm run test:db` (with the `DB_*` keys of a running database) |
+| Frontend end-to-end (Playwright, mocked API) | see [tests/README.md](tests/README.md) |
+| Live deployment check (read-only) | `bash tests/live-check.sh` |
+| AWS smoke test (deploy, check, delete) | `infra/scripts/smoke-test.sh`, see [infra/README.md](infra/README.md) |
 
-docker compose passes the database settings to the backend as `DB_HOST`, `DB_PORT`,
-`DB_NAME`, `DB_USER` and `DB_PASSWORD`; the backend builds the Prisma `DATABASE_URL`
-from them, so the password is written once.
+## Deploy
 
-## Testing
+- **AWS:** [infra/README.md](infra/README.md), "First deploy" and "Next session". The scripts are
+  bash (Git Bash on Windows, Linux or WSL) and need the AWS CLI v2, Node.js and Docker.
+- **SIIT site worker:** [acc-prov-vm/README.md](acc-prov-vm/README.md), "Running at the site".
 
-Run backend tests:
+## Settings
 
-```bash
-cd backend
-npm test
-```
+Local settings live in the root `.env` (template `.env.example`, with a comment on every key). On
+AWS the same keys come from `infra/config.env` and Secrets Manager.
 
-Tests cover:
-- Account creation/lookup
-- Profile management
-- Request lifecycle
-- State transitions
-- Authorization
-
-## Production Deployment
-
-AWS is built with CloudFormation; the templates, scripts and steps are in
-[`infra/README.md`](infra/README.md). It runs on the course account, where every resource name
-starts with `des424-126-g01`: run the scripts with `CONFIG=infra/config.des424.env`. In short:
-
-- **Services:** identity, requests, provisioning and Grafana on ECS Fargate behind an Application
-  Load Balancer (`backend/Dockerfile`, `prod` stage), and a notification Lambda for the status emails.
-- **Frontend:** CloudFront + S3, built and deployed separately from the backend, on the same origin
-  as the API. Without CloudFront (`ENTRY_MODE=direct`) it is its own ECS service (nginx).
-- **Database:** RDS MySQL Multi-AZ, private subnets, TLS checked. The paid stacks are deleted between
-  sessions; a final snapshot is kept and restored on the next deploy.
-- **SIIT site:** [`acc-prov-vm`](acc-prov-vm/README.md) takes jobs from SQS with short-lived
-  credentials from IAM Roles Anywhere, creates the accounts, and emails the student directly through
-  the SMTP relay. See its README, "Running at the site".
-
-## Development Commands
-
-### Backend
-
-```bash
-npm run dev        # Start development server
-npm run start      # Start production server
-npm run test       # Run tests
-npm run test:watch # Run tests in watch mode
-npx prisma db pull # Sync Prisma with database
-npx prisma generate # Generate Prisma client
-```
-
-### Frontend
-
-```bash
-npm run dev        # Start development server
-npm run build      # Build for production
-npm run lint       # Run linter
-npm run preview    # Preview production build
-```
+| Group | Keys |
+|---|---|
+| MySQL | `MYSQL_ROOT_PASSWORD`, `MYSQL_DATABASE`, `MYSQL_USER`, `MYSQL_PASSWORD` |
+| Sign-in | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_CALLBACK_URL`, `JWT_SECRET`, `SESSION_IDLE_MINUTES`, `SESSION_MAX_HOURS`, `FRONTEND_URL` |
+| Who may sign in | `STUDENT_EMAIL_DOMAIN`, `STUDENT_ID_DIGITS`, `DEGREE_EMAIL_PREFIXES`, `STAFF_EMAIL_DOMAINS`, `APPROVER_EMAILS` |
+| Provisioning (optional) | `MESSAGE_TRANSPORT`, `AMQP_*`, `MSG_PRIVATE_KEY`, `MSG_PEER_PUBLIC_KEYS`, `MSG_JOB_TTL_SEC`, `MSG_MAX_TTL_SEC`, `GPU_NODES`, `OVPN_PROFILE_URL`, `MANUAL_GPU_URL`, `MANUAL_BIGDATA_URL` |
+| Status emails (optional) | `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE`, `SMTP_USER`, `SMTP_APP_PASSWORD`, `MAIL_FROM`, `MAIL_REPLY_TO` |
+| Scheduler | `SCHEDULER_INTERVAL_SEC`, `EXPIRY_REMINDER_DAYS`, `SITE_TIME_ZONE` |
+| Frontend | `VITE_API_URL`, `VITE_CONTACT_EMAIL` |
+| ActiveMQ | `ARTEMIS_USER`, `ARTEMIS_PASSWORD` |
 
 ## Troubleshooting
 
-### MySQL Connection Issues
-```bash
-docker exec siit_mysql mysql -uroot -ppassword -h localhost siit_resource -e "SHOW TABLES;"
-```
-
-### Prisma Issues
-```bash
-npx prisma generate
-npx prisma db push
-```
-
-### Frontend/Backend Connection
-- Verify `VITE_API_URL` environment variable
-- Check CORS settings in backend (`FRONTEND_URL`)
-- Inspect browser console for errors
-
-### Google OAuth Issues
-- Verify Client ID and Secret
-- Check OAuth callback URL matches configuration
-- Ensure email is verified on Google account
-
-## License
-
-MIT
-
-## Support
-
-For issues or questions, please contact the development team or open a GitHub issue.
-
+- **The backend exits at start:** it names the missing or invalid key; fix it in `.env`.
+- **Sign-in fails or returns to the landing page:** check the redirect URI and JavaScript origin of
+  the Google client, and that the address matches the sign-in domains.
+- **"Access denied" for MySQL after changing `MYSQL_USER` or `MYSQL_PASSWORD`:** the user is created
+  only on the first start; recreate the volume (`docker compose down -v`).
+- **The frontend can't reach the API:** check `VITE_API_URL` and that `FRONTEND_URL` matches the
+  page's origin (CORS).
+- **Look at the database:**
+  `docker compose exec mysql sh -c 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" "$MYSQL_DATABASE" -e "SHOW TABLES;"'`

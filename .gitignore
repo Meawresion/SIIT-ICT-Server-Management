@@ -36,7 +36,7 @@ Thumbs.db
 *.sql.bak
 
 # Docker
-.docker-compose.override.yml
+docker-compose.override.yml
 *.ntvs*
 *.njsproj
 *.sln

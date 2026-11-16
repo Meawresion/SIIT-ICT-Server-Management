@@ -8,7 +8,7 @@ Request System.
   only, with just `SELECT` and `INSERT` on the `request_event` audit log for all of them
   (FR-9.1). Root (the admin user) owns the schema.
   - docker compose: one user (`MYSQL_USER`) for the single backend process (`SERVICE_ROLE=all`).
-  - AWS (D34): one user per service, made when its password is set (the data stack generates
+  - AWS: one user per service, made when its password is set (the data stack generates
     them):
 
     | User | Service | Rights |
@@ -18,7 +18,7 @@ Request System.
     | `siit_provisioning` | site jobs and results, scheduler, audit shipping | `user`: select; `request`: select, update; `request_event`: select, insert; `provision_job`: select, insert, update; `scheduler_lease`, `log_cursor`: select, update |
 
     `backend/scripts/check-grants.js` checks that a user has exactly these rights.
-- `rds-init.sh` (RDS, D31) does the same on RDS, where the image's first-start scripts can't run:
+- `rds-init.sh` (RDS) does the same on RDS, where the image's first-start scripts can't run:
   it connects as the RDS admin over TLS (certificate and host name checked), runs `init.sql` while
   the database has no tables, then sources `privileges.sh`. With `SOURCE_DB_HOST` it first copies
   the data of the ECS MySQL in one transaction, only into a database without accounts, and
@@ -36,24 +36,10 @@ Request System.
 
 ![ER diagram](er-diagram.png)
 
-The diagram uses Chen notation:
-
-- Rectangle: entity.
-- Ellipse: attribute. An underlined attribute is the primary key.
-- Diamond: relationship.
-- `1` and `N` on a line: cardinality. One user submits N requests, one approver reviews N requests, one user saves N drafts, and one request has N extensions.
-- Double line: total participation, meaning every row on that side must take part.
-- Italic text on a line: the role the `User` plays in that relationship (`student` or `approver`).
-
-Foreign key columns (`student_uid`, `approver_uid`) are not drawn as attributes, because the
-relationships represent them. `reviewed_at` is drawn on `Reviews`, since it describes the review.
-
-To regenerate the image after a schema change, edit `er-diagram.py`, then run:
-
-```bash
-python3 database/er-diagram.py
-rsvg-convert database/er-diagram.svg -o database/er-diagram.png
-```
+The diagram shows all eight tables of `init.sql` in crow's foot notation (`NN` = NOT NULL). It is
+drawn on [dbdiagram.io](https://dbdiagram.io) from `schema.dbml`, which has the same columns,
+indexes, checks and foreign keys as `init.sql`. After a schema change, change `init.sql` first,
+then `schema.dbml`; paste it into dbdiagram.io and export the PNG as `er-diagram.png`.
 
 Relationships:
 
@@ -159,16 +145,16 @@ cascade), so the log stays complete.
 | `to_status` | Status after the event (the same as `from_status` for an edit) |
 | `actor_uid` | Who acted, references `User.uid`; `NULL` for the system (provisioning results, scheduler) |
 | `comment` | The approver's comment on a decision |
-| `details` | JSON: `{"fields": [...]}` names (not values) of the fields an edit changed; `{"confirmed_overlaps": [...]}` when an approver approved despite overlapping requests (D28); `job_id`, `gpu_node` and the VPN state for provisioning |
+| `details` | JSON: `{"fields": [...]}` names (not values) of the fields an edit changed; `{"confirmed_overlaps": [...]}` when an approver approved despite overlapping requests; `job_id`, `gpu_node` and the VPN state for provisioning |
 | `created_at` | When it happened |
 
 The request detail shows this history: students see who acted by role only, approvers also by name.
 
 ### Provision Job
 
-The outbox for acc-prov-vm (plan §2.1). Approving a GPU request writes a `CREATE` job, and
+The outbox for acc-prov-vm. Approving a GPU request writes a `CREATE` job, and
 completing it a `REVOKE` job, in the same transaction as the decision. The backend's dispatcher
-publishes queued jobs (signed and encrypted, D22) and applies acc-prov-vm's results, so a broker
+publishes queued jobs (signed and encrypted) and applies acc-prov-vm's results, so a broker
 or site outage loses nothing. A retry is a new row with a new `job_id`, because acc-prov-vm
 answers a `job_id` it has already handled with its stored result. The app user may select,
 insert and update jobs, but not delete them.
@@ -239,7 +225,7 @@ All other resource types use `Manual`.
 Start the database through Docker Compose:
 
 ```bash
-docker-compose up mysql
+docker compose up mysql
 ```
 
 If the `mysql_data` Docker volume already exists, MySQL will not rerun
@@ -247,22 +233,21 @@ If the `mysql_data` Docker volume already exists, MySQL will not rerun
 database again:
 
 ```bash
-docker-compose down -v
-docker-compose up mysql
+docker compose down -v
+docker compose up mysql
 ```
 
-## Backend compatibility
+## Backend mapping
 
 The backend uses the lowercase `user`, `request`, `request_extension`, `draft` and `request_event` tables.
 Its own bookkeeping tables are:
 - `provision_job`: the acc-prov-vm outbox;
 - `scheduler_lease`: which backend task runs the scheduler;
-- `log_cursor`: the last `request_event` copied into the logs as an `audit.event` line. On AWS those lines reach the S3 logs bucket.
+- `log_cursor`: the last `request_event` copied out of the database. On AWS the events go to the CloudWatch audit log group (kept 400 days); locally they are `audit.event` lines in the service log.
 
 The app user may read and update these tables but not delete from them.
-It preserves the frontend API field names and enum values through
-`backend/src/utils/db-mapping.js`. No database reset or data migration is needed
-when these tables already exist. Regenerate the Prisma client after schema edits:
+The API keeps its own field names and enum values; `backend/src/utils/db-mapping.js` maps them
+to the database. Regenerate the Prisma client after schema edits:
 
 ```bash
 cd backend
