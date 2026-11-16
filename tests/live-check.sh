@@ -29,7 +29,7 @@ if grep -qi '^x-powered-by' <<<"$nf"; then fail "4. no framework header"; else p
 redirect=$(curl -s "$URL/api/auth/google" | grep -o 'redirect_uri=[^&"]*' | head -1 | sed 's/redirect_uri=//; s/%3A/:/gi; s/%2F/\//gi')
 expect "5. Google sign-in uses this site's callback" "$URL/api/auth/google/callback" "$redirect"
 host=${URL#https://}
-loc=$(curl -s -o /dev/null -w '%{http_code} %{redirect_url}' "http://$host/history")
+loc=$(curl -s -o /dev/null -D - "http://$host/history" | tr -d '\r' | awk 'NR == 1 { c = $2 } tolower($1) == "location:" { l = $2 } END { print c, l }')
 case $loc in 301*https://$host/history*|308*https://$host/history*) pass "HTTP redirects to HTTPS";; *) fail "HTTP redirects to HTTPS (got '$loc')";; esac
 g=$(code "$URL/grafana/")
 case $g in 200|302) pass "8. Grafana answers ($g)";; *) fail "8. Grafana answers (got $g)";; esac

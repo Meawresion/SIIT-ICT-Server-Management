@@ -1,0 +1,11 @@
+{
+  "name": "siit-frontend-e2e",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node run.mjs ./out"
+  },
+  "dependencies": {
+    "playwright": "^1.56.0"
+  }
+}
