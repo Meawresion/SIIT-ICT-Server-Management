@@ -55,7 +55,7 @@ Rules the module enforces:
 - **Scope:** only usernames matching `^st[md]?\d{1,12}$` (`st` Undergraduate, `stm` Master, `std` PhD) are touched. Everything else is refused.
 - **Dates:** checked before sending, because pfSense silently rolls `11/31` over to `12/01`.
 - **One login per session.** A failed login is never retried, because pfSense Login Protection would block the host. Run one job at a time.
-- **No delete** yet: revoke = disable (decision pending).
+- **No delete:** revoke = disable. Deleting is a separate admin command (see below).
 
 ## GPU node module
 
@@ -91,14 +91,14 @@ try {
 | `connectGpuNode(node)` | Checks the node's pinned host keys, then **checks the host's own IP** (cloned nodes can share keys and hostnames), then checks sudo. |
 | `provisionGpuUser(ssh, node, { username, fullName, password }, { timeoutMs })` | Creates the user if missing, sets the password, unlocks, then creates the conda env and Jupyter kernel if missing. Commands run from the student's home. Safe to re-run. |
 | `revokeGpuUser(ssh, username)` | `usermod -L` + `chage -E 0`; home and data are kept. |
-| `src/linux.js` | `getUserState`, `createUser`, `setPassword` (refuses unless the account's full name matches), `lockUser`, `unlockUser`. Reused for the Hadoop nodes later. |
+| `src/linux.js` | `getUserState`, `createUser`, `setPassword` (refuses unless the account's full name matches), `lockUser`, `unlockUser`. Also used for the Hadoop nodes. |
 
 - Commands are built from argv arrays and quoted, never from interpolated strings.
 - Passwords go to `sudo -S` and `chpasswd` on stdin only. sudo always runs with `-k`, so a cached sudo session can't make the password line reach the command.
 
 ## Deleting a student's accounts (admin only)
 
-The worker never deletes anything (D16: revoke = disable). To delete one student's accounts everywhere, for example the throwaway test user `st9990000001`, the admin runs:
+The worker never deletes anything (revoke = disable). To delete one student's accounts everywhere, for example the throwaway test user `st9990000001`, the admin runs:
 
 ```bash
 npm run cleanup-user -- st9990000001 --fullname "Test User For acc-prov-vm"         # check only
@@ -123,18 +123,18 @@ npm run cleanup-user -- st9990000001 --fullname "Test User For acc-prov-vm" --ye
 The Hadoop nodes are listed in `bigdata.json` (`BIGDATA_FILE`). Without it, Big Data jobs are refused with a failed result.
 - Each node has a `name`, an IPv4 `host`, a `port` and pinned `hostKeys`. The SIIT nodes `h99` and `h0` are clones that share one host key, so the IP check in every SSH session is what tells them apart.
 - **Exactly one node has `"hdfsHome": true`.** HDFS is one file system for the whole cluster, so the HDFS home is made once, from that node.
-- `groups`: the groups the student joins on every node. SIIT uses `hadoop` only (decided 2026-10-30, see below).
+- `groups`: the groups the student joins on every node. SIIT uses `hadoop` only (see below).
 - `hdfs`: the `command`, the HDFS `superuser` that runs it, the `homeDir` parent, the home's `group` and `mode`, and `studentOwnsHome`.
 - `jupyterUrl` and `hueUrl` go into the student's email.
-- **SSH login:** `HADOOP_SSH_USER`, `HADOOP_SSH_PASSWORD`, `HADOOP_SSH_KEY_PATH` and `HADOOP_SUDO_PASSWORD`, with per-node overrides like the GPU ones. Any of them that is not set falls back to the `GPU_*` value (D18: one admin account).
+- **SSH login:** `HADOOP_SSH_USER`, `HADOOP_SSH_PASSWORD`, `HADOOP_SSH_KEY_PATH` and `HADOOP_SUDO_PASSWORD`, with per-node overrides like the GPU ones. Any of them that is not set falls back to the `GPU_*` value (one admin account).
 
 | Function | Notes |
 |----------|-------|
 | `provisionHadoopUser(ssh, node, settings, { username, fullName, password })` | Creates the user if missing, sets the password (only if the full name matches), unlocks, adds the missing groups. On the `hdfsHome` node it also makes `<homeDir>/<user>` as the HDFS superuser and applies the owner, group and mode. Safe to re-run. |
-| `revokeHadoopUser(ssh, username)` | `usermod -L` + `chage -E 0`. The home and the HDFS home are kept (D16). |
+| `revokeHadoopUser(ssh, username)` | `usermod -L` + `chage -E 0`. The home and the HDFS home are kept. |
 
 - **HDFS home owner:** `studentOwnsHome: true` runs `-chown <user>:<group>`, SIIT's real command step, so the student owns their home. The manual prints `-chown :hadoop` (a typo): that changes only the group, the owner stays `hdfs`, and with mode 755 the student can't write there.
-- **Never add students to `hdfs`.** On the SIIT cluster `hdfs` is HDFS's superuser group (`dfs.permissions.superusergroup=hdfs`), so a member can read and delete everyone's HDFS data. The technician manual adds students to `hadoop,hdfs`; acc-prov-vm uses `hadoop` only (decided 2026-10-30). Accounts made by hand before that may still be in `hdfs`.
+- **Never add students to `hdfs`.** On the SIIT cluster `hdfs` is HDFS's superuser group (`dfs.permissions.superusergroup=hdfs`), so a member can read and delete everyone's HDFS data. The technician manual adds students to `hadoop,hdfs`; acc-prov-vm uses `hadoop` only. Accounts made by hand from the manual may still be in `hdfs`.
 - JupyterHub on the edge node signs in through PAM, so the Linux password is the JupyterHub password, and a locked account can't sign in.
 
 ## HUE module
@@ -142,12 +142,12 @@ The Hadoop nodes are listed in `bigdata.json` (`BIGDATA_FILE`). Without it, Big 
 `src/hue.js` adds, resets and deactivates HUE users through Administer Users (HUE 4.11), when `HUE_ENABLED=true` (`HUE_URL`, `HUE_USER`, `HUE_PASSWORD`).
 - **Not verified yet.** HUE was down while this was written, so the paths and form fields follow HUE 4.11's standard user forms. Record flows H0–H10 (`docs/codegen-checklist.md`) and test against the live UI before turning it on.
 - While it is off, Big Data students get a note in the email that their HUE login comes later, and the result says `hue: 'skipped'`.
-- Create unticks "Create home directory", because acc-prov-vm makes the HDFS home itself. A returning student's HUE user gets the new password and is made active again. Revoke unticks "Active" (D16).
+- Create unticks "Create home directory", because acc-prov-vm makes the HDFS home itself. A returning student's HUE user gets the new password and is made active again. Revoke unticks "Active".
 
 ## Mail module
 
 The student gets **two emails**:
-1. **(1/2) Instructions:** the username, the D15 note (whether to keep the existing VPN password; with `PFSENSE_ENABLED=false` it says the VPN login comes separately from SIIT ICT), and links to the VPN profile, the service and the student manual. **No password.**
+1. **(1/2) Instructions:** the username, the VPN password note (whether to keep the existing VPN password; with `PFSENSE_ENABLED=false` it says the VPN login comes separately from SIIT ICT), and links to the VPN profile, the service and the student manual. **No password.**
 2. **(2/2) The password, as an inline image only.** It is rendered with Playwright's Chromium. The password never appears in any text part, in the image alt text, or in the logs.
 
 ```js
@@ -158,7 +158,7 @@ import { renderPasswordImage } from './src/password-image.js';
 const mailer = createMailer(loadMailConfig());
 await sendProvisionEmails(mailer, {
   to: 'student@...', fullName: 'Jane Doe', username: 'st6622001234',
-  vpnIsNew: false, // false: keep the existing VPN password; the new one is for the service only (D15)
+  vpnIsNew: false, // false: keep the existing VPN password; the new one is for the service only
                    // null: the VPN account wasn't checked here (PFSENSE_ENABLED=false); no claim either way
   service: { name: 'GPU server gpu-01', links: [{ label: 'JupyterHub', url: node.jupyterUrl }], manualUrl },
   ovpnProfileUrl, period: { start: '2026-11-01', end: '2026-12-31' },
@@ -167,10 +167,10 @@ await sendProvisionEmails(mailer, {
 
 - **Escaping and attachments:** every email has a text and an HTML version, with user text escaped. The only attachment is the inline password image (CID).
 - **Recipients** must be plain addresses. Quotes, `;`, `<>`, `()` and spaces are rejected. Optionally, `MAIL_ALLOWED_RECIPIENT_DOMAINS` limits sending to the SIIT domain.
-- **Sender:** this host connects to the SMTP relay itself, with the `SMTP_*` settings in its own `.env`; nothing about the email passes through AWS. For now the relay is Gmail with an App Password (D9). It can be swapped for an SIIT relay or SES by changing config only. The portal's status emails are separate: the notification Lambda sends them with its own copy of the settings.
+- **Sender:** this host connects to the SMTP relay itself, with the `SMTP_*` settings in its own `.env`; nothing about the email passes through AWS. For now the relay is Gmail with an App Password. It can be swapped for an SIIT relay or SES by changing config only. The portal's status emails are separate: the notification Lambda sends them with its own copy of the settings.
 - **The image is obfuscation, not encryption.** It keeps the password out of search, previews and scrapers, but anyone who opens the email can read it.
 
-## Message envelope (D22)
+## Message envelope
 
 Every message between the backend and acc-prov-vm is **signed and encrypted**, on every transport (local ActiveMQ, AWS SQS). IAM, TLS and SQS-managed encryption stay in place underneath. The envelope additionally makes sure that only the backend's key can authorize a job, and only acc-prov-vm can read it.
 
@@ -200,7 +200,7 @@ const reply = seal({ typ: 'result', jti: job.jti, rid: job.rid, payload: { ok: t
   { me, peer: peers[0] });
 ```
 
-## Local message broker (D23)
+## Local message broker
 
 For local testing, the backend and acc-prov-vm exchange envelopes through **ActiveMQ Artemis**, the `activemq` service in the root `docker-compose.yml`. In AWS they use SQS instead. The broker:
 - listens on `127.0.0.1` only (AMQP 5672, web console 8161);
@@ -254,7 +254,7 @@ Setup, from the stack outputs:
 
 | Job | What it does |
 |-----|--------------|
-| `CREATE` (GPU) | 1. Generate a password (`PASSWORD_LENGTH`; letters and digits, no look-alikes). 2. **VPN (D15)**, if `PFSENSE_ENABLED=true`: create the account if it's missing; keep an active one, extending its expiration only if it was set; re-activate a disabled or expired one with the new password. 3. GPU account and conda kernel on the named node. 4. Both emails, **last**. |
+| `CREATE` (GPU) | 1. Generate a password (`PASSWORD_LENGTH`; letters and digits, no look-alikes). 2. **VPN**, if `PFSENSE_ENABLED=true`: create the account if it's missing; keep an active one, extending its expiration only if it was set; re-activate a disabled or expired one with the new password. 3. GPU account and conda kernel on the named node. 4. Both emails, **last**. |
 | `REVOKE` (GPU) | Lock the Linux account. Disable the VPN account only when `revokeVpn` is true (the student has no other active request). |
 | `CREATE` (Big Data) | The same password and VPN steps, then the Linux account on every Hadoop node, the HDFS home, the HUE user (if `HUE_ENABLED`), and both emails (JupyterHub, plus HUE when it was set up), **last**. |
 | `REVOKE` (Big Data) | Lock the Linux account on every Hadoop node, deactivate the HUE user (if `HUE_ENABLED`); the VPN as for GPU. |
@@ -362,7 +362,6 @@ store and Chromium live in `/var/lib/acc-prov-vm`.
    credential_process = /usr/local/bin/aws_signing_helper credential-process --certificate /etc/acc-prov-vm/site/site.pem --private-key /etc/acc-prov-vm/site/site.key --trust-anchor-arn <TrustAnchorArn> --profile-arn <ProfileArn> --role-arn <RoleArn>
    CFG
    sudo chown root:accprov /etc/acc-prov-vm/aws-config && sudo chmod 640 /etc/acc-prov-vm/aws-config
-   sudo rm -f /etc/acc-prov-vm/aws.env   # old Learner Lab keys would win over it
    # Test: prints temporary credentials as JSON (don't share the output)
    sudo -u accprov /usr/local/bin/aws_signing_helper credential-process --certificate /etc/acc-prov-vm/site/site.pem --private-key /etc/acc-prov-vm/site/site.key --trust-anchor-arn <TrustAnchorArn> --profile-arn <ProfileArn> --role-arn <RoleArn> | head -c 20; echo
    ```
@@ -383,10 +382,8 @@ store and Chromium live in `/var/lib/acc-prov-vm`.
    public key. The certificate lasts a year: `site-ca.sh issue` again, copy, restart.
 7. Watch the first start: `journalctl -u acc-prov-vm -f`. It logs JSON lines, starting with
    `acc-prov-vm.ready` (the transport, the key id and the nodes).
-   - The hardening lines in the unit were checked with `systemd-analyze verify`, but not yet on the
-     SIIT host.
-   - If Chromium or SSH fails only under systemd, comment them out one at a time
-     (`ProtectSystem`, then `ProtectHome`, then `PrivateTmp`), `daemon-reload` and restart.
+   - If Chromium or SSH fails only under systemd, comment out the hardening lines in the unit one at
+     a time (`ProtectSystem`, then `ProtectHome`, then `PrivateTmp`), `daemon-reload` and restart.
 
 **Day to day:**
 

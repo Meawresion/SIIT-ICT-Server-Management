@@ -35,7 +35,7 @@ export function loadPfSenseConfig(env = process.env) {
   };
 }
 
-// Temporary sender (D9): Gmail SMTP with an App Password. Swappable for an SIIT relay or SES.
+// Sender: Gmail SMTP with an App Password. Swappable for an SIIT relay or SES by config only.
 export function loadMailConfig(env = process.env) {
   requireEnv(env, ['SMTP_HOST', 'SMTP_PORT', 'SMTP_SECURE', 'SMTP_USER', 'SMTP_APP_PASSWORD', 'MAIL_FROM']);
   const port = Number(env.SMTP_PORT);
@@ -57,7 +57,7 @@ export function loadMailConfig(env = process.env) {
   };
 }
 
-// Worker behaviour and message keys (D22).
+// Worker behaviour and message keys.
 export function loadWorkerConfig(env = process.env) {
   requireEnv(env, [
     'MESSAGE_TRANSPORT', 'MSG_PRIVATE_KEY', 'MSG_MAX_TTL_SEC', 'MSG_RESULT_TTL_SEC',
@@ -98,7 +98,7 @@ export function loadWorkerConfig(env = process.env) {
   };
 }
 
-// Local broker (D23): ActiveMQ Artemis over AMQP 1.0.
+// Local broker: ActiveMQ Artemis over AMQP 1.0.
 export function loadAmqpConfig(env = process.env) {
   requireEnv(env, ['AMQP_URL', 'AMQP_USER', 'AMQP_PASSWORD', 'AMQP_REQUEST_QUEUE', 'AMQP_RESULT_QUEUE']);
   if (!['amqp:', 'amqps:'].includes(new URL(env.AMQP_URL).protocol)) throw new Error('AMQP_URL must be amqp:// or amqps://');
@@ -114,8 +114,8 @@ export function loadAmqpConfig(env = process.env) {
   };
 }
 
-// AWS (plan §10.1): the queue URLs from the queues stack. Credentials come from the usual AWS
-// variables (Learner Lab: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_SESSION_TOKEN) or a profile.
+// AWS: the queue URLs from the queues stack. Credentials come from the usual AWS
+// chain: at the site, IAM Roles Anywhere through AWS_CONFIG_FILE (credential_process).
 export function loadSqsConfig(env = process.env) {
   requireEnv(env, ['AWS_REGION', 'SQS_REQUEST_QUEUE_URL', 'SQS_RESULT_QUEUE_URL']);
   for (const k of ['SQS_REQUEST_QUEUE_URL', 'SQS_RESULT_QUEUE_URL']) {
@@ -146,7 +146,7 @@ function nodeEnv(env, key, name, prefixes = ['GPU']) {
 // One SSH host of a settings file: name, IPv4 host, port, pinned keys, credentials from env.
 function parseSshNode(n, where, env, prefixes, fail) {
   if (!NODE_NAME_RE.test(n.name ?? '')) fail(`${where}.name must match ${NODE_NAME_RE}`);
-  // Clones share hostnames and host keys (D17), so nodes are identified by IP.
+  // Clones share hostnames and host keys, so nodes are identified by IP.
   if (!IPV4_RE.test(n.host ?? '')) fail(`${where}.host must be an IPv4 address`);
   const port = n.port ?? 22;
   if (!Number.isInteger(port) || port < 1 || port > 65535) fail(`${where}.port is invalid`);
@@ -213,7 +213,7 @@ export function loadGpuConfig(env = process.env) {
 // student's Linux account and groups; the one node with "hdfsHome": true also makes the HDFS home
 // (HDFS is one file system for the whole cluster). SSH credentials: HADOOP_SSH_USER,
 // HADOOP_SSH_PASSWORD, HADOOP_SSH_KEY_PATH, HADOOP_SUDO_PASSWORD, with per-node overrides as for
-// the GPU nodes; any of them not set falls back to the GPU_* value (D18: one admin account).
+// the GPU nodes; any of them not set falls back to the GPU_* value (one admin account).
 export function parseBigDataConfig(settings, env = process.env) {
   const fail = (msg) => { throw new Error(`Big Data settings: ${msg}`); };
   if (!Array.isArray(settings?.nodes) || settings.nodes.length === 0) fail('"nodes" must be a non-empty array');

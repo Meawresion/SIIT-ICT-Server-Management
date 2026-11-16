@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Prepares the RDS database (data-rds stack, D31). deploy.sh data runs it as a one-off ECS task after
+# Prepares the RDS database (data-rds stack). deploy.sh data runs it as a one-off ECS task after
 # every deploy of that stack, so it must be safe to run again. It connects as the RDS admin user
 # over TLS, with the server certificate and host name checked against the RDS CA bundle.
 #  1. waits until RDS answers;
-#  2. runs init.sql (tables, triggers, procedures) while the database has no tables;
+#  2. runs init.sql (tables and triggers) while the database has no tables;
 #  3. with SOURCE_DB_HOST (switch-to-rds.sh): copies the data of the ECS MySQL, in one transaction
 #     and only into a database without accounts, then compares the row counts;
 #  4. creates the service users with their passwords and rights (privileges.sh).

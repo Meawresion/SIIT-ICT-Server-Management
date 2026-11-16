@@ -1,4 +1,4 @@
-// Events to the other services on AWS (D34): the backend puts them on the EventBridge bus
+// Events to the other services on AWS: the backend puts them on the EventBridge bus
 // EVENT_BUS_NAME, and each consuming service reads them from its own SQS queue. Services never
 // call each other directly.
 //   source siit.backend, detail-type "Email requested": { to, subject, text, html } for the

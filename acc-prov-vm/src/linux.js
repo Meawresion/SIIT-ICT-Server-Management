@@ -1,5 +1,5 @@
 // Linux account operations over an SshHost (runbooks in the technician manuals).
-// Revoke = lock + expire, never delete (D16). Passwords go to chpasswd on stdin only.
+// Revoke = lock + expire, never delete. Passwords go to chpasswd on stdin only.
 
 import { assertNonEmpty, assertUsername } from './validate.js';
 

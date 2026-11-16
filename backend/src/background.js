@@ -1,4 +1,4 @@
-// The background work (D34: the provisioning service on AWS; inside the API process locally):
+// The background work (the provisioning service on AWS; inside the API process locally):
 // the outbox dispatcher and result consumer, the scheduler and the audit shipper.
 
 import { provisioningConfig } from './config/provisioning.js';

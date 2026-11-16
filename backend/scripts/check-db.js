@@ -1,7 +1,7 @@
 // Integration check of the request service's database work. Every record is rolled back,
 // including on failure; then the database user must have exactly its rights (check-grants.js).
 //   npm run test:db  (docker compose, SERVICE_ROLE=all): adds its two accounts in the transaction.
-//   run-task.sh node scripts/check-db.js <marker>  (request service task, D34): uses the accounts
+//   run-task.sh node scripts/check-db.js <marker>  (request service task): uses the accounts
 //     check-identity.js added for the marker, since this service's database user may only read them.
 import assert from 'node:assert/strict';
 import { randomInt, randomUUID } from 'node:crypto';
@@ -65,7 +65,7 @@ try {
     assert.equal((await getUserRequests(student.uid)).total, 1);
     assert.equal(await getRequestById(request.id, student.uid + 1), null);
     assert.equal((await updateRequest(request.id, student.uid, { purpose: 'Edited purpose', impact_score: 8 })).impact_score, 8);
-    // D28: a second request for the same resource and dates is flagged, and approving needs a confirmation.
+    // A second request for the same resource and dates is flagged, and approving needs a confirmation.
     const second = await createRequest(student.uid, { purpose: 'Overlap check', project_description: 'Test project', project_supervisor_name: 'Test supervisor', resource_type: 'VM', justification: 'Database verification', estimated_start_date: '2026-10-17', estimated_end_date: '2026-10-20', impact_score: 5, supervisor_confirmation: 'CONFIRMED' });
     assert.deepEqual((await getRequestForReview(request.id)).overlaps.map(o => o.id), [second.id]);
     await assert.rejects(approveRequest(request.id, reviewer.uid, 'Verified'), err => err.statusCode === 409 && err.overlaps[0].id === second.id);
@@ -107,7 +107,7 @@ try {
   if (!process.exitCode) {
     assert.equal(await prisma.request.count({ where: { student_uid: student.uid } }), 0);
     if (!marker) assert.equal(await prisma.user.findUnique({ where: { uid: student.uid } }), null);
-    // FR-9.1, D34: e.g. no UPDATE or DELETE on the audit log, no change to accounts.
+    // FR-9.1: e.g. no UPDATE or DELETE on the audit log, no change to accounts.
     const problems = await checkGrants(prisma, process.env.SERVICE_ROLE ?? 'all');
     if (problems.length) throw new Error(`Grants: ${problems.join('; ')}`);
     console.log(`Database integration passed: drafts, request create/read/edit, review lifecycle, extension, overlap warning, status history, filters, JSON serialization, all rolled back; its database user (${process.env.DB_USER}) has exactly its rights (the audit log is append-only).`);

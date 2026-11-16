@@ -1,4 +1,4 @@
-// SMTP settings for the status emails (S2, FR-4.3). Without SMTP_HOST the emails are off and only
+// SMTP settings for the status emails (FR-4.3). Without SMTP_HOST the emails are off and only
 // logged. Recipients are limited to the sign-in domains (STUDENT_EMAIL_DOMAIN and
 // STAFF_EMAIL_DOMAINS), so a bad address in the database can never send mail elsewhere.
 //   SMTP_HOST, SMTP_PORT, SMTP_SECURE (true = TLS from the start, false = STARTTLS required)

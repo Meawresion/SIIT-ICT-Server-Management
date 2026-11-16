@@ -1,5 +1,4 @@
-// Job handlers: what CREATE, REVOKE and EXTEND do for a GPU or Big Data request (runbooks in
-// plan.md §6b).
+// Job handlers: what CREATE, REVOKE and EXTEND do for a GPU or Big Data request.
 //
 // Job payload (from the backend, inside the envelope; never contains passwords):
 //   { action: 'CREATE' | 'REVOKE' | 'EXTEND', resource: 'GPU_SERVER' | 'BIG_DATA',
@@ -65,7 +64,7 @@ export function parseJobPayload(p) {
 
 const today = (now) => new Date(now()).toISOString().slice(0, 10);
 
-// D15. -> { vpn: 'created' | 'reactivated' | 'kept', vpnIsNew }
+// Creates, re-activates or keeps the student's VPN user. -> { vpn: 'created' | 'reactivated' | 'kept', vpnIsNew }
 async function ensureVpn(pf, { username, fullName, password, end, now, forceNew }) {
   const state = await pf.getUserState(username);
   if (!state.exists) {

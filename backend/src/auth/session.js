@@ -1,7 +1,7 @@
 import env from '../config/env.js';
 import { signToken, verifyToken } from './token.js';
 
-// Stateless sign-in (D1): a signed token in an HttpOnly cookie, so any backend task can check any
+// Stateless sign-in: a signed token in an HttpOnly cookie, so any backend task can check any
 // request and a deploy doesn't sign anyone out. The token holds only the account id; requireAuth
 // reads the role from the database on every request.
 export const AUTH_COOKIE = 'auth';

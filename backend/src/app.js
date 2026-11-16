@@ -54,7 +54,7 @@ app.get('/health/ready', async (req, res) => {
   }
 });
 
-// Routes. On AWS the identity and request services each serve their own (D34; the ALB routes by
+// Routes. On AWS the identity and request services each serve their own (the ALB routes by
 // path); the other service's paths are a 404 here.
 const role = serviceRole();
 if (servesIdentity(role)) {

@@ -1,4 +1,4 @@
-// Request ids are shown zero-padded, e.g. #0011053, matching the mockup.
+// Request ids are shown zero-padded, e.g. #0011053.
 export const formatId = (id) => `#${String(id).padStart(7, '0')}`;
 
 const pad = (n) => String(n).padStart(2, '0');

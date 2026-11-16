@@ -1,7 +1,7 @@
 // Extension requests (FR-8.3). The student of an On Use request asks for a later end date with a
 // reason; an approver approves or rejects it. Approving moves the end date and, for a request set
 // up automatically, queues an EXTEND job (acc-prov-vm moves the VPN account's expiration). Only
-// while the current end date hasn't passed: after it the access is being turned off (D7), so the
+// while the current end date hasn't passed: after it the access is being turned off, so the
 // student submits a new request instead. One ask waits at a time (a Pending row of
 // request_extension); every step is also a request_event.
 

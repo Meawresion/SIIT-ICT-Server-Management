@@ -120,7 +120,7 @@ model request_event {
   @@index([actor_uid], map: "request_event_actor_uid_foreign")
 }
 
-/// Outbox of jobs for acc-prov-vm (plan §2.1). A retry is a new row with a new job_id.
+/// Outbox of jobs for acc-prov-vm. A retry is a new row with a new job_id.
 model provision_job {
   job_id          String               @id @db.Char(36)
   rid             Int                  @db.UnsignedInt

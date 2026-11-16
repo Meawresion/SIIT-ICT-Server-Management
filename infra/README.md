@@ -19,7 +19,7 @@ Browser ─HTTPS─▶ CloudFront  APP_HOST.ZONE_NAME
                                          or ─▶ RDS MySQL Multi-AZ (private subnets, TLS checked)
 ```
 
-Without CloudFront (`ENTRY_MODE=direct`, e.g. Learner Lab) the ALB is the public entry and the
+Without CloudFront (`ENTRY_MODE=direct`, for accounts that can't use CloudFront) the ALB is the public entry and the
 frontend is its own ECS service (nginx with the React build), built and deployed apart from the
 backend:
 
@@ -35,7 +35,7 @@ them and takes a bad one out. They keep no state in memory (the sign-in session 
 are cookies), so any task can answer. Provisioning and Grafana run 1 task, which ECS restarts in
 either AZ, and RDS has its standby in the other AZ.
 
-**Services (D34).** The backend runs as separate services that never call each other: they share
+**Services.** The backend runs as separate services that never call each other: they share
 the database (each change and its outbox row in one transaction) and talk through queues and an
 event bus. Each can be deployed, scaled or deleted on its own (`destroy.sh provisioning` stops
 provisioning; the portal keeps working and the jobs wait in the outbox).
@@ -132,7 +132,7 @@ sends the end-date reminders and removes access when a request ends (FR-8.2, FR-
 | `<project>-edge` | `edge.yaml` | CloudFront mode: S3 bucket, CloudFront (SPA rewrite function; `/api/*` and `/grafana*` go to the ALB), its access logs to `/<project>/frontend`, DNS records for the portal. |
 | `<project>-web` | `web.yaml` | Direct mode: the frontend service (nginx, `frontend/Dockerfile` `prod` stage) and its ALB rule for every path the backend doesn't take. |
 
-**IAM (least privilege).** Each stack creates the roles of what it runs, named `<project>-<service>-exec` (ECS pulls that one image, writes that one log group, reads only that service's secrets) and `<project>-<service>-task` (what the running code calls: the backend only puts events on the bus; provisioning only its queues, the audit log group and the bus; Grafana reads CloudWatch and only the project's log groups). Identity, the database tasks and nginx call no AWS API and have no task role. The Lambdas have `<project>-notification-fn` and `<project>-message-keys-fn`, the site `<project>-site`. Deploys need `CAPABILITY_NAMED_IAM`, and every stack is tagged `Project=<project>`. Learner Lab can't create roles, so these templates no longer run there (D30 is replaced).
+**IAM (least privilege).** Each stack creates the roles of what it runs, named `<project>-<service>-exec` (ECS pulls that one image, writes that one log group, reads only that service's secrets) and `<project>-<service>-task` (what the running code calls: the backend only puts events on the bus; provisioning only its queues, the audit log group and the bus; Grafana reads CloudWatch and only the project's log groups). Identity, the database tasks and nginx call no AWS API and have no task role. The Lambdas have `<project>-notification-fn` and `<project>-message-keys-fn`, the site `<project>-site`. Deploys need `CAPABILITY_NAMED_IAM`, and every stack is tagged `Project=<project>`.
 
 **A shared account** (the course account, every group in one account): set `PROJECT` to the group's prefix. Every name starts with it, and the scripts only list, check or delete resources with that prefix. A second settings file can reuse `config.env` and change a few values: `CONFIG=infra/config.<name>.env infra/scripts/<script>.sh` (git-ignored; it starts with `. "$INFRA_DIR/config.env"`, and a relative `CONFIG` is read from the folder you run in, so run from the repository root). `infra/config.des424.env` does this for the course account:
 
@@ -151,15 +151,7 @@ DB_RESTORE=latest
 CONTAINER_INSIGHTS=disabled
 ```
 
-## AWS Learner Lab limits (checked 2026-10-27, no longer supported)
-
-| Service | Learner Lab | What we do |
-|---|---|---|
-| CloudFront | Denied (list and create) | `ENTRY_MODE=direct`: the ALB is the public entry; the `web` stack serves the frontend instead of `edge`. |
-| Cloud Map (create namespace) | Denied | MySQL is reached through an internal Network Load Balancer. |
-| IAM (create roles) | Denied | The stacks now create their own roles, so they no longer deploy there. |
-| ECS, ECR, ELB, EFS, Secrets Manager, Route 53, ACM, SQS, Lambda, Logs (incl. metric filters, saved queries), S3, CloudWatch alarms, SNS, EventBridge (custom buses too, probe 2026-11-03) | Allowed | |
-
+The account must allow creating IAM roles; `infra/scripts/probe.sh` checks every service used here.
 With `USE_DOMAIN=false` there are no `dns`/`cert` stacks and the ALB answers over HTTP on its AWS
 name. That is enough for smoke tests, but not for signing in: the sign-in cookie needs HTTPS.
 
@@ -170,9 +162,9 @@ with its placeholders: your real secrets are never used), queues, logs, events, 
 domain, provisioning on with a throwaway site key), and checks:
 - the frontend answers through the ALB, also on client-side routes;
 - the backend answers through the ALB;
-- it reaches MySQL as the request service's own database user (D34), over TLS (`check-db-tls.js`:
+- it reaches MySQL as the request service's own database user, over TLS (`check-db-tls.js`:
   `encrypt` on the ECS MySQL, `verify` on RDS);
-- the request service has the event bus and token secret but no Google client, SMTP setting, site key or queue (D34);
+- the request service has the event bus and token secret but no Google client, SMTP setting, site key or queue;
 - the ALB sends `/api/users` to the identity service and `/api/requests` to the request service (each answers 401, not 404), and the identity service logs into its own group;
 - it refuses unsigned and cross-site requests;
 - an unknown API path is a JSON 404 with its reference (the `X-Request-Id`) and no framework header;
@@ -200,12 +192,12 @@ balancers, EFS, SQS, Lambda, log groups, secrets). The teardown is fast: every E
 stopped at once, then the stacks go in dependency order, independent ones in parallel.
 
 **Kept between runs:**
-- `network` and `platform` (the ECR images; user's OK, 2026-10-28): they run nothing and cost cents a month (ECR storage, at most 5 images per repository), so the next run only uploads the images whose code changed.
-- `queues` (2026-10-30): idle queues cost nothing, since SQS bills per request; the backend key secret costs $0.40/month. Keeping it keeps the backend public key and queue URLs that acc-prov-vm is set up with.
-- `logs` (2026-10-30): the log groups, the audit trail and the alert topic. Log storage costs cents; metric filters, saved queries and an idle topic cost nothing.
-- `site` (2026-11-08): the Roles Anywhere access and the site's public key, so nothing changes at the site between sessions.
+- `network` and `platform` (the ECR images): they run nothing and cost cents a month (ECR storage, at most 5 images per repository), so the next run only uploads the images whose code changed.
+- `queues`: idle queues cost nothing, since SQS bills per request; the backend key secret costs $0.40/month. Keeping it keeps the backend public key and queue URLs that acc-prov-vm is set up with.
+- `logs`: the log groups, the audit trail and the alert topic. Log storage costs cents; metric filters, saved queries and an idle topic cost nothing.
+- `site`: the Roles Anywhere access and the site's public key, so nothing changes at the site between sessions.
 
-The smoke test creates them when they are missing (first run, or after a Learner Lab reset) and never deletes them. The `dns` and `cert` stacks stay too.
+The smoke test creates them when they are missing (first run) and never deletes them. The `dns` and `cert` stacks stay too.
 
 **Don't run the smoke test while the real acc-prov-vm is connected to the queues.** It would take the test jobs, which are sealed for the throwaway site key, and dead-letter them.
 

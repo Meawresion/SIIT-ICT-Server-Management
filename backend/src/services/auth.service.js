@@ -4,7 +4,7 @@ import { accountView } from '../utils/db-mapping.js';
 import { allowedHostedDomain, classifyEmail, loadIdentityRules, roleFor } from '../config/identity.js';
 import { serviceRole } from '../config/env.js';
 
-// Only the services that own the user table may write it (D34: the request service and the
+// Only the services that own the user table may write it (the request service and the
 // provisioning service can only read users).
 const WRITES_USERS = ['all', 'api', 'identity'];
 
@@ -21,7 +21,7 @@ export async function withCurrentRole(row) {
 export async function findOrCreateAccount(google_data) {
   // Verified Google email is the identity key in the new User table.
   const email = google_data.email.trim().toLowerCase();
-  // Only SIIT student and staff Workspace accounts may sign in (D25). Checked before any row exists.
+  // Only SIIT student and staff Workspace accounts may sign in. Checked before any row exists.
   const rules = loadIdentityRules();
   if (!classifyEmail(email, rules) || !allowedHostedDomain(google_data.hd, rules)) {
     throw Object.assign(new Error('This Google account is not allowed to sign in'), { statusCode: 403, code: 'SIGNIN_NOT_ALLOWED' });

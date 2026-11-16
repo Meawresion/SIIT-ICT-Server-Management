@@ -1,7 +1,7 @@
 // SSH transport for the Linux hosts (GPU nodes, later the Hadoop nodes).
 //
 // - The host key is pinned by SHA256 fingerprint. The two GPU nodes are clones with the same
-//   key (D17), so the key alone can't tell them apart: every session first checks that the
+//   key, so the key alone can't tell them apart: every session first checks that the
 //   host really has the expected IP, and aborts otherwise.
 // - Commands are built from argv arrays and single-quoted, never from interpolated strings.
 // - Secrets (sudo password, user passwords) only travel on stdin, never in argv or logs.

@@ -10,7 +10,7 @@ const VPN_LABEL = { created: 'new VPN account', reactivated: 'VPN account re-ena
 const HUE_LABEL = { created: 'new HUE account', reset: 'HUE account re-enabled', deactivated: 'HUE account off', skipped: 'HUE step off',
   missing: 'no HUE account' };
 
-/** Automatic setup through acc-prov-vm, for approvers (plan §4.3): node, job state, error. */
+/** Automatic setup through acc-prov-vm, for approvers: node, job state, error. */
 export default function ProvisioningPanel({ provisioning, resourceType }) {
   const jobs = provisioning?.jobs ?? [];
   if (!provisioning?.automated && !jobs.length) return null;

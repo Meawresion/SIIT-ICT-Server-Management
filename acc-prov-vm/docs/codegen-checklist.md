@@ -89,4 +89,4 @@ Clean up at the end: delete `st9990000001` and `st9990000002` and their certific
 | `deleteUser(username)` (later, if allowed) | P10 | H9 |
 | `logout()` | P11 | H10 |
 
-The most important flows are **P0–P3, P8, H0–H3 and H7**. With those, the end-to-end happy path and revoke both work. The rest cover re-requests (D15) and error handling.
+The most important flows are **P0–P3, P8, H0–H3 and H7**. With those, the end-to-end happy path and revoke both work. The rest cover re-requests and error handling.

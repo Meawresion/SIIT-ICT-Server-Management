@@ -1,4 +1,4 @@
-// Least privilege check (FR-9.1, D34): the database user of this task (DB_USER) may run exactly the
+// Least privilege check (FR-9.1): the database user of this task (DB_USER) may run exactly the
 // statements its service needs on each table, and nothing else. Every statement matches no rows,
 // and MySQL checks the privilege before it looks for rows, so this changes nothing.
 // Run it in each service (infra/scripts/smoke-test.sh, through run-task.sh):

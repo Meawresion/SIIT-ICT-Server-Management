@@ -1,7 +1,7 @@
 // Site heartbeat: every HEARTBEAT_INTERVAL_SEC the worker tells the portal it is alive. It sends a
 // signed and encrypted result envelope with rid 0 (no request) on the result queue, so nobody else
 // can fake one. The portal's provisioning service logs it, and its alarms fire when none arrives
-// (the site or its network is down, or the Learner Lab keys have expired) or when the site reports
+// (the site or its network is down, or its AWS access has expired) or when the site reports
 // a system it can't reach.
 // The checks only open a TCP connection to the pfSense webGUI and to each node's SSH port, with no
 // login: pfSense's login protection is never involved, and no credential is used.

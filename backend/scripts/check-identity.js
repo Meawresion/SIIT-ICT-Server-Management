@@ -1,4 +1,4 @@
-// Integration check of the identity service's database work, in an identity task (D34):
+// Integration check of the identity service's database work, in an identity task:
 //   run-task.sh --identity node scripts/check-identity.js [<marker>]
 // 1. Sign-in, profile and role change on one rollback-only transaction (nothing stays): by hand
 //    (set-user-role), and from APPROVER_EMAILS (promoted, then removed); a staff member's profile.
@@ -7,8 +7,8 @@
 //    check-scheduler run in the request service, whose user may only read accounts), named
 //    "Check <name> <marker>". They stay behind, so use a marker only on a throwaway database:
 //      a student for each check (db, provisioning, scheduler), with a student address and an ID
-//      that starts with zeros (SIIT doesn't issue those), so their status emails are sent (D34
-//      smoke: they must reach the notification Lambda);
+//      that starts with zeros (SIIT doesn't issue those), so their status emails are sent
+//      (the smoke test checks they reach the notification Lambda);
 //      an approver at approver-<marker>@check.invalid.
 import assert from 'node:assert/strict';
 import { randomInt } from 'node:crypto';
@@ -21,7 +21,7 @@ import { checkGrants } from './check-grants.js';
 
 const CHECK_STUDENTS = ['db', 'provisioning', 'scheduler'];
 const marker = process.argv[2];
-// Sign-in only accepts student and staff addresses (D25), so the check uses a student address
+// Sign-in only accepts student and staff addresses, so the check uses a student address
 // built from those settings. Its ID starts with zeros, which SIIT doesn't issue.
 const rules = loadIdentityRules();
 const prefixes = JSON.parse(process.env.DEGREE_EMAIL_PREFIXES);

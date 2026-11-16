@@ -26,7 +26,7 @@ const SHUTDOWN_TIMEOUT_MS = 10_000;
 const server = app.listen(port, () => {
   log('server.started', { port, node_env: env.node_env, role });
 });
-// On AWS (api, identity, requests) the provisioning service does the background work (D34).
+// On AWS (api, identity, requests) the provisioning service does the background work.
 const background = role === 'all' ? await startBackground({ log }) : null;
 
 // ECS sends SIGTERM on every deploy and scale-in: stop taking connections, let the requests in

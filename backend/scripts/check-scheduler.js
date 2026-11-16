@@ -55,7 +55,7 @@ try {
   const form = { purpose: 'Scheduler check', project_description: 'check', project_supervisor_name: 'Check', resource_type: 'HPC_GPU',
     justification: 'check', estimated_start_date: '2026-11-10', estimated_end_date: '2026-11-30', impact_score: 5, supervisor_confirmation: 'CONFIRMED' };
 
-  // D7: an automated request whose end date has passed.
+  // An automated request whose end date has passed.
   const gpu = await createRequest(student.uid, form);
   await approveRequest(gpu.id, approver.uid, 'check', { confirm_overlap: true });
   await waitFor('the GPU request On Use', async () => (await status(gpu.id)) === 'On_Use');
@@ -64,7 +64,7 @@ try {
   await waitFor('Completed', async () => (await status(gpu.id)) === 'Completed');
   assert.deepEqual(await events(gpu.id), ['CREATED', 'APPROVED', 'PROVISIONED', 'EXPIRED', 'REVOKED']);
 
-  // FR-8.2, then D7 by hand (S8).
+  // FR-8.2, then the approvers are asked to turn off a request set up by hand.
   const vm = await createRequest(student.uid, { ...form, resource_type: 'VM' });
   await approveRequest(vm.id, approver.uid, 'check', { confirm_overlap: true });
   await activateRequest(vm.id, approver.uid);

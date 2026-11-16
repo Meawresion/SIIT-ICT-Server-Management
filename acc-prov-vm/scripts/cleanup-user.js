@@ -1,5 +1,5 @@
 // ADMIN ONLY: deletes one student's accounts everywhere (pfSense VPN user, Linux user + home on
-// every GPU and Hadoop node, the HDFS home). The worker never deletes (D16); this is for the admin
+// every GPU and Hadoop node, the HDFS home). The worker never deletes; this is for the admin
 // to run by hand, for example to remove the throwaway test user st9990000001.
 //
 //   npm run cleanup-user -- <username> --fullname "<Full Name>"          check only, changes nothing

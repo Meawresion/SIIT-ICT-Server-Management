@@ -1,0 +1,219 @@
+// The schema of init.sql in DBML, for the ER diagram (er-diagram.png) on dbdiagram.io.
+// init.sql is the source of truth: change it first, then this file.
+
+// ==========================================
+// User Management
+// ==========================================
+
+Table user {
+  uid integer [primary key, increment, not null]
+  role varchar [not null, note: "ENUM: Approver, Student"]
+  fullname varchar(100) [not null]
+  siitemail varchar(100) [not null, unique]
+  phone_number varchar(15) [not null]
+  s_id varchar(12)
+  study_degree varchar [note: "ENUM: Undergraduate, Master, PhD"]
+  s_program varchar(50)
+  advisor_name varchar(100)
+  created_at timestamp [not null, default: `CURRENT_TIMESTAMP`]
+  updated_at timestamp [not null, default: `CURRENT_TIMESTAMP`]
+}
+
+// ==========================================
+// Request Management
+// ==========================================
+
+Table request {
+  rid integer [primary key, increment, not null]
+  student_uid integer [not null]
+  resource_type varchar [not null, note: "ENUM: GPU_SERVER, BIG_DATA, VM, LAB_EQUIPMENT, AWS_LAB, AWS_SKILL"]
+  por varchar(255) [not null, note: "Project title"]
+  proj_description text [not null]
+  spv_name varchar(100) [not null]
+  justify text [not null]
+  tech_requirements varchar(2000) [not null, default: "", note: "e.g. GPU memory, software, dataset size"]
+  impact_score tinyint [not null, note: "Unsigned integer, 1 to 10"]
+  supervisor_confirmed boolean [not null]
+  start_date datetime [not null]
+  end_date datetime [not null]
+  process_type varchar [not null, default: "Manual", note: "ENUM: Manual, Automate"]
+  status varchar [not null, default: "Pending", note: "ENUM: Pending, Approved, Rejected, On Use, Completed"]
+  gpu_node varchar(32) [note: "GPU requests: the node chosen at approval"]
+  approver_uid integer
+  review_comment text [note: "The latest decision's comment; every decision is also a request_event"]
+  reviewed_at timestamp
+  created_at timestamp [not null, default: `CURRENT_TIMESTAMP`]
+  updated_at timestamp [not null, default: `CURRENT_TIMESTAMP`]
+
+  indexes {
+    created_at [name: "request_created_index"]
+    (status, created_at) [name: "request_status_created_index"]
+    (student_uid, created_at) [name: "request_student_created_index"]
+  }
+
+  checks {
+    `impact_score BETWEEN 1 AND 10` [name: "request_impact_score_check"]
+  }
+}
+
+// ==========================================
+// Request Extension
+// ==========================================
+
+Table request_extension {
+  xid integer [primary key, increment, not null]
+  rid integer [not null]
+  end_date date [not null, note: "The end date asked for"]
+  reason varchar(1000) [not null]
+  status varchar [not null, default: "Pending", note: "ENUM: Pending, Approved, Rejected"]
+  requested_at timestamp [not null, default: `CURRENT_TIMESTAMP`]
+  reviewer_uid integer
+  review_comment text
+  reviewed_at timestamp
+
+  indexes {
+    (rid, status) [name: "request_extension_rid_index"]
+  }
+}
+
+// ==========================================
+// Draft Management
+// ==========================================
+
+Table draft {
+  did integer [primary key, increment, not null]
+  student_uid integer [not null]
+  resource_type varchar [note: "ENUM: GPU_SERVER, BIG_DATA, VM, LAB_EQUIPMENT, AWS_LAB, AWS_SKILL"]
+  por varchar(255)
+  proj_description text
+  spv_name varchar(100)
+  justify text
+  tech_requirements varchar(2000)
+  impact_score tinyint [note: "Unsigned integer, 1 to 10"]
+  supervisor_confirmed boolean [not null, default: false]
+  start_date date
+  end_date date
+  created_at timestamp [not null, default: `CURRENT_TIMESTAMP`]
+  updated_at timestamp [not null, default: `CURRENT_TIMESTAMP`]
+
+  indexes {
+    (student_uid, updated_at) [name: "draft_student_updated_index"]
+  }
+
+  checks {
+    `impact_score BETWEEN 1 AND 10` [name: "draft_impact_score_check"]
+  }
+}
+
+// ==========================================
+// Request Event / Audit Log
+// ==========================================
+
+Table request_event {
+  eid bigint [primary key, increment, not null]
+  rid integer [not null]
+  action varchar(32) [not null, note: "CREATED, EDITED, APPROVED, REJECTED, ACTIVATED, COMPLETED, PROVISIONED, PROVISION_FAILED, REVOKED, REVOKE_FAILED, RETRIED, REMINDED, EXPIRED, EXTENSION_REQUESTED, EXTENSION_APPROVED, EXTENSION_REJECTED, EXTENDED, EXTEND_FAILED"]
+  from_status varchar [note: "ENUM: Pending, Approved, Rejected, On Use, Completed; NULL when the request is created"]
+  to_status varchar [not null, note: "ENUM: Pending, Approved, Rejected, On Use, Completed"]
+  actor_uid integer [note: "NULL: the system (provisioning results, scheduler)"]
+  comment text
+  details json [note: 'e.g. {"fields":["purpose"]} for an edit, {"confirmed_overlaps":[12]} for an approval']
+  created_at timestamp [not null, default: `CURRENT_TIMESTAMP`]
+
+  indexes {
+    (rid, eid) [name: "request_event_rid_index"]
+  }
+
+  Note: "Append-only audit log (FR-9.1): triggers refuse UPDATE and DELETE; the application user may only SELECT and INSERT."
+}
+
+// ==========================================
+// Provisioning Jobs (Outbox)
+// ==========================================
+
+Table provision_job {
+  job_id char(36) [primary key, not null, note: "UUID; also the message jti, so acc-prov-vm runs each job once"]
+  rid integer [not null]
+  action varchar [not null, note: "ENUM: CREATE, REVOKE, EXTEND"]
+  status varchar [not null, default: "Queued", note: "ENUM: Queued, Sent, Succeeded, Failed"]
+  payload json [not null, note: "The job as sent, encrypted at send time; never a password"]
+  attempts integer [not null, default: 0, note: "Publish attempts"]
+  last_error text [note: "Last publish error, or the error acc-prov-vm reported"]
+  result json [note: "acc-prov-vm result: non-secret details only (username, node, VPN state)"]
+  next_attempt_at timestamp [not null, default: `CURRENT_TIMESTAMP`]
+  sent_at timestamp
+  completed_at timestamp
+  created_at timestamp [not null, default: `CURRENT_TIMESTAMP`]
+  updated_at timestamp [not null, default: `CURRENT_TIMESTAMP`]
+
+  indexes {
+    (status, next_attempt_at) [name: "provision_job_status_index"]
+    (rid, created_at) [name: "provision_job_rid_index"]
+  }
+
+  Note: "Provisioning jobs for acc-prov-vm (outbox). The application user may not delete them."
+}
+
+// ==========================================
+// Scheduler Lease
+// ==========================================
+
+Table scheduler_lease {
+  name varchar(32) [primary key, not null]
+  owner varchar(100) [note: "The backend task holding the lease"]
+  lease_until datetime(3) [not null]
+
+  Note: "One row per scheduled job; the application user may only read and update it."
+}
+
+// ==========================================
+// Audit Log Cursor
+// ==========================================
+
+Table log_cursor {
+  name varchar(32) [primary key, not null]
+  last_id bigint [not null, default: 0]
+  updated_at timestamp [not null, default: `CURRENT_TIMESTAMP`]
+
+  Note: "One row per log stream copied out of the database; the application user may only read and update it."
+}
+
+// ==========================================
+// Foreign Key Relationships
+// ==========================================
+
+// Draft -> User
+Ref: draft.student_uid > user.uid [delete: cascade]
+
+// Request -> User (Student)
+Ref: request.student_uid > user.uid
+
+// Request -> User (Approver)
+Ref: request.approver_uid > user.uid
+
+// Request Extension -> Request
+Ref: request_extension.rid > request.rid
+
+// Request Extension -> User (Reviewer)
+Ref: request_extension.reviewer_uid > user.uid
+
+// Request Event -> Request
+Ref: request_event.rid > request.rid
+
+// Request Event -> User (Actor)
+Ref: request_event.actor_uid > user.uid
+
+// Provision Job -> Request
+Ref: provision_job.rid > request.rid
+
+// ==========================================
+// Initial Records
+// ==========================================
+
+Records scheduler_lease(name, lease_until) {
+  "scheduler", "1970-01-01 00:00:00"
+}
+
+Records log_cursor(name) {
+  "audit"
+}

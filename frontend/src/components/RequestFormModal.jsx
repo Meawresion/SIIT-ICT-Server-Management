@@ -99,7 +99,7 @@ export default function RequestFormModal({ mode, requestId, draft, onClose, onDo
   const [apiError, setApiError] = useState('');
   const [busy, setBusy] = useState('');
   const [comment, setComment] = useState('');
-  // D28: approving a request that overlaps the student's other requests takes a second click.
+  // Approving a request that overlaps the student's other requests takes a second click.
   const [confirmingOverlap, setConfirmingOverlap] = useState(false);
   const [draftId, setDraftId] = useState(draft?.id ?? null);
   const [draftSavedAt, setDraftSavedAt] = useState(null);
@@ -221,7 +221,7 @@ export default function RequestFormModal({ mode, requestId, draft, onClose, onDo
     setBusy(action);
     setApiError('');
     if (action === 'retry') {
-      // D4: a new job; the modal stays open to show it.
+      // A new job; the modal stays open to show it.
       try {
         await retryProvisioning(requestId);
         setDetail(await getReviewRequest(requestId));
@@ -344,7 +344,7 @@ export default function RequestFormModal({ mode, requestId, draft, onClose, onDo
       </>
     );
   } else if (mode === 'review' && status === 'APPROVED' && lastCreate) {
-    // Becomes active by itself when the setup succeeds (D10).
+    // Becomes active by itself when the setup succeeds.
     footer = <button type="button" className="btn btn-secondary" onClick={onClose}>Close</button>;
   } else if (mode === 'review' && lastJob?.action === 'REVOKE' && lastJob.status === 'Failed') {
     footer = (

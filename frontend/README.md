@@ -1,6 +1,6 @@
 # SIIT-ICT Resource Management — Frontend
 
-React + Vite + React Router. Talks to the Express backend in `../backend` and follows the UI mockup.
+React + Vite + React Router. Talks to the Express backend in `../backend`.
 
 ## Run
 
@@ -31,10 +31,10 @@ Start the backend first (see `../README.md`). Without it the landing page loads 
 | `/account` | both | Profile view and edit |
 | `/contact` | both | Contact card, status meanings, FAQ |
 
-## Where the frontend works around the current API
+## Notes
 
-- **Role.** `/api/auth/me` returns only ids, so the app treats a user as an approver when `GET /api/reviewer/requests` succeeds.
+- **Role.** `/api/auth/me` returns the role from the database; approvers go to `/admin`, everyone else to `/home`.
 - **Drafts.** Kept on the server (`/api/drafts`) with the student's account, so they follow the student to another device. Submitting a request from a draft deletes it.
 - **Notifications.** There is no notification endpoint. The bell lists decisions on the student's requests (`reviewed_at`), or pending requests for approvers.
-- **Usage period.** The backend stores dates only (`DATE`), so the form asks for start and end dates without times.
-- **Resource type** can't be changed when editing a pending request, because `PATCH /api/requests/:id` ignores it.
+- **Usage period.** The form asks for start and end dates without times; a request runs for whole days in the site's time zone (`SITE_TIME_ZONE`).
+- **Resource type** can't be changed when editing a pending request: it decides whether the request is set up automatically, so `PATCH /api/requests/:id` refuses a different type.

@@ -1,9 +1,9 @@
-# Least privilege (FR-9.1, D34). The schema (tables, procedures) belongs to root; every app user
+# Least privilege (FR-9.1). The schema (tables, triggers) belongs to root; every app user
 # gets data rights on the tables it uses only, and request_event is append-only for all of them.
 #
 # - MYSQL_USER (docker compose, SERVICE_ROLE=all): one process does everything, so it gets the
 #   union. The MySQL image creates it with every right on MYSQL_DATABASE; this narrows it.
-# - One user per service on AWS (D34), each made only when its password is set:
+# - One user per service on AWS, each made only when its password is set:
 #     IDENTITY_DB_USER      sign-in, profiles: user
 #     REQUESTS_DB_USER      requests, review: reads user; request, draft, extensions, adds events and jobs
 #     PROVISIONING_DB_USER  site jobs, results, scheduler, audit shipping: reads user, moves

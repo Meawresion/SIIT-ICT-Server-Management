@@ -1,4 +1,4 @@
-// AMQP 1.0 transport for the local ActiveMQ Artemis broker (D23), with the same contract the SQS
+// AMQP 1.0 transport for the local ActiveMQ Artemis broker, with the same contract the SQS
 // transport will have:
 // - send(queue, text): resolves once the broker has accepted (stored) the message;
 // - consume(queue, handler): one message at a time; it is accepted (removed) only after handler

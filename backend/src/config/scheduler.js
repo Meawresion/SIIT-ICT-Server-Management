@@ -1,4 +1,4 @@
-// Settings for the scheduler (FR-8.2, FR-8.4, FR-6.7; step 7). Each one has a default, so the
+// Settings for the scheduler (FR-8.2, FR-8.4, FR-6.7). Each one has a default, so the
 // scheduler always runs.
 //   SCHEDULER_INTERVAL_SEC  seconds between passes (at least 30); default 300
 //   EXPIRY_REMINDER_DAYS    days before the end date the student is reminded; 0 = no reminders;
