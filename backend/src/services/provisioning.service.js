@@ -56,7 +56,7 @@ export function usernameFor(student) {
 // after the other instead of both picking the same empty node.
 export async function pickGpuNode(tx, row, nodes) {
   const rows = await tx.$queryRaw`
-    SELECT rid, status, start_date, end_date, JSON_UNQUOTE(JSON_EXTRACT(extra_details, '$.gpu_node')) AS gpu_node
+    SELECT rid, status, start_date, end_date, gpu_node
     FROM request WHERE resource_type = 'GPU_SERVER' FOR UPDATE`;
   const load = new Map(nodes.map(n => [n, 0]));
   const start = row.start_date.getTime();
@@ -89,7 +89,7 @@ export async function buildCreateJob(tx, row, config) {
 async function setUpAutomatically(tx, row) {
   if (!AUTOMATED_RESOURCES.includes(row.resource_type)) return null;
   if (row.resource_type === 'GPU_SERVER') {
-    const gpu_node = row.extra_details?.gpu_node;
+    const gpu_node = row.gpu_node;
     return gpu_node ? { gpuNode: gpu_node } : null;
   }
   return (await tx.provision_job.count({ where: { rid: row.rid, action: 'CREATE' } })) ? {} : null;

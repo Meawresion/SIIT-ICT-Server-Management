@@ -14,11 +14,11 @@ import prisma from '../src/lib/prisma.js';
 const S = 'SELECT', I = 'INSERT', U = 'UPDATE', D = 'DELETE';
 const RIGHTS = {
   all: {
-    user: [S, I, U, D], request: [S, I, U, D], draft: [S, I, U, D], request_event: [S, I],
+    user: [S, I, U, D], request: [S, I, U, D], draft: [S, I, U, D], request_extension: [S, I, U], request_event: [S, I],
     provision_job: [S, I, U], scheduler_lease: [S, U], log_cursor: [S, U],
   },
   identity: { user: [S, I, U] },
-  requests: { user: [S], request: [S, I, U], draft: [S, I, U, D], request_event: [S, I], provision_job: [S, I] },
+  requests: { user: [S], request: [S, I, U], draft: [S, I, U, D], request_extension: [S, I, U], request_event: [S, I], provision_job: [S, I] },
   worker: {
     user: [S], request: [S, U], request_event: [S, I], provision_job: [S, I, U],
     scheduler_lease: [S, U], log_cursor: [S, U],
@@ -26,7 +26,7 @@ const RIGHTS = {
 };
 // A column of each table (its primary key) for the INSERT and UPDATE statements.
 const KEY = {
-  user: 'uid', request: 'rid', draft: 'student_uid', request_event: 'eid',
+  user: 'uid', request: 'rid', draft: 'did', request_extension: 'xid', request_event: 'eid',
   provision_job: 'job_id', scheduler_lease: 'name', log_cursor: 'name',
 };
 const STATEMENT = {

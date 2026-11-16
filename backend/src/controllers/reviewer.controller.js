@@ -38,7 +38,7 @@ export async function listRequests(req, res, next) {
       // FR-9.2: the Active Requests view shows the period and the GPU node.
       estimated_start_date: r.estimated_start_date,
       estimated_end_date: r.estimated_end_date,
-      gpu_node: r.extra_details?.gpu_node ?? null,
+      gpu_node: r.gpu_node ?? null,
       created_at: r.created_at,
       reviewed_at: r.reviewed_at,
     })));

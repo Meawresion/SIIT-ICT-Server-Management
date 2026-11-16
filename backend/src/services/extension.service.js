@@ -2,14 +2,14 @@
 // reason; an approver approves or rejects it. Approving moves the end date and, for a request set
 // up automatically, queues an EXTEND job (acc-prov-vm moves the VPN account's expiration). Only
 // while the current end date hasn't passed: after it the access is being turned off (D7), so the
-// student submits a new request instead. One ask waits at a time, in
-// request.extra_details.extension; every step is a request_event.
+// student submits a new request instead. One ask waits at a time (a Pending row of
+// request_extension); every step is also a request_event.
 
 import prisma from '../lib/prisma.js';
 import { provisioningConfig } from '../config/provisioning.js';
 import { isApprover } from '../config/identity.js';
 import { loadSchedulerConfig } from '../config/scheduler.js';
-import { requestView } from '../utils/db-mapping.js';
+import { pendingExtension, requestView } from '../utils/db-mapping.js';
 import { buildExtendJob } from './provisioning.service.js';
 import { siteToday } from './scheduler.service.js';
 import { notifyRequestEvent } from './notify.service.js';
@@ -30,8 +30,9 @@ function assertStillRunning(row, today) {
 // Holds the row until the transaction ends, so two asks or decisions can't both pass the checks.
 async function lockRequest(tx, rid) {
   await tx.$queryRaw`SELECT rid FROM request WHERE rid = ${rid} FOR UPDATE`;
-  return tx.request.findUnique({ where: { rid } });
+  return tx.request.findUnique({ where: { rid }, include: pendingExtension });
 }
+const shown = (tx, rid) => tx.request.findUnique({ where: { rid }, include: pendingExtension });
 
 // The student's ask. -> the request as the API shows it.
 export async function requestExtension(request_id, user_id, { end_date, reason }, { today = todayHere() } = {}) {
@@ -40,17 +41,16 @@ export async function requestExtension(request_id, user_id, { end_date, reason }
     const row = await lockRequest(tx, request_id);
     if (!row || row.student_uid !== user_id) throw httpError('Request not found', 404);
     assertStillRunning(row, today);
-    if (row.extra_details?.extension) throw httpError('An extension is already waiting for an approver', 409);
+    if (row.request_extension.length) throw httpError('An extension is already waiting for an approver', 409);
     const from_end = day(row.end_date);
     if (end_date <= from_end) throw httpError('The new end date must be after the current one', 400);
     if (midnightUtc(end_date) - midnightUtc(today) > MAX_DAYS_AHEAD * DAY_MS) throw httpError('The new end date can be at most a year ahead', 400);
-    const extension = { end_date, reason, requested_at: new Date().toISOString() };
-    await tx.request.update({ where: { rid: request_id }, data: { extra_details: { ...(row.extra_details ?? {}), extension } } });
+    await tx.request_extension.create({ data: { rid: request_id, end_date: midnightUtc(end_date), reason } });
     event = { rid: request_id, action: 'EXTENSION_REQUESTED', from: row.status, to: row.status, comment: reason, details: { end_date, from_end } };
     await tx.request_event.create({ data: {
       rid: request_id, action: event.action, from_status: row.status, to_status: row.status, actor_uid: user_id, comment: reason, details: event.details,
     } });
-    return requestView(await tx.request.findUnique({ where: { rid: request_id } }));
+    return requestView(await shown(tx, request_id));
   });
   notifyRequestEvent(event);
   return request;
@@ -64,26 +64,27 @@ export async function decideExtension(request_id, reviewer_account_id, approve, 
     if (!isApprover(reviewer)) throw httpError('Reviewer access required', 403);
     const row = await lockRequest(tx, request_id);
     if (!row) throw httpError('Request not found', 404);
-    const { extension, ...extra_details } = row.extra_details ?? {};
+    const [extension] = row.request_extension;
     if (!extension) throw httpError('No extension is waiting for this request', 400);
     const from_end = day(row.end_date);
-    let details = { end_date: extension.end_date, from_end };
+    let details = { end_date: day(extension.end_date), from_end };
     if (approve) {
       assertStillRunning(row, today);
-      const next = { ...row, end_date: midnightUtc(extension.end_date), extra_details };
+      const next = { ...row, end_date: extension.end_date };
       const job = await buildExtendJob(tx, next, provisioningConfig());
-      await tx.request.update({ where: { rid: request_id }, data: { end_date: next.end_date, extra_details } });
+      await tx.request.update({ where: { rid: request_id }, data: { end_date: next.end_date } });
       if (job) await tx.provision_job.create({ data: job });
       details = { ...details, ...(job && { job_id: job.job_id, job_action: job.action }) };
-    } else {
-      await tx.request.update({ where: { rid: request_id }, data: { extra_details } });
     }
+    await tx.request_extension.update({ where: { xid: extension.xid }, data: {
+      status: approve ? 'Approved' : 'Rejected', reviewer_uid: reviewer_account_id, review_comment, reviewed_at: new Date(),
+    } });
     event = { rid: request_id, action: approve ? 'EXTENSION_APPROVED' : 'EXTENSION_REJECTED', from: row.status, to: row.status, comment: review_comment, details };
     await tx.request_event.create({ data: {
       rid: request_id, action: event.action, from_status: row.status, to_status: row.status, actor_uid: reviewer_account_id,
       comment: review_comment, details,
     } });
-    return requestView(await tx.request.findUnique({ where: { rid: request_id } }));
+    return requestView(await shown(tx, request_id));
   });
   notifyRequestEvent(event);
   return request;

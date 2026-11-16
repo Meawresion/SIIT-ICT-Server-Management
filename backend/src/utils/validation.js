@@ -22,9 +22,6 @@ export const ApproverProfileSchema = z.object({
 });
 
 const RequestFields = z.object({
-  project_name: z.string().trim().min(1).max(255).optional(),
-  project_supervisor_email: z.union([z.string().email().max(100), z.literal('')]).optional(),
-  extra_details: z.record(z.unknown()).optional(),
   purpose: z.string().trim().min(1, 'Purpose is required').max(255),
   project_description: z.string().min(1, 'Project description is required'),
   project_supervisor_name: z.string().trim().min(1, 'Project supervisor name is required').max(100),
@@ -51,7 +48,10 @@ const RequestFields = z.object({
   technical_requirements: z.string().trim().max(2000).optional(),
 });
 
-export const CreateRequestSchema = RequestFields.refine(
+export const CreateRequestSchema = RequestFields.extend({
+  // The draft the request was submitted from (FR-3.2): deleted with the submit.
+  draft_id: z.number().int().positive().max(4294967295).optional(),
+}).refine(
   (data) => new Date(data.estimated_end_date) >= new Date(data.estimated_start_date),
   {
     message: 'End date must be after or equal to start date',
