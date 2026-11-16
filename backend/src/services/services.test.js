@@ -27,7 +27,7 @@ function mockMethod(t, object, key, implementation) {
 }
 
 const data = { purpose: 'Thesis', project_description: 'Training a model', project_supervisor_name: 'Dr. Example', resource_type: 'HPC_GPU', justification: 'Research', estimated_start_date: '2026-10-01', estimated_end_date: '2026-12-31', impact_score: 7, supervisor_confirmation: 'CONFIRMED' };
-const row = { rid: 10, student_uid: 1, por: data.purpose, proj_name: data.project_description, spv_name: data.project_supervisor_name, spv_email: '', resource_type: 'GPU_SERVER', justify: data.justification, start_date: new Date(data.estimated_start_date), end_date: new Date(data.estimated_end_date), status: 'Pending', extra_details: { impact_score: 7, supervisor_confirmation: 'CONFIRMED' } };
+const row = { rid: 10, student_uid: 1, por: data.purpose, proj_description: data.project_description, spv_name: data.project_supervisor_name, resource_type: 'GPU_SERVER', justify: data.justification, tech_requirements: '', impact_score: 7, supervisor_confirmed: true, start_date: new Date(data.estimated_start_date), end_date: new Date(data.estimated_end_date), status: 'Pending', gpu_node: null, review_comment: null };
 
 test('Google sign-in uses verified email and preserves existing approver role', async t => {
   mockMethod(t, prisma.user, 'upsert', async args => {
@@ -54,7 +54,7 @@ test('profile completion updates the Google-created user in the new schema', asy
   assert.equal(result.advisor_name, 'Dr. Advisor');
 });
 
-test('all six frontend resources save in Request and clear the student draft atomically', async t => {
+test('all six frontend resources save in Request and delete the submitted draft atomically', async t => {
   const resources = { HPC_GPU: 'GPU_SERVER', BIG_DATA: 'BIG_DATA', VM: 'VM', LAB_EQUIPMENT: 'LAB_EQUIPMENT', AWS_SKILL_BUILDER: 'AWS_SKILL', AWS_LEARNER_LAB: 'AWS_LAB' };
   for (const [apiType, dbType] of Object.entries(resources)) {
     const events = [];
@@ -63,17 +63,18 @@ test('all six frontend resources save in Request and clear the student draft ato
         events.push('create');
         assert.equal(args.data.resource_type, dbType);
         assert.equal(args.data.process_type, ['GPU_SERVER', 'BIG_DATA'].includes(dbType) ? 'Automate' : 'Manual');
-        assert.equal(args.data.extra_details.impact_score, 7);
-        assert.equal(args.data.spv_email, '');
+        assert.equal(args.data.impact_score, 7);
+        assert.equal(args.data.supervisor_confirmed, true);
+        assert.equal(args.data.proj_description, 'Training a model');
         assert.ok(args.data.start_date instanceof Date);
         return { rid: 10, ...args.data };
-      } }, draft: { deleteMany: async args => { events.push('draft'); assert.deepEqual(args.where, { student_uid: 1 }); } },
+      } }, draft: { deleteMany: async args => { events.push('draft'); assert.deepEqual(args.where, { did: 5, student_uid: 1 }); } },
       request_event: { create: async args => {
         events.push('event');
         assert.deepEqual(args.data, { rid: 10, action: 'CREATED', from_status: null, to_status: 'Pending', actor_uid: 1 });
       } },
     }));
-    const result = await createRequest(1, { ...data, resource_type: apiType });
+    const result = await createRequest(1, { ...data, resource_type: apiType, draft_id: 5 });
     assert.equal(result.resource_type, apiType);
     assert.equal(result.status, 'PENDING');
     assert.deepEqual(events, ['create', 'event', 'draft']);
@@ -88,17 +89,17 @@ test('student detail lookup restricts ownership in the database query', async t 
 test('partial edits retain dates, metadata and reviewer-owned fields', async t => {
   const logged = [];
   mockMethod(t, prisma, '$transaction', async cb => cb({ request_event: { create: async args => logged.push(args.data) }, request: {
-    findFirst: async () => ({ ...row, extra_details: { ...row.extra_details, custom: 'keep', review_comment: 'private' } }),
+    findFirst: async () => ({ ...row, review_comment: 'private', gpu_node: 'gpu-48' }),
     updateMany: async args => {
       assert.equal(args.data.por, 'Updated');
-      assert.equal(args.data.extra_details.custom, 'keep');
-      assert.equal(args.data.extra_details.review_comment, 'private');
+      assert.equal('review_comment' in args.data, false);
+      assert.equal('gpu_node' in args.data, false);
       assert.equal(args.data.start_date.toISOString(), row.start_date.toISOString());
       assert.equal(args.where.status, 'Pending');
       return { count: 1 };
     }, findUnique: async () => ({ ...row, por: 'Updated' }),
   } }));
-  assert.equal((await updateRequest(10, 1, { purpose: 'Updated', extra_details: { review_comment: 'forged' } })).purpose, 'Updated');
+  assert.equal((await updateRequest(10, 1, { purpose: 'Updated', review_comment: 'forged' })).purpose, 'Updated');
   // The edit is logged with the changed field names only; the forged reviewer field isn't one.
   assert.deepEqual(logged, [{ rid: 10, action: 'EDITED', from_status: 'Pending', to_status: 'Pending', actor_uid: 1, details: { fields: ['purpose'] } }]);
 });
@@ -121,11 +122,11 @@ test('review transitions map statuses and keep request metadata', async t => {
     request_event: { create: async args => logged.push(args.data) },
   }));
   assert.equal((await approveRequest(10, 2, 'Approved for research')).status, 'APPROVED');
-  assert.equal(current.extra_details.impact_score, 7);
+  assert.equal(current.impact_score, 7);
   assert.equal((await activateRequest(10, 2)).status, 'ACTIVE');
   assert.equal(current.status, 'On_Use');
   assert.equal((await completeRequest(10, 2)).status, 'COMPLETED');
-  assert.equal(current.extra_details.review_comment, 'Approved for research');
+  assert.equal(current.review_comment, 'Approved for research');
   await assert.rejects(rejectRequest(10, 2, 'No'), /Invalid state transition/);
   // FR-5.5: every decision records the approver, its status change and the comment.
   assert.deepEqual(logged.map(e => [e.action, e.from_status, e.to_status, e.actor_uid, e.comment]), [
