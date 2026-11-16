@@ -75,3 +75,18 @@ export const ReviewRequestSchema = z.object({
   // D28: approving while the student has overlapping requests needs this, or the API answers 409.
   confirm_overlap: z.boolean().optional(),
 });
+
+// FR-3.2, FR-3.3: a draft may be incomplete, so every field is optional; the limits match the request.
+const draftDay = z.union([z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine(d => !isNaN(Date.parse(d)), 'Invalid date'), z.literal('')]);
+export const DraftSchema = z.object({
+  purpose: z.string().max(255).optional(),
+  project_description: z.string().max(10000).optional(),
+  project_supervisor_name: z.string().max(100).optional(),
+  resource_type: z.union([RequestFields.shape.resource_type, z.literal('')]).optional(),
+  justification: z.string().max(10000).optional(),
+  technical_requirements: z.string().max(2000).optional(),
+  estimated_start_date: draftDay.optional(),
+  estimated_end_date: draftDay.optional(),
+  impact_score: z.coerce.number().int().min(1).max(10).optional(),
+  supervisor_confirmation: z.enum(['CONFIRMED', 'NOT_CONFIRMED']).optional(),
+});

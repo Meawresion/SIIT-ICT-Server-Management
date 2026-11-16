@@ -9,6 +9,7 @@ import prisma from '../src/lib/prisma.js';
 import { createRequest, updateRequest, getUserRequests, getRequestById } from '../src/services/request.service.js';
 import { approveRequest, activateRequest, completeRequest, getAllRequests, getRequestForReview } from '../src/services/reviewer.service.js';
 import { requestExtension, decideExtension } from '../src/services/extension.service.js';
+import { createDraft, deleteDraft, listDrafts, updateDraft } from '../src/services/draft.service.js';
 import { checkGrants } from './check-grants.js';
 
 // The check's approver isn't on the task's APPROVER_EMAILS: these checks test the database flow
@@ -36,7 +37,8 @@ try {
       reviewer = await tx.user.create({ data: { role: 'Approver', fullname: 'Check approver', siitemail: `approver-${randomUUID()}@check.invalid`, phone_number: '0' } });
     }
     // Run the real services against one isolated, rollback-only transaction.
-    for (const [model, methods] of Object.entries({ user: ['findUnique'], request: ['findFirst', 'findUnique', 'findMany', 'count'], request_event: ['findMany'] })) {
+    for (const [model, methods] of Object.entries({ user: ['findUnique'], request: ['findFirst', 'findUnique', 'findMany', 'count'], request_event: ['findMany'],
+      draft: ['findMany', 'findUnique', 'count', 'create', 'updateMany', 'deleteMany'] })) {
       for (const method of methods) {
         const original = prisma[model][method];
         restores.push(() => { prisma[model][method] = original; });
@@ -46,13 +48,20 @@ try {
     const original = prisma.$transaction;
     restores.push(() => { prisma.$transaction = original; });
     prisma.$transaction = callback => callback(tx);
-    // Submitting from a draft deletes it in the same transaction.
-    const draft = await tx.draft.create({ data: { student_uid: student.uid, por: 'Draft' } });
+    // FR-3.2, FR-3.3: drafts on the server; submitting from one deletes it.
+    const partial = await createDraft(student.uid, { purpose: 'Half done', impact_score: 7, estimated_start_date: '2026-12-01' });
+    assert.deepEqual(partial.data, { purpose: 'Half done', impact_score: 7, estimated_start_date: '2026-12-01', supervisor_confirmation: 'NOT_CONFIRMED' });
+    assert.equal((await updateDraft(student.uid, partial.id, { ...partial.data, resource_type: 'HPC_GPU' })).data.resource_type, 'HPC_GPU');
+    await assert.rejects(updateDraft(student.uid + 1, partial.id, {}), err => err.statusCode === 404);
+    const draft = await createDraft(student.uid, { purpose: 'Draft' });
+    assert.deepEqual((await listDrafts(student.uid)).map(d => d.id), [draft.id, partial.id]);
     // A VM is set up by hand, so this follows the manual path; check-provisioning.js covers the
     // automated GPU path (Mark as Active only follows a failed setup there).
-    const request = await createRequest(student.uid, { purpose: 'Integration check', project_description: 'Test project', project_supervisor_name: 'Test supervisor', resource_type: 'VM', justification: 'Database verification', estimated_start_date: '2026-10-16', estimated_end_date: '2026-10-17', impact_score: 5, supervisor_confirmation: 'NOT_CONFIRMED', draft_id: draft.did });
+    const request = await createRequest(student.uid, { purpose: 'Integration check', project_description: 'Test project', project_supervisor_name: 'Test supervisor', resource_type: 'VM', justification: 'Database verification', estimated_start_date: '2026-10-16', estimated_end_date: '2026-10-17', impact_score: 5, supervisor_confirmation: 'NOT_CONFIRMED', draft_id: draft.id });
     assert.equal(request.status, 'PENDING');
-    assert.equal(await tx.draft.findUnique({ where: { did: draft.did } }), null);
+    assert.deepEqual((await listDrafts(student.uid)).map(d => d.id), [partial.id]);
+    await deleteDraft(student.uid, partial.id);
+    assert.deepEqual(await listDrafts(student.uid), []);
     assert.equal((await getUserRequests(student.uid)).total, 1);
     assert.equal(await getRequestById(request.id, student.uid + 1), null);
     assert.equal((await updateRequest(request.id, student.uid, { purpose: 'Edited purpose', impact_score: 8 })).impact_score, 8);
@@ -101,7 +110,7 @@ try {
     // FR-9.1, D34: e.g. no UPDATE or DELETE on the audit log, no change to accounts.
     const problems = await checkGrants(prisma, process.env.SERVICE_ROLE ?? 'all');
     if (problems.length) throw new Error(`Grants: ${problems.join('; ')}`);
-    console.log(`Database integration passed: draft cleanup, request create/read/edit, review lifecycle, extension, overlap warning, status history, filters, JSON serialization, all rolled back; its database user (${process.env.DB_USER}) has exactly its rights (the audit log is append-only).`);
+    console.log(`Database integration passed: drafts, request create/read/edit, review lifecycle, extension, overlap warning, status history, filters, JSON serialization, all rolled back; its database user (${process.env.DB_USER}) has exactly its rights (the audit log is append-only).`);
   }
 } catch (err) {
   console.error(err.message);

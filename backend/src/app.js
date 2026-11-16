@@ -6,6 +6,7 @@ import { errorHandler, notFoundHandler, requestContext } from './middleware/erro
 import auth_routes from './routes/auth.routes.js';
 import user_routes from './routes/user.routes.js';
 import request_routes from './routes/request.routes.js';
+import draft_routes from './routes/draft.routes.js';
 import reviewer_routes from './routes/reviewer.routes.js';
 
 const app = express();
@@ -62,6 +63,7 @@ if (servesIdentity(role)) {
 }
 if (servesRequests(role)) {
   app.use('/api/requests', request_routes);
+  app.use('/api/drafts', draft_routes);
   app.use('/api/reviewer', reviewer_routes);
 }
 

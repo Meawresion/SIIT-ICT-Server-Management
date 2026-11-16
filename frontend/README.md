@@ -34,7 +34,7 @@ Start the backend first (see `../README.md`). Without it the landing page loads 
 ## Where the frontend works around the current API
 
 - **Role.** `/api/auth/me` returns only ids, so the app treats a user as an approver when `GET /api/reviewer/requests` succeeds.
-- **Drafts.** There is no draft endpoint, so drafts are stored in `localStorage` per account. They don't follow the user to another device.
+- **Drafts.** Kept on the server (`/api/drafts`) with the student's account, so they follow the student to another device. Submitting a request from a draft deletes it.
 - **Notifications.** There is no notification endpoint. The bell lists decisions on the student's requests (`reviewed_at`), or pending requests for approvers.
 - **Usage period.** The backend stores dates only (`DATE`), so the form asks for start and end dates without times.
 - **Resource type** can't be changed when editing a pending request, because `PATCH /api/requests/:id` ignores it.
