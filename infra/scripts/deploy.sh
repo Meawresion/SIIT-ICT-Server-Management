@@ -281,8 +281,9 @@ deploy_edge() {
     echo "edge needs ENTRY_MODE=cloudfront (this account may not allow CloudFront)." >&2
     exit 1
   fi
+  require_logs_stack
   deploy "$STACK_EDGE" edge.yaml "Project=$PROJECT" "DnsStack=$STACK_DNS" "CertStack=$STACK_CERT" \
-    "AppStack=$STACK_APP" "AppHost=$APP_HOST"
+    "AppStack=$STACK_APP" "AppHost=$APP_HOST" "LogsStack=$STACK_LOGS"
   echo "Portal: $(stack_output "$STACK_EDGE" AppUrl) (publish the frontend with publish-frontend.sh)"
 }
 

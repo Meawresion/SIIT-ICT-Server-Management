@@ -73,9 +73,13 @@ stdout, and ECS sends it to the service's CloudWatch Logs group (`/<project>/bac
 trail outlives the database. The groups belong to the logs stack, so deleting the app stacks
 keeps the logs. The ALB writes its access logs to the stack's S3 bucket (`alb/`, every 5 minutes,
 kept `ALB_LOG_DAYS`), including the 502/503 pages it makes itself: an ALB can only log to S3.
+In CloudFront mode, CloudFront sends its access logs (one JSON line per request, without cookies or
+query strings) to `/<project>/frontend`, so page loads can be searched with Logs Insights too; the
+ECS frontend writes there instead when there is no CloudFront.
 Error pages show only a reference (the request ID); `find-in-logs.sh <reference>` runs a Logs
 Insights query and prints the full error. Saved queries (CloudWatch > Logs Insights): find a
-reference, backend errors, one request's audit trail, provisioning failures, slow requests.
+reference, backend errors, one request's audit trail, provisioning failures, slow requests, and
+the frontend requests (CloudFront mode).
 
 **Alerts:** the stacks' alarms (error lines per service, ALB 5xx, unhealthy targets, messages in a
 dead-letter queue, the site's health, RDS storage and CPU; 13 on the course account) and an EventBridge rule for tasks that crash or fail to start
@@ -125,7 +129,7 @@ sends the end-date reminders and removes access when a request ends (FR-8.2, FR-
 | `<project>-identity` | `identity.yaml` | The identity service, its target group and the ALB rule for `/api/auth/*` and `/api/users` (priority 2, before the app stack's `/api/*`), its unhealthy alarm. The only reader of the Google secret. |
 | `<project>-provisioning` | `provisioning.yaml` | The provisioning service (no load balancer): the site queues and the backend message key when provisioning is on, the scheduler, audit shipping; its error and dead-letter alarms, and the site's health: no heartbeat from acc-prov-vm for `SITE_HEARTBEAT_MINUTES` (it sends a signed one every 5 minutes; also catches expired keys), the site reporting pfSense or a node it can't reach, and jobs waiting `SITE_QUEUE_WAIT_MINUTES` with none taken. |
 | `<project>-grafana` | `grafana.yaml` | Grafana: its service (1 task, own security group: only the ALB reaches it), target group and the ALB rule for `/grafana` and `/grafana/*` (priority 3), the generated admin password. |
-| `<project>-edge` | `edge.yaml` | CloudFront mode: S3 bucket, CloudFront (SPA rewrite function; `/api/*` and `/grafana*` go to the ALB), DNS records for the portal. |
+| `<project>-edge` | `edge.yaml` | CloudFront mode: S3 bucket, CloudFront (SPA rewrite function; `/api/*` and `/grafana*` go to the ALB), its access logs to `/<project>/frontend`, DNS records for the portal. |
 | `<project>-web` | `web.yaml` | Direct mode: the frontend service (nginx, `frontend/Dockerfile` `prod` stage) and its ALB rule for every path the backend doesn't take. |
 
 **IAM (least privilege).** Each stack creates the roles of what it runs, named `<project>-<service>-exec` (ECS pulls that one image, writes that one log group, reads only that service's secrets) and `<project>-<service>-task` (what the running code calls: the backend only puts events on the bus; provisioning only its queues, the audit log group and the bus; Grafana reads CloudWatch and only the project's log groups). Identity, the database tasks and nginx call no AWS API and have no task role. The Lambdas have `<project>-notification-fn` and `<project>-message-keys-fn`, the site `<project>-site`. Deploys need `CAPABILITY_NAMED_IAM`, and every stack is tagged `Project=<project>`. Learner Lab can't create roles, so these templates no longer run there (D30 is replaced).

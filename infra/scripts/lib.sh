@@ -80,6 +80,7 @@ stack_output() {
 
 # deploy <stack> <template> [Key=Value ...]. The stacks make their own least-privilege roles,
 # named <project>-... (hence CAPABILITY_NAMED_IAM); the Project tag goes on every resource.
+# DEPLOY_PREVIEW=1: only create the change set (named in the output), to inspect it before running it.
 deploy() {
   local stack=$1 template=$2
   shift 2
@@ -88,7 +89,7 @@ deploy() {
   echo "== $stack ($template)"
   aws cloudformation deploy --stack-name "$stack" --template-file "$TEMPLATES/$template" \
     --capabilities CAPABILITY_NAMED_IAM --tags "Project=$PROJECT" \
-    --no-fail-on-empty-changeset "${params[@]}"
+    --no-fail-on-empty-changeset ${DEPLOY_PREVIEW:+--no-execute-changeset} "${params[@]}"
 }
 
 # Image tags follow the last commit that changed the image's sources, so a deploy only replaces
