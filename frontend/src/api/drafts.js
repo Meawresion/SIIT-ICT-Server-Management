@@ -1,46 +1,28 @@
-// Drafts are kept in the browser only: the backend has no draft endpoint yet.
-// Each account gets its own list, keyed by account_id.
+// Drafts (FR-3.2, FR-3.3) are kept on the server with the student's account, so they follow the
+// student to another device. A draft: { id, data: the request form's fields, updated_at }.
+import { apiRequest } from './client.js';
 
-const key = (accountId) => `siit-drafts-${accountId}`;
-
-function read(accountId) {
-  try {
-    return JSON.parse(localStorage.getItem(key(accountId))) || [];
-  } catch {
-    return [];
-  }
+// Only the filled-in fields; the server checks them with the same limits as a request.
+function cleanForm(form) {
+  const data = { ...form };
+  if (data.impact_score === '' || data.impact_score === null || data.impact_score === undefined) delete data.impact_score;
+  else data.impact_score = Number(data.impact_score);
+  return data;
 }
 
-function write(accountId, drafts) {
-  try {
-    localStorage.setItem(key(accountId), JSON.stringify(drafts));
-  } catch {
-    // Storage unavailable (private mode); drafts simply won't persist.
-  }
+// Newest first.
+export async function listDrafts() {
+  return apiRequest('/api/drafts');
 }
 
-export function listDrafts(accountId) {
-  return read(accountId).sort((a, b) => b.updated_at.localeCompare(a.updated_at));
+// A new draft, or an update of draftId. -> the saved draft.
+export async function saveDraft(form, draftId = null) {
+  const body = JSON.stringify({ data: cleanForm(form) });
+  return draftId
+    ? apiRequest(`/api/drafts/${draftId}`, { method: 'PUT', body })
+    : apiRequest('/api/drafts', { method: 'POST', body });
 }
 
-export function saveDraft(accountId, data, draftId = null) {
-  const drafts = read(accountId);
-  const now = new Date().toISOString();
-  if (draftId) {
-    const existing = drafts.find((d) => d.id === draftId);
-    if (existing) {
-      existing.data = data;
-      existing.updated_at = now;
-      write(accountId, drafts);
-      return existing;
-    }
-  }
-  const draft = { id: `D${Date.now().toString().slice(-6)}`, data, updated_at: now };
-  drafts.push(draft);
-  write(accountId, drafts);
-  return draft;
-}
-
-export function deleteDraft(accountId, draftId) {
-  write(accountId, read(accountId).filter((d) => d.id !== draftId));
+export async function deleteDraft(draftId) {
+  await apiRequest(`/api/drafts/${draftId}`, { method: 'DELETE' });
 }

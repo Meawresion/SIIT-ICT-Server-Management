@@ -48,7 +48,7 @@ const REQUEST_COLUMNS = [
   ['supervisor', r => r.project_supervisor_name], ['justification', r => r.justification],
   ['technical_requirements', r => r.technical_requirements], ['criticality', r => r.impact_score],
   ['supervisor_confirmed', r => r.supervisor_confirmation === 'CONFIRMED' ? 'yes' : 'no'],
-  ['gpu_node', r => r.extra_details?.gpu_node], ['extension_asked_until', r => r.extra_details?.extension?.end_date],
+  ['gpu_node', r => r.gpu_node], ['extension_asked_until', r => r.extension?.end_date],
   ['last_reviewer', r => r.reviewed_by?.full_name], ['reviewed_at', r => time(r.reviewed_at)], ['review_comment', r => r.review_comment],
 ].map(([header, value]) => ({ header, value }));
 

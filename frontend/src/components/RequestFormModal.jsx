@@ -161,7 +161,7 @@ export default function RequestFormModal({ mode, requestId, draft, onClose, onDo
         notifyRequestsChanged();
         onDone({ type: 'updated', request: res });
       } else {
-        const res = await createRequest(toPayload(form));
+        const res = await createRequest({ ...toPayload(form), ...(draftId && { draft_id: draftId }) });
         notifyRequestsChanged();
         onDone({ type: 'submitted', request: res, draftId });
       }
@@ -172,12 +172,20 @@ export default function RequestFormModal({ mode, requestId, draft, onClose, onDo
     }
   };
 
-  const handleSaveDraft = () => {
-    const saved = saveDraft(auth.accountId, form, draftId);
-    setDraftId(saved.id);
-    setDraftSavedAt(saved.updated_at);
-    setErrors({});
-    onDone({ type: 'draft', draft: saved, keepOpen: true });
+  const handleSaveDraft = async () => {
+    setBusy('draft');
+    setApiError('');
+    try {
+      const saved = await saveDraft(form, draftId);
+      setDraftId(saved.id);
+      setDraftSavedAt(saved.updated_at);
+      setErrors({});
+      onDone({ type: 'draft', draft: saved, keepOpen: true });
+    } catch (err) {
+      setApiError(err.message);
+    } finally {
+      setBusy('');
+    }
   };
 
   // FR-8.3: the student asks; the modal stays open to show the ask as waiting.

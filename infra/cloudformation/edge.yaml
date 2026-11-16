@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: 'CloudFront in front of the S3 frontend and the ALB (/api, /grafana, /health).'
+Description: 'CloudFront in front of the S3 frontend and the ALB (/api, /grafana, /health), with access logs.'
 
 Parameters:
   Project:
@@ -10,6 +10,8 @@ Parameters:
   CertStack:
     Type: String
   AppStack:
+    Type: String
+  LogsStack:
     Type: String
   AppHost:
     Type: String
@@ -171,6 +173,52 @@ Resources:
             Compress: true
             CachePolicyId: !FindInMap [ManagedPolicies, Cache, Disabled]
             OriginRequestPolicyId: !FindInMap [ManagedPolicies, OriginRequest, AllViewerExceptHostHeader]
+
+  AccessLogsPolicy:
+    Type: AWS::Logs::ResourcePolicy
+    Properties:
+      PolicyName: !Sub '${Project}-cloudfront-access-logs'
+      PolicyDocument: !Sub
+        - '{"Version":"2012-10-17","Statement":[{"Sid":"CloudFrontAccessLogs","Effect":"Allow","Principal":{"Service":"delivery.logs.amazonaws.com"},"Action":["logs:CreateLogStream","logs:PutLogEvents"],"Resource":"${GroupArn}:log-stream:*","Condition":{"StringEquals":{"aws:SourceAccount":"${AWS::AccountId}"},"ArnLike":{"aws:SourceArn":"arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:*"}}}]}'
+        - GroupArn: !Sub
+            - 'arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:${Group}'
+            - Group:
+                Fn::ImportValue: !Sub '${LogsStack}-FrontendLogGroup'
+  AccessLogSource:
+    Type: AWS::Logs::DeliverySource
+    Properties:
+      Name: !Sub '${Project}-cloudfront'
+      LogType: ACCESS_LOGS
+      ResourceArn: !Sub 'arn:${AWS::Partition}:cloudfront::${AWS::AccountId}:distribution/${Distribution}'
+  AccessLogDestination:
+    Type: AWS::Logs::DeliveryDestination
+    DependsOn: AccessLogsPolicy
+    Properties:
+      Name: !Sub '${Project}-cloudfront-logs'
+      OutputFormat: json
+      DestinationResourceArn: !Sub
+        - 'arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:${Group}'
+        - Group:
+            Fn::ImportValue: !Sub '${LogsStack}-FrontendLogGroup'
+  AccessLogDelivery:
+    Type: AWS::Logs::Delivery
+    Properties:
+      DeliverySourceName: !Ref AccessLogSource
+      DeliveryDestinationArn: !GetAtt AccessLogDestination.Arn
+      RecordFields: [date, time, x-edge-location, sc-bytes, c-ip, cs-method, cs(Host), cs-uri-stem, sc-status, cs(Referer),
+        cs(User-Agent), x-edge-result-type, x-edge-request-id, x-host-header, cs-protocol, cs-bytes, time-taken, x-forwarded-for,
+        ssl-protocol, ssl-cipher, x-edge-response-result-type, cs-protocol-version, c-port, time-to-first-byte,
+        x-edge-detailed-result-type, sc-content-type, sc-content-len, sc-range-start, sc-range-end]
+  FrontendRequestsQuery:
+    Type: AWS::Logs::QueryDefinition
+    Properties:
+      Name: !Sub '${Project}/frontend-requests'
+      LogGroupNames:
+        - Fn::ImportValue: !Sub '${LogsStack}-FrontendLogGroup'
+      QueryString: |-
+        fields @timestamp, `sc-status`, `cs-method`, `cs-uri-stem`, `x-edge-location`, `x-edge-result-type`, `time-taken`
+        | sort @timestamp desc
+        | limit 200
 
   AppRecordA:
     Type: AWS::Route53::RecordSet

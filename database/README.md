@@ -14,7 +14,7 @@ Request System.
     | User | Service | Rights |
     |---|---|---|
     | `siit_identity` | sign-in, profiles | `user`: select, insert, update |
-    | `siit_requests` | requests, review | `user`: select; `request`: select, insert, update; `draft`: all four; `request_event`, `provision_job`: select, insert |
+    | `siit_requests` | requests, review, drafts | `user`: select; `request`: select, insert, update; `draft`: all four; `request_extension`: select, insert, update; `request_event`, `provision_job`: select, insert |
     | `siit_provisioning` | site jobs and results, scheduler, audit shipping | `user`: select; `request`: select, update; `request_event`: select, insert; `provision_job`: select, insert, update; `scheduler_lease`, `log_cursor`: select, update |
 
     `backend/scripts/check-grants.js` checks that a user has exactly these rights.
@@ -25,8 +25,9 @@ Request System.
   compares the row counts (`infra/scripts/switch-to-rds.sh`). The rds stack runs it as a one-off
   task after each deploy; running it again changes nothing but the passwords from the secrets.
   RDS needs `log_bin_trust_function_creators=1` (its parameter group) for the audit log's triggers.
-- `init.sql` also creates stored procedures for direct SQL access to student,
-  approver, request, and draft workflows. The HTTP backend uses Prisma with the same tables and workflow rules.
+- Every column is a plain typed column; JSON is used only where each row has a different shape:
+  `request_event.details` (what an action changed) and `provision_job.payload`/`result` (the
+  message sent to the site and its answer).
 - `docker-compose.yml` mounts `database/init.sql` into the MySQL container at
   `/docker-entrypoint-initdb.d/init.sql`, so it runs automatically when the
   database volume is initialized for the first time.
@@ -37,10 +38,10 @@ Request System.
 
 The diagram uses Chen notation:
 
-- Rectangle: entity. A double rectangle (`Draft`) is a weak entity, identified through its owner `User`.
+- Rectangle: entity.
 - Ellipse: attribute. An underlined attribute is the primary key.
-- Diamond: relationship. A double diamond (`Saves`) is the identifying relationship of a weak entity.
-- `1` and `N` on a line: cardinality. One user submits N requests, one approver reviews N requests, and one user saves 1 draft.
+- Diamond: relationship.
+- `1` and `N` on a line: cardinality. One user submits N requests, one approver reviews N requests, one user saves N drafts, and one request has N extensions.
 - Double line: total participation, meaning every row on that side must take part.
 - Italic text on a line: the role the `User` plays in that relationship (`student` or `approver`).
 
@@ -58,7 +59,8 @@ Relationships:
 
 - **User submits Request:** one student has zero or more requests. `Request.student_uid` is required.
 - **User reviews Request:** one approver reviews zero or more requests. `Request.approver_uid` stays `NULL` until a review happens.
-- **User saves Draft:** one student has at most one draft, because `Draft.student_uid` is both the primary key and the foreign key.
+- **User saves Draft:** one student keeps zero or more drafts. Deleting the user deletes them (`ON DELETE CASCADE`).
+- **Request has Extension:** one request has zero or more extension asks, at most one `Pending` at a time. `Request_Extension.reviewer_uid` stays `NULL` until an approver decides.
 
 ## Tables
 
@@ -89,39 +91,56 @@ Stores submitted resource requests.
 | `rid` | Unsigned auto-increment primary key |
 | `student_uid` | Required student owner, references `User.uid` |
 | `resource_type` | Requested resource category |
-| `por` | Purpose of request, such as Senior Project or Thesis |
-| `proj_name` | Project name |
-| `spv_name` | Supervisor name |
-| `spv_email` | Supervisor email |
+| `por` | Project title |
+| `proj_description` | Project description |
+| `spv_name` | Supervisor or course instructor |
 | `justify` | Request justification |
+| `tech_requirements` | Technical requirements, e.g. GPU memory, software, dataset size (empty when none) |
+| `impact_score` | Criticality, 1 to 10 (checked) |
+| `supervisor_confirmed` | The student confirmed that the supervisor supports the request |
 | `start_date` | Requested start datetime |
-| `end_date` | Requested end datetime |
-| `extra_details` | JSON field for resource-specific details |
+| `end_date` | Requested end datetime (moved by an approved extension) |
 | `process_type` | `Automate` for GPU server and big data requests; otherwise `Manual` |
 | `status` | Current request state |
+| `gpu_node` | GPU requests: the node chosen at approval, so the `REVOKE` and `EXTEND` go to the same node; `NULL` otherwise |
 | `approver_uid` | Reviewing approver, references `User.uid` |
+| `review_comment` | The latest decision's comment (every decision is also a `request_event`) |
 | `reviewed_at` | Review timestamp |
 | `created_at` | Created timestamp |
 | `updated_at` | Automatically updated timestamp |
 
-### Draft
+### Request Extension
 
-Stores one in-progress draft per student. Submitting a real request deletes that
-student's draft. Deleting a user also deletes their draft (`ON DELETE CASCADE`).
+A student's ask for a later end date on a request in use (FR-8.3) and the approver's decision.
+The backend allows one `Pending` ask per request, checked under a row lock. Approving moves
+`request.end_date`; each step is also a `request_event`.
 
 | Column | Notes |
 |--------|-------|
-| `student_uid` | Primary key and student owner, references `User.uid` |
-| `resource_type` | Requested resource category |
-| `por` | Purpose of request |
-| `proj_name` | Project name |
-| `spv_name` | Supervisor name |
-| `spv_email` | Supervisor email |
-| `justify` | Request justification |
-| `start_date` | Requested start datetime |
-| `end_date` | Requested end datetime |
-| `extra_details` | JSON field for resource-specific details |
-| `updated_at` | Automatically updated timestamp |
+| `xid` | Unsigned auto-increment primary key |
+| `rid` | The request, references `Request.rid` |
+| `end_date` | The end date asked for |
+| `reason` | The student's reason |
+| `status` | `Pending`, `Approved` or `Rejected` |
+| `requested_at` | When the student asked |
+| `reviewer_uid` | The approver who decided, references `User.uid`; `NULL` while pending |
+| `review_comment` | The approver's comment |
+| `reviewed_at` | When the approver decided |
+
+### Draft
+
+Unfinished requests (FR-3.2, FR-3.3), kept on the server so they follow the student to another
+device. The columns are the request's, all optional except the confirmation flag. A student
+keeps at most 20; submitting a request from a draft deletes that draft in the same transaction.
+
+| Column | Notes |
+|--------|-------|
+| `did` | Unsigned auto-increment primary key |
+| `student_uid` | Owner, references `User.uid` (`ON DELETE CASCADE`) |
+| `resource_type`, `por`, `proj_description`, `spv_name`, `justify`, `tech_requirements`, `impact_score` | As in `Request`, may be empty |
+| `supervisor_confirmed` | As in `Request`; `false` until ticked |
+| `start_date`, `end_date` | Dates, may be empty |
+| `created_at`, `updated_at` | Timestamps |
 
 ### Request Event
 
@@ -167,8 +186,8 @@ insert and update jobs, but not delete them.
 | `next_attempt_at` | When a queued job may be sent (backoff after a failed send) |
 | `sent_at`, `completed_at`, `created_at`, `updated_at` | Timestamps |
 
-The node a GPU request was given is also kept in `request.extra_details.gpu_node`, so the
-`REVOKE` goes to the same node.
+The node a GPU request was given is also kept in `request.gpu_node`, so the `REVOKE` goes to the
+same node.
 
 ### Scheduler Lease
 
@@ -212,162 +231,8 @@ Manual
 Automate
 ```
 
-`add_request` sets `process_type` to `Automate` for `GPU_SERVER` and `BIG_DATA`.
+The backend sets `process_type` to `Automate` for `GPU_SERVER` and `BIG_DATA`.
 All other resource types use `Manual`.
-
-## Stored Procedures
-
-### Student Procedures
-
-#### `add_student`
-
-Creates a student user.
-
-```sql
-CALL add_student(
-  'Student Name',
-  'student@example.siit.tu.ac.th',
-  '0812345678',
-  '6422770000',
-  'Undergraduate',
-  'CPE'
-);
-```
-
-#### `edit_student`
-
-Updates a student by `siitemail`.
-
-```sql
-CALL edit_student(
-  'Student Name',
-  'student@example.siit.tu.ac.th',
-  '0812345678',
-  '6422770000',
-  'Master',
-  'ICT'
-);
-```
-
-#### `get_student_by_email`
-
-Returns one student profile by SIIT email.
-
-```sql
-CALL get_student_by_email('student@example.siit.tu.ac.th');
-```
-
-#### `get_student_by_uid`
-
-Returns one student profile by `uid`.
-
-```sql
-CALL get_student_by_uid(1);
-```
-
-### Approver Procedures
-
-#### `get_approver_by_email`
-
-Returns one approver profile by SIIT email.
-
-```sql
-CALL get_approver_by_email('approver@example.siit.tu.ac.th');
-```
-
-#### `get_approver_by_uid`
-
-Returns one approver profile by `uid`.
-
-```sql
-CALL get_approver_by_uid(2);
-```
-
-### Request Procedures
-
-#### `add_request`
-
-Creates a request for a student, logs its `CREATED` event and removes that student's saved
-draft.
-
-```sql
-CALL add_request(
-  1,
-  'GPU_SERVER',
-  'Senior Project',
-  'Computer Vision Model Training',
-  'Dr. Example',
-  'supervisor@example.siit.tu.ac.th',
-  'GPU acceleration is required for model training.',
-  '2026-09-10 09:00:00',
-  '2026-12-15 17:00:00',
-  JSON_OBJECT('gpu_count', 1, 'storage_gb', 100)
-);
-```
-
-#### `get_student_request`
-
-Returns all requests for a student, newest first.
-
-```sql
-CALL get_student_request(1);
-```
-
-#### `get_request_by_status`
-
-Returns all requests with a given status, including student and reviewer details.
-
-```sql
-CALL get_request_by_status('Pending');
-```
-
-#### `update_request_status`
-
-Updates a request status, records the reviewing approver and logs the status change in
-`request_event`. The procedure checks that the request exists and that the reviewer is an
-approver. It doesn't check the transition; the backend does (Pending → Approved or Rejected,
-Approved → On Use → Completed).
-
-```sql
-CALL update_request_status(10, 2, 'Approved');
-```
-
-### Draft Procedures
-
-#### `save_draft`
-
-Creates or updates the current student's draft.
-
-```sql
-CALL save_draft(
-  1,
-  'VM',
-  'Thesis',
-  'Simulation Environment',
-  'Dr. Example',
-  'supervisor@example.siit.tu.ac.th',
-  'A VM is needed for repeatable experiments.',
-  '2026-09-10 09:00:00',
-  '2026-11-30 17:00:00',
-  JSON_OBJECT('cpu', 4, 'memory_gb', 16)
-);
-```
-
-#### `get_draft`
-
-Returns the current draft for a student.
-
-```sql
-CALL get_draft(1);
-```
-
-#### `delete_draft`
-
-Deletes the current draft for a student.
-
-```sql
-CALL delete_draft(1);
-```
 
 ## Local Initialization
 
@@ -388,7 +253,7 @@ docker-compose up mysql
 
 ## Backend compatibility
 
-The backend uses the current lowercase `user`, `request`, `draft` and `request_event` tables.
+The backend uses the lowercase `user`, `request`, `request_extension`, `draft` and `request_event` tables.
 Its own bookkeeping tables are:
 - `provision_job`: the acc-prov-vm outbox;
 - `scheduler_lease`: which backend task runs the scheduler;
@@ -426,12 +291,11 @@ Frontend names map to the database as follows:
 | `ACTIVE` | `On Use` (Prisma `On_Use`) |
 | `DOCTORAL` | `PhD` |
 
-The full project description, impact score, supervisor confirmation, and review
-comment are stored in `request.extra_details`. Existing resource-specific JSON
-is retained during edits and reviews. `proj_name` uses the first 255 characters
-of the description unless a separate `project_name` is supplied. Supervisor email
-is stored when supplied through the API; the current form has no email input and
-therefore saves an empty string.
+The API's `project_description`, `technical_requirements`, `impact_score`,
+`supervisor_confirmation` (`CONFIRMED`/`NOT_CONFIRMED`) and `review_comment` map to the request
+columns `proj_description`, `tech_requirements`, `impact_score`, `supervisor_confirmed` and
+`review_comment`; a pending extension comes from `request_extension`. A student's edit writes
+only the student's columns, never `review_comment`, `gpu_node`, `approver_uid` or an extension.
 
 The profile's primary advisor is stored in `user.advisor_name`. The supervisor of
 an individual request is stored separately in `request.spv_name`.

@@ -8,6 +8,8 @@ import { randomInt, randomUUID } from 'node:crypto';
 import prisma from '../src/lib/prisma.js';
 import { createRequest, updateRequest, getUserRequests, getRequestById } from '../src/services/request.service.js';
 import { approveRequest, activateRequest, completeRequest, getAllRequests, getRequestForReview } from '../src/services/reviewer.service.js';
+import { requestExtension, decideExtension } from '../src/services/extension.service.js';
+import { createDraft, deleteDraft, listDrafts, updateDraft } from '../src/services/draft.service.js';
 import { checkGrants } from './check-grants.js';
 
 // The check's approver isn't on the task's APPROVER_EMAILS: these checks test the database flow
@@ -35,7 +37,8 @@ try {
       reviewer = await tx.user.create({ data: { role: 'Approver', fullname: 'Check approver', siitemail: `approver-${randomUUID()}@check.invalid`, phone_number: '0' } });
     }
     // Run the real services against one isolated, rollback-only transaction.
-    for (const [model, methods] of Object.entries({ user: ['findUnique'], request: ['findFirst', 'findUnique', 'findMany', 'count'], request_event: ['findMany'] })) {
+    for (const [model, methods] of Object.entries({ user: ['findUnique'], request: ['findFirst', 'findUnique', 'findMany', 'count'], request_event: ['findMany'],
+      draft: ['findMany', 'findUnique', 'count', 'create', 'updateMany', 'deleteMany'] })) {
       for (const method of methods) {
         const original = prisma[model][method];
         restores.push(() => { prisma[model][method] = original; });
@@ -45,12 +48,20 @@ try {
     const original = prisma.$transaction;
     restores.push(() => { prisma.$transaction = original; });
     prisma.$transaction = callback => callback(tx);
-    await tx.draft.create({ data: { student_uid: student.uid, por: 'Draft' } });
+    // FR-3.2, FR-3.3: drafts on the server; submitting from one deletes it.
+    const partial = await createDraft(student.uid, { purpose: 'Half done', impact_score: 7, estimated_start_date: '2026-12-01' });
+    assert.deepEqual(partial.data, { purpose: 'Half done', impact_score: 7, estimated_start_date: '2026-12-01', supervisor_confirmation: 'NOT_CONFIRMED' });
+    assert.equal((await updateDraft(student.uid, partial.id, { ...partial.data, resource_type: 'HPC_GPU' })).data.resource_type, 'HPC_GPU');
+    await assert.rejects(updateDraft(student.uid + 1, partial.id, {}), err => err.statusCode === 404);
+    const draft = await createDraft(student.uid, { purpose: 'Draft' });
+    assert.deepEqual((await listDrafts(student.uid)).map(d => d.id), [draft.id, partial.id]);
     // A VM is set up by hand, so this follows the manual path; check-provisioning.js covers the
     // automated GPU path (Mark as Active only follows a failed setup there).
-    const request = await createRequest(student.uid, { purpose: 'Integration check', project_description: 'Test project', project_supervisor_name: 'Test supervisor', resource_type: 'VM', justification: 'Database verification', estimated_start_date: '2026-10-16', estimated_end_date: '2026-10-17', impact_score: 5, supervisor_confirmation: 'NOT_CONFIRMED' });
+    const request = await createRequest(student.uid, { purpose: 'Integration check', project_description: 'Test project', project_supervisor_name: 'Test supervisor', resource_type: 'VM', justification: 'Database verification', estimated_start_date: '2026-10-16', estimated_end_date: '2026-10-17', impact_score: 5, supervisor_confirmation: 'NOT_CONFIRMED', draft_id: draft.id });
     assert.equal(request.status, 'PENDING');
-    assert.equal(await tx.draft.findUnique({ where: { student_uid: student.uid } }), null);
+    assert.deepEqual((await listDrafts(student.uid)).map(d => d.id), [partial.id]);
+    await deleteDraft(student.uid, partial.id);
+    assert.deepEqual(await listDrafts(student.uid), []);
     assert.equal((await getUserRequests(student.uid)).total, 1);
     assert.equal(await getRequestById(request.id, student.uid + 1), null);
     assert.equal((await updateRequest(request.id, student.uid, { purpose: 'Edited purpose', impact_score: 8 })).impact_score, 8);
@@ -60,6 +71,14 @@ try {
     await assert.rejects(approveRequest(request.id, reviewer.uid, 'Verified'), err => err.statusCode === 409 && err.overlaps[0].id === second.id);
     assert.equal((await approveRequest(request.id, reviewer.uid, 'Verified', { confirm_overlap: true })).status, 'APPROVED');
     assert.equal((await activateRequest(request.id, reviewer.uid)).status, 'ACTIVE');
+    // FR-8.3: one pending extension at a time, kept in request_extension.
+    const today = '2026-10-16';
+    assert.equal((await requestExtension(request.id, student.uid, { end_date: '2026-10-25', reason: 'More time' }, { today })).extension.end_date, '2026-10-25');
+    await assert.rejects(requestExtension(request.id, student.uid, { end_date: '2026-10-26', reason: 'Again' }, { today }), err => err.statusCode === 409);
+    const extended = await decideExtension(request.id, reviewer.uid, true, 'Fine', { today });
+    assert.equal(extended.extension, null);
+    assert.equal(extended.estimated_end_date.toISOString().slice(0, 10), '2026-10-25');
+    assert.equal((await tx.request_extension.findFirst({ where: { rid: request.id } })).status, 'Approved');
     assert.equal((await getAllRequests({ status: 'ACTIVE', student_id: student.s_id })).rows.some(r => r.id === request.id), true);
     assert.equal((await completeRequest(request.id, reviewer.uid)).status, 'COMPLETED');
     const saved = await getRequestById(request.id, student.uid);
@@ -70,11 +89,12 @@ try {
     // FR-4.2, FR-5.5: the whole history, with the approver on every decision.
     assert.deepEqual(saved.events.map(e => [e.action, e.from, e.to]), [
       ['CREATED', null, 'PENDING'], ['EDITED', 'PENDING', 'PENDING'], ['APPROVED', 'PENDING', 'APPROVED'],
-      ['ACTIVATED', 'APPROVED', 'ACTIVE'], ['COMPLETED', 'ACTIVE', 'COMPLETED']]);
+      ['ACTIVATED', 'APPROVED', 'ACTIVE'], ['EXTENSION_REQUESTED', 'ACTIVE', 'ACTIVE'], ['EXTENSION_APPROVED', 'ACTIVE', 'ACTIVE'],
+      ['COMPLETED', 'ACTIVE', 'COMPLETED']]);
     assert.deepEqual(saved.events[1].details.fields.sort(), ['impact_score', 'purpose']);
     assert.deepEqual(saved.events[2].details.confirmed_overlaps, [second.id]);
     const review = await getRequestForReview(request.id);
-    assert.ok(review.events.slice(2).every(e => e.actor.name === reviewer.fullname && e.actor.role === 'Approver'));
+    assert.ok(review.events.slice(2).filter(e => e.action !== 'EXTENSION_REQUESTED').every(e => e.actor.name === reviewer.fullname && e.actor.role === 'Approver'));
     assert.equal(saved.events[2].actor.name, undefined);
     throw rollback;
   }, { timeout: 30000 });
@@ -90,7 +110,7 @@ try {
     // FR-9.1, D34: e.g. no UPDATE or DELETE on the audit log, no change to accounts.
     const problems = await checkGrants(prisma, process.env.SERVICE_ROLE ?? 'all');
     if (problems.length) throw new Error(`Grants: ${problems.join('; ')}`);
-    console.log(`Database integration passed: draft cleanup, request create/read/edit, review lifecycle, overlap warning, status history, filters, JSON serialization, all rolled back; its database user (${process.env.DB_USER}) has exactly its rights (the audit log is append-only).`);
+    console.log(`Database integration passed: drafts, request create/read/edit, review lifecycle, extension, overlap warning, status history, filters, JSON serialization, all rolled back; its database user (${process.env.DB_USER}) has exactly its rights (the audit log is append-only).`);
   }
 } catch (err) {
   console.error(err.message);

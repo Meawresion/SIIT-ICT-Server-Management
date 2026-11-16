@@ -3,46 +3,32 @@ import { resourceToDb, requestInclude, requestView, eventInclude, eventView } fr
 import { UpdateRequestSchema } from '../utils/validation.js';
 import { DEFAULT_LIMIT } from '../utils/paging.js';
 
-// Keys in extra_details that only approvers and the system write: a student's extra_details never
-// sets or changes them.
-const PROTECTED_EXTRAS = ['review_comment', 'gpu_node', 'extension'];
-
-function requestData(data, existing = null) {
+// The columns a student writes. The approver's and the system's columns (review_comment, gpu_node,
+// approver_uid) and the extensions are never set from a student's data.
+function requestData(data) {
   const resource_type = resourceToDb[data.resource_type];
-  const extra_details = { ...(existing?.extra_details ?? {}), ...(data.extra_details ?? {}) };
-  for (const key of ['project_description', 'impact_score', 'supervisor_confirmation', 'technical_requirements']) {
-    if (data[key] !== undefined) extra_details[key] = data[key];
-  }
-  for (const key of PROTECTED_EXTRAS) {
-    if (existing?.extra_details?.[key] !== undefined) extra_details[key] = existing.extra_details[key];
-    else delete extra_details[key];
-  }
-  return { por: data.purpose, proj_name: data.project_name || data.project_description.slice(0, 255),
-    spv_name: data.project_supervisor_name, spv_email: data.project_supervisor_email ?? existing?.spv_email ?? '',
-    justify: data.justification, resource_type, start_date: new Date(data.estimated_start_date), end_date: new Date(data.estimated_end_date),
-    process_type: ['GPU_SERVER', 'BIG_DATA'].includes(resource_type) ? 'Automate' : 'Manual', extra_details };
+  return { por: data.purpose, proj_description: data.project_description, spv_name: data.project_supervisor_name,
+    justify: data.justification, tech_requirements: data.technical_requirements ?? '', impact_score: data.impact_score,
+    supervisor_confirmed: data.supervisor_confirmation === 'CONFIRMED', resource_type,
+    start_date: new Date(data.estimated_start_date), end_date: new Date(data.estimated_end_date),
+    process_type: ['GPU_SERVER', 'BIG_DATA'].includes(resource_type) ? 'Automate' : 'Manual' };
 }
-// Fields a student edit can change, compared as the API shows them (old rows keep the
-// description in proj_name only), for the EDITED event. Only the names are logged.
-const editableFields = ['purpose', 'project_name', 'project_description', 'project_supervisor_name', 'project_supervisor_email',
-  'justification', 'estimated_start_date', 'estimated_end_date', 'impact_score', 'supervisor_confirmation', 'technical_requirements'];
-const viewedExtras = new Set(['project_description', 'impact_score', 'supervisor_confirmation', 'review_comment', 'technical_requirements']);
+// Fields a student edit can change, compared as the API shows them, for the EDITED event. Only the
+// names are logged.
+const editableFields = ['purpose', 'project_description', 'project_supervisor_name', 'justification',
+  'estimated_start_date', 'estimated_end_date', 'impact_score', 'supervisor_confirmation', 'technical_requirements'];
 function changedFields(row, next) {
   const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
   const before = requestView(row), after = requestView({ ...row, ...next });
-  const fields = editableFields.filter(field => !same(before[field], after[field]));
-  const extraBefore = row.extra_details ?? {}, extraAfter = next.extra_details ?? {};
-  for (const key of new Set([...Object.keys(extraBefore), ...Object.keys(extraAfter)])) {
-    if (!viewedExtras.has(key) && !same(extraBefore[key], extraAfter[key])) fields.push(key);
-  }
-  return fields;
+  return editableFields.filter(field => !same(before[field], after[field]));
 }
 
+// draft_id: the draft this request was submitted from; it is deleted in the same transaction.
 export async function createRequest(user_id, data) {
   return prisma.$transaction(async tx => {
     const request = await tx.request.create({ data: { student_uid: user_id, ...requestData(data), status: 'Pending' } });
     await tx.request_event.create({ data: { rid: request.rid, action: 'CREATED', from_status: null, to_status: 'Pending', actor_uid: user_id } });
-    await tx.draft.deleteMany({ where: { student_uid: user_id } });
+    if (data.draft_id) await tx.draft.deleteMany({ where: { did: data.draft_id, student_uid: user_id } });
     return requestView(request);
   });
 }
@@ -73,7 +59,7 @@ export async function updateRequest(request_id, user_id, data) {
     if (current.impact_score === null) delete current.impact_score;
     const merged = UpdateRequestSchema.parse({ ...current,
       estimated_start_date: row.start_date.toISOString(), estimated_end_date: row.end_date.toISOString(), ...data });
-    const next = requestData(merged, row);
+    const next = requestData(merged);
     const updated = await tx.request.updateMany({ where: { rid: request_id, student_uid: user_id, status: 'Pending' }, data: next });
     if (!updated.count) throw Object.assign(new Error('Can only update pending requests'), { statusCode: 400 });
     const fields = changedFields(row, next);

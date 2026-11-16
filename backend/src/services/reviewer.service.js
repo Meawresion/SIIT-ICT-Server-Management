@@ -1,5 +1,5 @@
 import prisma from '../lib/prisma.js';
-import { resourceToDb, statusToDb, requestInclude, requestView, eventInclude, eventView, overlapView } from '../utils/db-mapping.js';
+import { resourceToDb, statusToDb, requestInclude, pendingExtension, requestView, eventInclude, eventView, overlapView } from '../utils/db-mapping.js';
 import { provisioningConfig } from '../config/provisioning.js';
 import { isApprover } from '../config/identity.js';
 import { assertManualActivationAllowed, buildCreateJob, buildRevokeJob, hasSiteUsername, isAutomated, jobsFor } from './provisioning.service.js';
@@ -44,7 +44,7 @@ export async function getRequestForReview(request_id) {
     jobsFor(prisma, request_id),
   ]);
   return { ...requestView(row), overlaps, events: events.map(e => eventView(e, { names: true })),
-    provisioning: { automated: isAutomated(row) && hasSiteUsername(row.user_request_student_uidTouser), gpu_node: row.extra_details?.gpu_node ?? null, jobs } };
+    provisioning: { automated: isAutomated(row) && hasSiteUsername(row.user_request_student_uidTouser), gpu_node: row.gpu_node ?? null, jobs } };
 }
 
 // Every decision changes the status and appends its event in one transaction (FR-5.5, FR-9.1).
@@ -74,10 +74,9 @@ async function applyTransition(request_id, reviewer_account_id, from, to, action
     if (automated && to === 'Approved') ({ job, gpu_node } = await buildCreateJob(tx, row, config));
     if (automated && to === 'On_Use') await assertManualActivationAllowed(tx, row);
     if (config && to === 'Completed') job = await buildRevokeJob(tx, row);
-    const extra_details = { ...(row.extra_details ?? {}), ...(review_comment !== undefined && { review_comment }), ...(gpu_node && { gpu_node }) };
     const result = await tx.request.updateMany({ where: { rid: request_id, status: from }, data: {
       status: to, approver_uid: reviewer_account_id, reviewed_at: new Date(),
-      ...((review_comment !== undefined || gpu_node) && { extra_details }),
+      ...(review_comment !== undefined && { review_comment }), ...(gpu_node && { gpu_node }),
     } });
     if (!result.count) throw Object.assign(new Error('Invalid state transition'), { statusCode: 400 });
     if (job) await tx.provision_job.create({ data: job });
@@ -89,7 +88,7 @@ async function applyTransition(request_id, reviewer_account_id, from, to, action
       rid: request_id, action, from_status: from, to_status: to, actor_uid: reviewer_account_id, comment: review_comment ?? null,
       ...(Object.keys(details).length && { details }),
     } });
-    return requestView(await tx.request.findUnique({ where: { rid: request_id } }));
+    return requestView(await tx.request.findUnique({ where: { rid: request_id }, include: pendingExtension }));
   });
 }
 export const approveRequest = (id, reviewer, comment, options) => transition(id, reviewer, 'Pending', 'Approved', 'APPROVED', comment, options);

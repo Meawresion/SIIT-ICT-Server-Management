@@ -9,19 +9,25 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+/// An unfinished request (FR-3.2, FR-3.3): any field may still be empty. A student can keep several.
 model draft {
-  student_uid   Int                  @id @db.UnsignedInt
-  resource_type draft_resource_type?
-  por           String?              @db.VarChar(255)
-  proj_name     String?              @db.VarChar(255)
-  spv_name      String?              @db.VarChar(100)
-  spv_email     String?              @db.VarChar(100)
-  justify       String?              @db.Text
-  start_date    DateTime?            @db.DateTime(0)
-  end_date      DateTime?            @db.DateTime(0)
-  extra_details Json?
-  updated_at    DateTime             @default(now()) @updatedAt @db.Timestamp(0)
-  user          user                 @relation(fields: [student_uid], references: [uid], onDelete: Cascade, onUpdate: Restrict, map: "draft_student_uid_foreign")
+  did                  Int                  @id @default(autoincrement()) @db.UnsignedInt
+  student_uid          Int                  @db.UnsignedInt
+  resource_type        draft_resource_type?
+  por                  String?              @db.VarChar(255)
+  proj_description     String?              @db.Text
+  spv_name             String?              @db.VarChar(100)
+  justify              String?              @db.Text
+  tech_requirements    String?              @db.VarChar(2000)
+  impact_score         Int?                 @db.UnsignedTinyInt
+  supervisor_confirmed Boolean              @default(false)
+  start_date           DateTime?            @db.Date
+  end_date             DateTime?            @db.Date
+  created_at           DateTime             @default(now()) @db.Timestamp(0)
+  updated_at           DateTime             @default(now()) @updatedAt @db.Timestamp(0)
+  user                 user                 @relation(fields: [student_uid], references: [uid], onDelete: Cascade, onUpdate: Restrict, map: "draft_student_uid_foreign")
+
+  @@index([student_uid, updated_at], map: "draft_student_updated_index")
 }
 
 /// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
@@ -30,16 +36,19 @@ model request {
   student_uid                     Int                   @db.UnsignedInt
   resource_type                   request_resource_type
   por                             String                @db.VarChar(255)
-  proj_name                       String                @db.VarChar(255)
+  proj_description                String                @db.Text
   spv_name                        String                @db.VarChar(100)
-  spv_email                       String                @db.VarChar(100)
   justify                         String                @db.Text
+  tech_requirements               String                @default("") @db.VarChar(2000)
+  impact_score                    Int                   @db.UnsignedTinyInt
+  supervisor_confirmed            Boolean
   start_date                      DateTime              @db.DateTime(0)
   end_date                        DateTime              @db.DateTime(0)
-  extra_details                   Json?
   process_type                    request_process_type  @default(Manual)
   status                          request_status        @default(Pending)
+  gpu_node                        String?               @db.VarChar(32)
   approver_uid                    Int?                  @db.UnsignedInt
+  review_comment                  String?               @db.Text
   reviewed_at                     DateTime?             @db.Timestamp(0)
   created_at                      DateTime              @default(now()) @db.Timestamp(0)
   updated_at                      DateTime              @default(now()) @updatedAt @db.Timestamp(0)
@@ -47,11 +56,30 @@ model request {
   user_request_student_uidTouser  user                  @relation("request_student_uidTouser", fields: [student_uid], references: [uid], onUpdate: Restrict, map: "request_student_uid_foreign")
   request_event                   request_event[]
   provision_job                   provision_job[]
+  request_extension               request_extension[]
 
   @@index([approver_uid], map: "request_approver_uid_foreign")
   @@index([student_uid, created_at], map: "request_student_created_index")
   @@index([status, created_at], map: "request_status_created_index")
   @@index([created_at], map: "request_created_index")
+}
+
+/// FR-8.3: a student's ask for a later end date and the approver's decision. One Pending at a time.
+model request_extension {
+  xid            Int                      @id @default(autoincrement()) @db.UnsignedInt
+  rid            Int                      @db.UnsignedInt
+  end_date       DateTime                 @db.Date
+  reason         String                   @db.VarChar(1000)
+  status         request_extension_status @default(Pending)
+  requested_at   DateTime                 @default(now()) @db.Timestamp(0)
+  reviewer_uid   Int?                     @db.UnsignedInt
+  review_comment String?                  @db.Text
+  reviewed_at    DateTime?                @db.Timestamp(0)
+  request        request                  @relation(fields: [rid], references: [rid], onDelete: Restrict, onUpdate: Restrict, map: "request_extension_rid_foreign")
+  user           user?                    @relation(fields: [reviewer_uid], references: [uid], onDelete: Restrict, onUpdate: Restrict, map: "request_extension_reviewer_uid_foreign")
+
+  @@index([rid, status], map: "request_extension_rid_index")
+  @@index([reviewer_uid], map: "request_extension_reviewer_uid_foreign")
 }
 
 model user {
@@ -66,7 +94,8 @@ model user {
   advisor_name                       String?            @db.VarChar(100)
   created_at                         DateTime           @default(now()) @db.Timestamp(0)
   updated_at                         DateTime           @default(now()) @updatedAt @db.Timestamp(0)
-  draft                              draft?
+  draft                              draft[]
+  request_extension                  request_extension[]
   request_request_approver_uidTouser request[]          @relation("request_approver_uidTouser")
   request_request_student_uidTouser  request[]          @relation("request_student_uidTouser")
   request_event                      request_event[]
@@ -144,6 +173,12 @@ enum draft_resource_type {
   LAB_EQUIPMENT
   AWS_LAB
   AWS_SKILL
+}
+
+enum request_extension_status {
+  Pending
+  Approved
+  Rejected
 }
 
 enum user_role {

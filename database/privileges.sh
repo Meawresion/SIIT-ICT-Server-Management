@@ -5,7 +5,7 @@
 #   union. The MySQL image creates it with every right on MYSQL_DATABASE; this narrows it.
 # - One user per service on AWS (D34), each made only when its password is set:
 #     IDENTITY_DB_USER      sign-in, profiles: user
-#     REQUESTS_DB_USER      requests, review: reads user; request, draft, adds events and jobs
+#     REQUESTS_DB_USER      requests, review: reads user; request, draft, extensions, adds events and jobs
 #     PROVISIONING_DB_USER  site jobs, results, scheduler, audit shipping: reads user, moves
 #                           request status, adds events, jobs, the scheduler lease and log cursor
 #
@@ -35,7 +35,7 @@ privileges_sql() {
   if [ -n "$MYSQL_USER" ]; then
     grants_for "$MYSQL_USER" '' \
       'user:SELECT, INSERT, UPDATE, DELETE' 'request:SELECT, INSERT, UPDATE, DELETE' \
-      'draft:SELECT, INSERT, UPDATE, DELETE' 'request_event:SELECT, INSERT' \
+      'draft:SELECT, INSERT, UPDATE, DELETE' 'request_extension:SELECT, INSERT, UPDATE' 'request_event:SELECT, INSERT' \
       'provision_job:SELECT, INSERT, UPDATE' 'scheduler_lease:SELECT, UPDATE' 'log_cursor:SELECT, UPDATE'
   fi
   if [ -n "$IDENTITY_DB_PASSWORD" ]; then
@@ -47,7 +47,7 @@ privileges_sql() {
   if [ -n "$REQUESTS_DB_PASSWORD" ]; then
     grants_for "${REQUESTS_DB_USER:-siit_requests}" "$REQUESTS_DB_PASSWORD" \
       'user:SELECT' 'request:SELECT, INSERT, UPDATE' 'draft:SELECT, INSERT, UPDATE, DELETE' \
-      'request_event:SELECT, INSERT' 'provision_job:SELECT, INSERT'
+      'request_extension:SELECT, INSERT, UPDATE' 'request_event:SELECT, INSERT' 'provision_job:SELECT, INSERT'
   fi
   if [ -n "$PROVISIONING_DB_PASSWORD" ]; then
     grants_for "${PROVISIONING_DB_USER:-siit_provisioning}" "$PROVISIONING_DB_PASSWORD" \

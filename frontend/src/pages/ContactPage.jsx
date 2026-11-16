@@ -8,7 +8,7 @@ const CONTACT_EMAIL = import.meta.env.VITE_CONTACT_EMAIL;
 const FAQ = [
   { q: 'How long does a decision take?', a: 'It depends on the approver for that resource. You can see the status of every request on your home page, and the bell shows when a decision is made.' },
   { q: 'Can I change a request after sending it?', a: 'Yes, while it is still Pending. Open it from your home page and press Edit. Once it has been reviewed it is locked.' },
-  { q: 'Where are my drafts stored?', a: 'In the browser you saved them from. They won’t appear on another computer.' },
+  { q: 'Where are my drafts stored?', a: 'On the portal, with your account. They appear on any computer you sign in from.' },
   { q: 'My request was rejected. What now?', a: 'Read the approver’s comment, adjust the request, and submit a new one.' },
 ];
 

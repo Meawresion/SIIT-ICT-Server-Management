@@ -22,9 +22,6 @@ export const ApproverProfileSchema = z.object({
 });
 
 const RequestFields = z.object({
-  project_name: z.string().trim().min(1).max(255).optional(),
-  project_supervisor_email: z.union([z.string().email().max(100), z.literal('')]).optional(),
-  extra_details: z.record(z.unknown()).optional(),
   purpose: z.string().trim().min(1, 'Purpose is required').max(255),
   project_description: z.string().min(1, 'Project description is required'),
   project_supervisor_name: z.string().trim().min(1, 'Project supervisor name is required').max(100),
@@ -51,7 +48,10 @@ const RequestFields = z.object({
   technical_requirements: z.string().trim().max(2000).optional(),
 });
 
-export const CreateRequestSchema = RequestFields.refine(
+export const CreateRequestSchema = RequestFields.extend({
+  // The draft the request was submitted from (FR-3.2): deleted with the submit.
+  draft_id: z.number().int().positive().max(4294967295).optional(),
+}).refine(
   (data) => new Date(data.estimated_end_date) >= new Date(data.estimated_start_date),
   {
     message: 'End date must be after or equal to start date',
@@ -74,4 +74,19 @@ export const ReviewRequestSchema = z.object({
   review_comment: z.string().min(1, 'Review comment is required'),
   // D28: approving while the student has overlapping requests needs this, or the API answers 409.
   confirm_overlap: z.boolean().optional(),
+});
+
+// FR-3.2, FR-3.3: a draft may be incomplete, so every field is optional; the limits match the request.
+const draftDay = z.union([z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine(d => !isNaN(Date.parse(d)), 'Invalid date'), z.literal('')]);
+export const DraftSchema = z.object({
+  purpose: z.string().max(255).optional(),
+  project_description: z.string().max(10000).optional(),
+  project_supervisor_name: z.string().max(100).optional(),
+  resource_type: z.union([RequestFields.shape.resource_type, z.literal('')]).optional(),
+  justification: z.string().max(10000).optional(),
+  technical_requirements: z.string().max(2000).optional(),
+  estimated_start_date: draftDay.optional(),
+  estimated_end_date: draftDay.optional(),
+  impact_score: z.coerce.number().int().min(1).max(10).optional(),
+  supervisor_confirmation: z.enum(['CONFIRMED', 'NOT_CONFIRMED']).optional(),
 });

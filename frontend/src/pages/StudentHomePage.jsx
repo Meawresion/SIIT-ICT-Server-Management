@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useState } from 'react';
-import { useAuth } from '../auth/context.js';
 import { getMyRequests } from '../api/requests.js';
 import { deleteDraft, listDrafts } from '../api/drafts.js';
 import { resourceShort } from '../constants.js';
@@ -16,11 +15,10 @@ import { FolderIcon, PlusIcon } from '../components/Icons.jsx';
 const borrowPeriod = (r) => (r.status === 'ACTIVE' ? formatPeriod(r.estimated_start_date, r.estimated_end_date) : 'N/A');
 
 export default function StudentHomePage() {
-  const auth = useAuth();
   const [requests, setRequests] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [drafts, setDrafts] = useState(() => listDrafts(auth.accountId));
+  const [drafts, setDrafts] = useState([]);
   const [form, setForm] = useState(null); // { mode, requestId?, draft? }
   const [showLoad, setShowLoad] = useState(false);
   const [submitted, setSubmitted] = useState(null);
@@ -35,11 +33,17 @@ export default function StudentHomePage() {
       .finally(() => setLoading(false));
   }, []);
 
+  // Drafts live on the server (FR-3.2); a failure shows in the same banner as the requests.
+  const refreshDrafts = useCallback(() => {
+    return listDrafts()
+      .then(setDrafts)
+      .catch((err) => setError(err.message));
+  }, []);
+
   useEffect(() => {
     loadRequests();
-  }, [loadRequests]);
-
-  const refreshDrafts = () => setDrafts(listDrafts(auth.accountId));
+    refreshDrafts();
+  }, [loadRequests, refreshDrafts]);
 
   const handleDone = (result) => {
     if (result.type === 'draft') {
@@ -48,7 +52,7 @@ export default function StudentHomePage() {
     }
     setForm(null);
     if (result.type === 'submitted') {
-      if (result.draftId) deleteDraft(auth.accountId, result.draftId);
+      // The server deleted the draft the request came from, in the same transaction.
       refreshDrafts();
       setSubmitted(result.request);
     }
@@ -57,8 +61,9 @@ export default function StudentHomePage() {
 
   const removeDraft = (d) => {
     if (!window.confirm(`Delete the draft “${d.data.purpose || 'Untitled request'}”?`)) return;
-    deleteDraft(auth.accountId, d.id);
-    refreshDrafts();
+    deleteDraft(d.id)
+      .then(refreshDrafts)
+      .catch((err) => setError(err.message));
   };
 
   const requestColumns = [

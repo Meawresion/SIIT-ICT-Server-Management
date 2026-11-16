@@ -79,7 +79,7 @@ try {
 
   // FR-6.7: a job the site gave up on, as the request queue's redrive would leave it in the DLQ.
   const waiting = await createRequest(student.uid, { ...form, estimated_start_date: '2026-12-01', estimated_end_date: '2026-12-10' });
-  await prisma.request.update({ where: { rid: waiting.id }, data: { status: 'Approved', extra_details: { gpu_node: 'check' } } });
+  await prisma.request.update({ where: { rid: waiting.id }, data: { status: 'Approved', gpu_node: 'check' } });
   const job_id = randomUUID();
   await prisma.provision_job.create({ data: { job_id, rid: waiting.id, action: 'CREATE', status: 'Sent', sent_at: new Date(), attempts: 1,
     payload: { action: 'CREATE', gpuNode: 'check' } } });
